@@ -70,7 +70,7 @@ Because the package is not published, point OpenCode at the built v2 package-roo
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      "package": "file:///absolute/path/to/remem/dist/index.js"
+      "package": "file:///absolute/path/to/remem/dist"
     }
   ]
 }

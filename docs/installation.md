@@ -84,7 +84,7 @@ Source users should add the built package-root entry to OpenCode's `plugins` lis
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      "package": "file:///absolute/path/to/remem/dist/index.js"
+      "package": "file:///absolute/path/to/remem/dist"
     }
   ]
 }

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process"
 import { Buffer } from "node:buffer"
 import { createServer } from "node:http"
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { appendFile, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import net from "node:net"
 import os from "node:os"
 import path from "node:path"
@@ -28,15 +28,20 @@ function command(commandName, args, options = {}) {
       cwd: options.cwd,
       env: options.env,
       stdio: ["ignore", "pipe", "pipe"],
+      timeout: options.timeoutMs ?? 300_000,
+      killSignal: "SIGKILL",
     })
-    let stdout = ""
-    let stderr = ""
-    child.stdout.on("data", (chunk) => (stdout += chunk))
-    child.stderr.on("data", (chunk) => (stderr += chunk))
+    const stdoutChunks = []
+    const stderrChunks = []
+    child.stdout.on("data", (chunk) => stdoutChunks.push(chunk))
+    child.stderr.on("data", (chunk) => stderrChunks.push(chunk))
     child.on("error", reject)
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8")
+      const stderr = Buffer.concat(stderrChunks).toString("utf8")
       if (code === 0) return resolve({ stdout, stderr })
-      reject(new Error(`${commandName} ${args.join(" ")} exited ${code}\n${stdout}\n${stderr}`))
+      const reason = signal ? `killed by ${signal} (possible timeout)` : `exited ${code}`
+      reject(new Error(`${commandName} ${args.join(" ")} ${reason}\n${stdout}\n${stderr}`))
     })
   })
 }
@@ -73,18 +78,26 @@ function start(commandName, args, options) {
     env: options.env,
     stdio: ["ignore", "pipe", "pipe"],
   })
-  let output = ""
+  const chunks = []
   let failure
-  child.stdout.on("data", (chunk) => (output += chunk))
-  child.stderr.on("data", (chunk) => (output += chunk))
+  child.stdout.on("data", (chunk) => chunks.push(chunk))
+  child.stderr.on("data", (chunk) => chunks.push(chunk))
   child.on("error", (error) => (failure = error))
-  return { child, output: () => output, failure: () => failure }
+  return { child, output: () => Buffer.concat(chunks).toString("utf8"), failure: () => failure }
+}
+
+function isTransientHealthCheckError(error) {
+  return error?.name === "AbortError" || error?.cause?.code === "ECONNREFUSED"
 }
 
 async function waitForHealth(url, processHandle) {
   const deadline = Date.now() + 30_000
   while (Date.now() < deadline) {
-    if (processHandle.failure() || processHandle.child.exitCode !== null) {
+    if (
+      processHandle.failure() ||
+      processHandle.child.exitCode !== null ||
+      processHandle.child.signalCode !== null
+    ) {
       throw new Error(
         `opencode2 exited before readiness\n${processHandle.failure() ?? ""}\n${processHandle.output()}`,
       )
@@ -95,8 +108,8 @@ async function waitForHealth(url, processHandle) {
         signal: globalThis.AbortSignal.timeout(1_000),
       })
       if (response.ok) return
-    } catch {
-      // The server is still starting.
+    } catch (error) {
+      if (!isTransientHealthCheckError(error)) throw error
     }
     await delay(100)
   }
@@ -125,72 +138,85 @@ function sse(response, payload) {
   response.write(`data: ${JSON.stringify(payload)}\n\n`)
 }
 
+async function handleModelRequest(incoming, response, requests) {
+  if (incoming.method === "GET" && incoming.url === "/v1/models") {
+    response.writeHead(200, { "content-type": "application/json" })
+    response.end(JSON.stringify({ object: "list", data: [{ id: "mock-1", object: "model" }] }))
+    return
+  }
+  if (incoming.method !== "POST" || incoming.url !== "/v1/chat/completions") {
+    response.writeHead(404).end()
+    return
+  }
+  const chunks = []
+  for await (const chunk of incoming) chunks.push(chunk)
+  const body = JSON.parse(Buffer.concat(chunks).toString("utf8"))
+  requests.push(body)
+  const messages = JSON.stringify(body.messages)
+  const isToolContinuation = body.messages.some((message) => message.role === "tool")
+  const shouldCallTool = messages.includes(RELATED_PROMPT) && !isToolContinuation
+  response.writeHead(200, {
+    "cache-control": "no-cache",
+    connection: "keep-alive",
+    "content-type": "text/event-stream",
+  })
+  const base = {
+    id: "chatcmpl-remem-e2e",
+    object: "chat.completion.chunk",
+    created: 0,
+    model: "mock-1",
+  }
+  if (shouldCallTool) {
+    sse(response, {
+      ...base,
+      choices: [
+        {
+          index: 0,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              {
+                index: 0,
+                id: "call_read",
+                type: "function",
+                function: { name: "read", arguments: '{"path":"tool-loop.txt"}' },
+              },
+              {
+                index: 1,
+                id: "call_memory_status",
+                type: "function",
+                function: { name: "memory_status", arguments: "{}" },
+              },
+            ],
+          },
+          finish_reason: null,
+        },
+      ],
+    })
+    sse(response, { ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })
+  } else {
+    sse(response, {
+      ...base,
+      choices: [
+        {
+          index: 0,
+          delta: { role: "assistant", content: "mock response" },
+          finish_reason: null,
+        },
+      ],
+    })
+    sse(response, { ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })
+  }
+  response.end("data: [DONE]\n\n")
+}
+
 async function mockModel() {
   const requests = []
-  const server = createServer(async (incoming, response) => {
-    if (incoming.method === "GET" && incoming.url === "/v1/models") {
-      response.writeHead(200, { "content-type": "application/json" })
-      response.end(JSON.stringify({ object: "list", data: [{ id: "mock-1", object: "model" }] }))
-      return
-    }
-    if (incoming.method !== "POST" || incoming.url !== "/v1/chat/completions") {
-      response.writeHead(404).end()
-      return
-    }
-    const chunks = []
-    for await (const chunk of incoming) chunks.push(chunk)
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"))
-    requests.push(body)
-    const messages = JSON.stringify(body.messages)
-    const isToolContinuation = body.messages.some((message) => message.role === "tool")
-    const shouldCallTool = messages.includes(RELATED_PROMPT) && !isToolContinuation
-    response.writeHead(200, {
-      "cache-control": "no-cache",
-      connection: "keep-alive",
-      "content-type": "text/event-stream",
+  const server = createServer((incoming, response) => {
+    handleModelRequest(incoming, response, requests).catch((error) => {
+      if (!response.headersSent) response.writeHead(500, { "content-type": "application/json" })
+      response.end(JSON.stringify({ error: error instanceof Error ? error.message : "mock model failure" }))
     })
-    const base = {
-      id: "chatcmpl-remem-e2e",
-      object: "chat.completion.chunk",
-      created: 0,
-      model: "mock-1",
-    }
-    if (shouldCallTool) {
-      sse(response, {
-        ...base,
-        choices: [
-          {
-            index: 0,
-            delta: {
-              role: "assistant",
-              tool_calls: [
-                {
-                  index: 0,
-                  id: "call_read",
-                  type: "function",
-                  function: { name: "read", arguments: '{"path":"tool-loop.txt"}' },
-                },
-              ],
-            },
-            finish_reason: null,
-          },
-        ],
-      })
-      sse(response, { ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })
-    } else {
-      sse(response, {
-        ...base,
-        choices: [
-          {
-            index: 0,
-            delta: { role: "assistant", content: "mock response" },
-            finish_reason: null,
-          },
-        ],
-      })
-      sse(response, { ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })
-    }
-    response.end("data: [DONE]\n\n")
   })
   await new Promise((resolve, reject) => {
     server.once("error", reject)
@@ -299,6 +325,30 @@ async function createWorkspace(root, name, plugin, modelURL, includeMemory, unav
   return workspace
 }
 
+async function startOpenCodeServer(executable, workspace, environment, attempts = 3) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const port = await unusedPort()
+    const serverURL = `http://127.0.0.1:${port}`
+    const handle = start(
+      executable,
+      ["serve", "--hostname", "127.0.0.1", "--port", String(port), "--log-level", "debug", "--print-logs"],
+      { cwd: workspace, env: environment },
+    )
+    try {
+      await waitForHealth(serverURL, handle)
+      return { handle, serverURL }
+    } catch (error) {
+      await stop(handle.child)
+      // unusedPort() reserves a port and releases it before opencode2 binds to it, so another
+      // process on the runner can race in and grab it between those two steps. Retry with a
+      // freshly reserved port when that happens instead of failing the whole run.
+      const isPortConflict = /EADDRINUSE/.test(handle.output())
+      if (!isPortConflict || attempt === attempts) throw error
+    }
+  }
+  throw new Error("unreachable")
+}
+
 async function createSession(serverURL, workspace) {
   const created = await request(serverURL, "/api/session", {
     method: "POST",
@@ -317,9 +367,21 @@ async function prompt(serverURL, sessionID, text) {
     method: "POST",
     body: JSON.stringify({ text }),
   })
-  // The beta API admits the prompt before its execution coordinator claims the session.
-  await delay(100)
-  await request(serverURL, `/api/session/${sessionID}/wait`, { method: "POST" })
+  // The beta API admits the prompt before its execution coordinator claims the session, so a
+  // /wait call can race ahead of the coordinator and return early. Retry /wait itself, rather
+  // than gambling on a single fixed delay being long enough under CI load.
+  const deadline = Date.now() + 10_000
+  let lastError
+  while (Date.now() < deadline) {
+    try {
+      await request(serverURL, `/api/session/${sessionID}/wait`, { method: "POST" })
+      return
+    } catch (error) {
+      lastError = error
+      await delay(100)
+    }
+  }
+  throw new Error(`session ${sessionID} never became ready to wait on\n${lastError}`)
 }
 
 async function main() {
@@ -415,8 +477,6 @@ async function main() {
       false,
       unavailable.connectionString,
     )
-    const port = await unusedPort()
-    const serverURL = `http://127.0.0.1:${port}`
     const environment = {
       ...npmEnvironment,
       HOME: path.join(temporary, "home"),
@@ -429,24 +489,9 @@ async function main() {
       OPENCODE_SERVER_PASSWORD: SERVER_PASSWORD,
       REMEM_E2E_MOCK_KEY: "e2e",
     }
-    opencode = start(
-      executable,
-      [
-        "serve",
-        "--hostname",
-        "127.0.0.1",
-        "--port",
-        String(port),
-        "--log-level",
-        "debug",
-        "--print-logs",
-      ],
-      {
-        cwd: workspace,
-        env: environment,
-      },
-    )
-    await waitForHealth(serverURL, opencode)
+    const server = await startOpenCodeServer(executable, workspace, environment)
+    opencode = server.handle
+    const serverURL = server.serverURL
 
     const relatedSession = await createSession(serverURL, workspace)
     await prompt(serverURL, relatedSession, RELATED_PROMPT)
@@ -488,6 +533,13 @@ async function main() {
     )
     if (!JSON.stringify(relatedMessages).includes("native tool loop fixture")) {
       throw new Error("native tool loop did not execute successfully")
+    }
+    // The mock model also invokes memory_status directly; assert its actual execution result
+    // (not just that the tool schema was advertised) surfaces the configured provider.
+    if (!JSON.stringify(relatedMessages).includes("fixture-memory")) {
+      throw new Error(
+        `Remem memory_status tool did not execute against the live runtime\n${JSON.stringify(relatedMessages)}`,
+      )
     }
     const context = await request(serverURL, `/api/session/${relatedSession}/context`)
     const persistedUserMessages = context.data?.filter((message) => message.type === "user") ?? []
@@ -540,9 +592,16 @@ async function main() {
     if (opencode) await stop(opencode.child)
     if (model) await model.close()
     if (unavailable) await unavailable.close()
-    if (completed || !process.env.REMEM_E2E_KEEP)
+    // Keep the workspace on failure by default so CI/local runs can be triaged after the fact;
+    // REMEM_E2E_KEEP additionally forces retention even on success, for local debugging.
+    if (completed && !process.env.REMEM_E2E_KEEP) {
       await rm(temporary, { recursive: true, force: true })
-    else process.stderr.write(`retained E2E workspace: ${temporary}\n`)
+    } else {
+      process.stderr.write(`retained E2E workspace: ${temporary}\n`)
+      if (!completed && process.env.GITHUB_ENV) {
+        await appendFile(process.env.GITHUB_ENV, `REMEM_E2E_WORKSPACE=${temporary}\n`)
+      }
+    }
   }
 }
 

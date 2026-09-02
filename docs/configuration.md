@@ -112,7 +112,7 @@ The current beta schema uses `plugins` and an object with `package` and optional
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      "package": "file:///absolute/path/to/remem/dist/index.js",
+      "package": "file:///absolute/path/to/remem/dist",
       "options": {
         "providers": [
           {
