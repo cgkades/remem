@@ -170,6 +170,17 @@ function appConfig(
   }
 }
 
+export function warnAboutNeuralDownload(
+  config: Pick<RememAppConfig, "embedding">,
+  output: (line: string) => void,
+): void {
+  if (config.embedding.provider === "neural") {
+    output(
+      `First use will download the ${config.embedding.model} embedding model (~30MB) from huggingface.co; this happens once. If blocked, see \`remem doctor\`.`,
+    )
+  }
+}
+
 async function initialize(
   parsed: ParsedArguments,
   paths: RememPaths,
@@ -214,6 +225,7 @@ async function initialize(
       hasFlag(parsed, "capture"),
       configureHost ? { configured: true, configPath: opencodePath } : undefined,
     )
+    warnAboutNeuralDownload(config, output)
   } else if (mode === "managed") {
     await runner.run("docker", ["--version"])
     await runner.run("docker", ["compose", "version"])
@@ -237,6 +249,7 @@ async function initialize(
       hasFlag(parsed, "capture"),
       configureHost ? { configured: true, configPath: opencodePath } : undefined,
     )
+    warnAboutNeuralDownload(config, output)
   } else {
     throw new Error("--mode must be managed or external")
   }
