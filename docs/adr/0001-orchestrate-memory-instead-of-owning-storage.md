@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-01
+- Refined by: [ADR 0008](0008-manage-a-default-store-while-remaining-an-orchestrator.md)
 
 ## Context
 
@@ -24,3 +25,5 @@ store.
 - Provider consistency cannot be assumed.
 - Remem must operate when some or all providers are unavailable.
 - Durable writes and migrations are provider-specific.
+- ADR 0008 refines this decision by making a Remem-managed local store the default provider without
+  making it the only provider or moving storage concerns into the orchestration core.

@@ -1,6 +1,6 @@
 # ADR 0005: Inject Context for Model Dispatch
 
-- Status: Accepted
+- Status: Superseded by [ADR 0011](0011-integrate-with-the-opencode-v2-context-hook.md)
 - Date: 2026-09-01
 
 ## Context
