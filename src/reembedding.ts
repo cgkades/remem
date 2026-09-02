@@ -22,6 +22,18 @@ export interface ReembedRunResult {
 }
 
 /**
+ * Cooldown gate for opportunistic hook-triggered re-embedding: avoids
+ * hammering the database with a reembedStale() attempt on every prompt.
+ */
+export function shouldAttemptReembed(
+  lastAttemptMs: number | undefined,
+  now: () => number = Date.now,
+  cooldownMs = 5 * 60_000,
+): boolean {
+  return lastAttemptMs === undefined || now() - lastAttemptMs >= cooldownMs
+}
+
+/**
  * Re-embeds remem.memory_embeddings rows whose stored model/dimensions don't
  * match the currently configured embedding model. Mirrors
  * PostgresConsolidationRunner's claim/complete/fail/recover pattern (see

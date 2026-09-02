@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { PostgresReembedRunner } from "../src/reembedding.js"
+import { PostgresReembedRunner, shouldAttemptReembed } from "../src/reembedding.js"
 
 function fakePool(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -28,5 +28,19 @@ describe("PostgresReembedRunner", () => {
     const result = await runner.run()
     expect(result.status).toBe("no-op")
     expect(embed).not.toHaveBeenCalled()
+  })
+})
+
+describe("shouldAttemptReembed", () => {
+  it("returns true when never attempted", () => {
+    expect(shouldAttemptReembed(undefined, () => 1_000, 5 * 60_000)).toBe(true)
+  })
+
+  it("returns false within the cooldown window", () => {
+    expect(shouldAttemptReembed(1_000, () => 1_000 + 60_000, 5 * 60_000)).toBe(false)
+  })
+
+  it("returns true after the cooldown window elapses", () => {
+    expect(shouldAttemptReembed(1_000, () => 1_000 + 6 * 60_000, 5 * 60_000)).toBe(true)
   })
 })

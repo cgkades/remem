@@ -3,7 +3,9 @@ import type { Context } from "@opencode-ai/plugin/promise/plugin"
 import { createCaptureCoordinator, type CaptureCoordinator } from "../../capture.js"
 import { parseConfig } from "../../config.js"
 import { RememOrchestrator } from "../../orchestrator.js"
+import { PostgresMemoryProvider } from "../../providers/postgres.js"
 import { createProviders } from "../../providers/factory.js"
+import { shouldAttemptReembed } from "../../reembedding.js"
 import { loadInstalledPluginOptions } from "../../storage/config-file.js"
 import { createEmbeddingModel } from "../../storage/embedding-neural.js"
 import type { MemoryContext, MemoryProvider, RememLogger } from "../../types.js"
@@ -129,6 +131,8 @@ async function registerTools(
   })
 }
 
+const lastReembedAttempt = new Map<string, number>()
+
 export const RememPlugin = Plugin.define({
   id: "opencode-remem",
   async setup(context) {
@@ -136,6 +140,7 @@ export const RememPlugin = Plugin.define({
     let providers: MemoryProvider[] = []
     let contextRegistration: { dispose(): Promise<void> } | undefined
     let promptRegistration: { dispose(): Promise<void> } | undefined
+    let reembedRegistration: { dispose(): Promise<void> } | undefined
     let capture: CaptureCoordinator | undefined
     try {
       const parsed = parseConfig(await loadInstalledPluginOptions(context.options))
@@ -175,6 +180,21 @@ export const RememPlugin = Plugin.define({
           }
         })
       }
+      const primaryPostgres = providers.find(
+        (provider): provider is PostgresMemoryProvider => provider instanceof PostgresMemoryProvider,
+      )
+      if (primaryPostgres) {
+        reembedRegistration = await context.session.hook("prompt", () => {
+          if (!shouldAttemptReembed(lastReembedAttempt.get(primaryPostgres.id))) return
+          lastReembedAttempt.set(primaryPostgres.id, Date.now())
+          // Fire-and-forget: must never delay or fail prompt handling.
+          void primaryPostgres.reembedStale().catch((error) => {
+            safeLoggerCall(logger, "warn", "reembed.attempt_failed", {
+              error: error instanceof Error ? error.name : "unknown error",
+            })
+          })
+        })
+      }
       contextRegistration = await context.session.hook("context", async (event) => {
         try {
           await injectV2DispatchMemory(
@@ -190,12 +210,20 @@ export const RememPlugin = Plugin.define({
       })
       const toolRegistration = await registerTools(context, orchestrator, location)
       return async () => {
-        await Promise.allSettled([contextRegistration?.dispose(), promptRegistration?.dispose()])
+        await Promise.allSettled([
+          contextRegistration?.dispose(),
+          promptRegistration?.dispose(),
+          reembedRegistration?.dispose(),
+        ])
         await capture?.dispose()
         await Promise.allSettled([toolRegistration.dispose(), disposeProviders(providers)])
       }
     } catch (error) {
-      await Promise.allSettled([contextRegistration?.dispose(), promptRegistration?.dispose()])
+      await Promise.allSettled([
+        contextRegistration?.dispose(),
+        promptRegistration?.dispose(),
+        reembedRegistration?.dispose(),
+      ])
       await Promise.allSettled([capture?.dispose(), disposeProviders(providers)])
       safeLoggerCall(logger, "error", "plugin.initialization_failed", {
         error: error instanceof Error ? error.name : "unknown error",
