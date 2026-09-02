@@ -7,6 +7,7 @@ import type {
   SessionEventKind,
   SessionObservation,
 } from "./observation.js"
+import { containsSensitiveCredential } from "./sensitive-data.js"
 import { withTimeout } from "./timeout.js"
 import type { MemoryContext, MemoryProvider, RememLogger } from "./types.js"
 
@@ -18,8 +19,6 @@ export interface UserPromptCapture {
   text: string
 }
 
-const SECRET_PATTERN =
-  /(?:api[_-]?key|secret|password|private[_-]?key|access[_-]?token)\s*[:=]|-----BEGIN [A-Z ]*PRIVATE KEY-----|\beyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}\b/iu
 const QUOTED_OR_SYNTHETIC_PATTERN = /(^\s*>|```|<memory-|tool[- ]output|source:\s*remem)/imu
 
 function classify(text: string): SessionEventKind | undefined {
@@ -53,7 +52,7 @@ function safeToCapture(text: string, config: CaptureConfig): boolean {
   return (
     text.length > 0 &&
     text.length <= config.maxInputCharacters &&
-    !SECRET_PATTERN.test(text) &&
+    !containsSensitiveCredential(text) &&
     !QUOTED_OR_SYNTHETIC_PATTERN.test(text)
   )
 }

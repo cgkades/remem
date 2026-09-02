@@ -601,7 +601,12 @@ export class PostgresMemoryProvider implements MemoryProvider, ObservationStore 
           observation.context.projectId,
           observation.kind,
           observation.occurredAt,
-          JSON.stringify({ ...observation.payload, source: observation.source }),
+          JSON.stringify({
+            ...Object.fromEntries(
+              Object.entries(observation.payload).filter(([key]) => key !== "text"),
+            ),
+            source: observation.source,
+          }),
         ],
       )
       await client.query(
@@ -619,7 +624,11 @@ export class PostgresMemoryProvider implements MemoryProvider, ObservationStore 
           clamp(candidate.confidence, 0.5),
           JSON.stringify({
             providerId: this.id,
-            memory: candidate.memory,
+            memory: Object.fromEntries(
+              Object.entries(candidate.memory).filter(
+                ([key]) => key !== "title" && key !== "content" && key !== "summary",
+              ),
+            ),
             reasons: candidate.reasons,
             observationIds: candidate.observationIds,
           }),

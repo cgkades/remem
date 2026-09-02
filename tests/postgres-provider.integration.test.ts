@@ -499,20 +499,26 @@ integration("PostgreSQL managed provider", () => {
     await provider.persistCandidate(observation, candidate)
 
     expect(await provider.candidateStatus(context)).toMatchObject({ pending: 1 })
-    expect(
-      (
-        await pool.query<{ payload: Record<string, unknown>; metadata: Record<string, unknown> }>(
-          `SELECT e.payload, c.metadata
+    const persisted = (
+      await pool.query<{ payload: Record<string, unknown>; metadata: Record<string, unknown> }>(
+        `SELECT e.payload, c.metadata
            FROM remem.session_events e
            JOIN remem.candidate_memories c ON c.session_event_id = e.id
            WHERE c.id = $1`,
-          [candidate.id],
-        )
-      ).rows[0],
-    ).toMatchObject({
+        [candidate.id],
+      )
+    ).rows[0]
+    expect(persisted).toMatchObject({
       payload: { host: "opencode-v2", messageId: "message-1" },
       metadata: { providerId: "remem-local", reasons: ["explicit decision"] },
     })
+    expect(persisted?.payload).not.toHaveProperty("text")
+    expect(
+      (persisted?.metadata.memory as Record<string, unknown> | undefined)?.content,
+    ).toBeUndefined()
+    expect(
+      (persisted?.metadata.memory as Record<string, unknown> | undefined)?.summary,
+    ).toBeUndefined()
   })
 
   it("reports database, migration, provider, filesystem, and embedding health", async () => {

@@ -6,6 +6,7 @@ import {
 } from "../src/capture.js"
 import type { CaptureConfig } from "../src/config.js"
 import type { CandidateMemory, ObservationStore, SessionObservation } from "../src/observation.js"
+import { containsSensitiveCredential, redactSensitiveText } from "../src/sensitive-data.js"
 import type { MemoryContext, RememLogger } from "../src/types.js"
 
 const config: CaptureConfig = {
@@ -89,12 +90,25 @@ describe("DeterministicCandidateExtractor", () => {
       observation("What architecture should this service use?"),
       observation("> Decision: use logical replication."),
       observation("Decision: API_KEY=super-secret-value"),
+      observation("Decision: use token ghp_abcdefghijklmnopqrstuvwxyz1234567890"),
+      observation("Decision: use AKIAIOSFODNN7EXAMPLE for the deploy role."),
+      observation("Decision: pass Bearer AbCdEf0123456789ZYXWVUTSRQPO987654."),
+      observation("Decision: -----BEGIN OPENSSH PRIVATE KEY-----"),
+      observation("Decision: use pV7mQ2xK9rT4nL8cF1wH6bC0eJ5sD3yZqA."),
       observation(`Decision: ${"x".repeat(250)}`),
     ]
 
     await expect(
       Promise.all(samples.map((sample) => extractor.extract([sample]))),
-    ).resolves.toEqual([[], [], [], [], [], []])
+    ).resolves.toEqual([[], [], [], [], [], [], [], [], [], [], []])
+  })
+
+  it("detects and redacts reusable credential patterns", () => {
+    const secret = "Authorization: Bearer AbCdEf0123456789ZYXWVUTSRQPO987654"
+
+    expect(containsSensitiveCredential(secret)).toBe(true)
+    expect(redactSensitiveText(secret)).toBe("Authorization: [redacted]")
+    expect(containsSensitiveCredential("Use the standard credential provider chain.")).toBe(false)
   })
 })
 
