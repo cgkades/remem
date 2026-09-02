@@ -1,0 +1,24 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    [
+      "../dist/server.js",
+      {
+        "providers": [
+          {
+            "type": "markdown",
+            "id": "example-notes",
+            "paths": ["examples/memory"],
+            "scope": "workspace"
+          }
+        ],
+        "budgets": {
+          "catalogTokens": 600,
+          "recallTokens": 1400,
+          "perProviderTokens": 900
+        },
+        "debug": true
+      }
+    ]
+  ]
+}
