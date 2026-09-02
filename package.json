@@ -1,7 +1,7 @@
 {
   "name": "opencode-remem",
-  "version": "0.1.0",
-  "description": "Memory orchestration for OpenCode",
+  "version": "0.2.0",
+  "description": "Local-first memory platform and orchestration for AI coding agents",
   "homepage": "https://github.com/cgkades/remem#readme",
   "repository": {
     "type": "git",
@@ -13,6 +13,9 @@
   "type": "module",
   "license": "Apache-2.0",
   "private": false,
+  "bin": {
+    "remem": "./dist/cli.js"
+  },
   "sideEffects": false,
   "engines": {
     "node": ">=22",
@@ -24,6 +27,7 @@
     "examples",
     "migrations",
     "README.md",
+    "SECURITY.md",
     "LICENSE",
     "CHANGELOG.md"
   ],
@@ -47,14 +51,20 @@
     "./core": {
       "types": "./dist/core.d.ts",
       "import": "./dist/core.js"
+    },
+    "./cli": {
+      "types": "./dist/cli/index.d.ts",
+      "import": "./dist/cli/index.js"
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build",
+    "clean": "node scripts/clean.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
+    "pack:check": "npm pack --dry-run",
     "prepack": "npm run build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
@@ -64,6 +74,9 @@
     "opencode",
     "plugin",
     "memory",
+    "local-first",
+    "postgresql",
+    "pgvector",
     "orchestration",
     "recall",
     "llm",

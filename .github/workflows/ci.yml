@@ -12,6 +12,20 @@ jobs:
   check:
     name: Node.js ${{ matrix.node }}
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.1-pg16
+        env:
+          POSTGRES_DB: remem_test
+          POSTGRES_USER: remem
+          POSTGRES_PASSWORD: remem-ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U remem -d remem_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
     strategy:
       fail-fast: false
       matrix:
@@ -24,3 +38,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+        env:
+          REMEM_TEST_DATABASE_URL: postgres://remem:remem-ci-password@127.0.0.1:5432/remem_test
+      - run: npm run pack:check
