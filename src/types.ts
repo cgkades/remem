@@ -183,6 +183,8 @@ export interface MemoryTrace {
 
 export interface MemoryInjection {
   text: string
+  catalogText: string
+  memoryText: string
   plan: RetrievalPlan
   trace: MemoryTrace
 }

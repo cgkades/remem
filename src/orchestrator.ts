@@ -123,6 +123,8 @@ export class RememOrchestrator {
       this.logTrace(trace)
       return {
         text: synthesis.text ? `${catalog.text}\n\n${synthesis.text}` : catalog.text,
+        catalogText: catalog.text,
+        memoryText: synthesis.text,
         plan,
         trace,
       }
@@ -148,7 +150,13 @@ export class RememOrchestrator {
       }
       this.diagnostics.record(trace)
       safeLog(this.logger, "warn", "orchestration.failed", { error: diagnostic })
-      return { text: catalog.text, plan: emptyPlan(), trace }
+      return {
+        text: catalog.text,
+        catalogText: catalog.text,
+        memoryText: "",
+        plan: emptyPlan(),
+        trace,
+      }
     }
   }
 
@@ -257,6 +265,10 @@ export class RememOrchestrator {
       budgets: this.config.budgets,
       lastTrace: this.diagnostics.latest(context.sessionId),
     }
+  }
+
+  explain(sessionId?: string): MemoryTrace | { status: "no-trace" } {
+    return this.diagnostics.latest(sessionId) ?? { status: "no-trace" }
   }
 
   private logTrace(trace: MemoryTrace): void {

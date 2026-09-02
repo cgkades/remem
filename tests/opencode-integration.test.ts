@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { injectPromptMemory, type PromptMessageOutput } from "../src/integration/opencode.js"
+import { injectV1PromptMemory, type V1PromptMessageOutput } from "../src/hosts/opencode/v1.js"
+import { injectV2DispatchMemory } from "../src/hosts/opencode/v2.js"
 import { RememOrchestrator } from "../src/orchestrator.js"
 import { MarkdownMemoryProvider } from "../src/providers/markdown.js"
 import { fixtureDirectory, memoryContext, testConfig } from "./helpers.js"
@@ -19,16 +20,54 @@ describe("OpenCode prompt injection", () => {
       },
       [fixtureDirectory],
     )
-    const output: PromptMessageOutput = {
+    const output: V1PromptMessageOutput = {
       message: { system: "Existing project instruction." },
       parts: [{ type: "text", text: "Let's continue the Phoenix database work." }],
     }
 
-    await injectPromptMemory(new RememOrchestrator([provider], config), output, memoryContext)
+    await injectV1PromptMemory(new RememOrchestrator([provider], config), output, memoryContext)
 
     expect(output.message.system).toMatch(/^Existing project instruction\./u)
     expect(output.message.system).toContain("<memory-catalog>")
     expect(output.message.system).toContain("<memory-context>")
     expect(output.message.system).toContain("use logical replication")
+  })
+
+  it("keeps retrieved v2 data out of privileged system instructions", async () => {
+    const provider = new MarkdownMemoryProvider(
+      {
+        type: "markdown",
+        id: "fixtures",
+        paths: [fixtureDirectory],
+        exclude: [],
+        scope: "workspace",
+        maxFileBytes: 256 * 1024,
+        maxFiles: 100,
+      },
+      [fixtureDirectory],
+    )
+    const originalUserMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "Let's continue the Phoenix database work." }],
+    }
+    const event = {
+      sessionID: "session-1",
+      system: [{ type: "text" as const, text: "Existing project instruction." }],
+      messages: [originalUserMessage],
+    }
+
+    await injectV2DispatchMemory(
+      new RememOrchestrator([provider], testConfig()),
+      event,
+      memoryContext,
+    )
+
+    expect(event.messages[0]).toBe(originalUserMessage)
+    expect(event.system.map((part) => part.text).join("\n")).not.toContain(
+      "use logical replication",
+    )
+    expect(event.system.at(-1)?.text).toContain("untrusted evidence")
+    expect(event.messages).toHaveLength(2)
+    expect(event.messages.at(-1)?.content[0]?.text).toContain("use logical replication")
   })
 })

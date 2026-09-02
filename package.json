@@ -16,7 +16,7 @@
   "sideEffects": false,
   "engines": {
     "node": ">=22",
-    "opencode": ">=1.18.26 <2"
+    "opencode": ">=1.18.26"
   },
   "files": [
     "dist",
@@ -34,6 +34,14 @@
     "./server": {
       "types": "./dist/server.d.ts",
       "import": "./dist/server.js"
+    },
+    "./opencode/v1": {
+      "types": "./dist/hosts/opencode/v1.d.ts",
+      "import": "./dist/hosts/opencode/v1.js"
+    },
+    "./opencode/v2": {
+      "types": "./dist/hosts/opencode/v2.d.ts",
+      "import": "./dist/hosts/opencode/v2.js"
     },
     "./core": {
       "types": "./dist/core.d.ts",
@@ -61,7 +69,8 @@
     "agent"
   ],
   "dependencies": {
-    "@opencode-ai/plugin": "1.18.26"
+    "@opencode-ai/plugin": "0.0.0-beta-18743",
+    "opencode-plugin-v1": "npm:@opencode-ai/plugin@1.18.26"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
