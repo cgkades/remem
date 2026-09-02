@@ -164,11 +164,7 @@ function appConfig(
         catalogLimit: 2_000,
       },
     ],
-    embedding: {
-      provider: "local-hash",
-      model: "remem-local-hash-v1",
-      dimensions: 384,
-    },
+    embedding: { provider: "neural", model: "bge-small-en-v1.5", dimensions: 384 },
     capture: { enabled: capture },
     ...(opencode ? { opencode } : {}),
   }
