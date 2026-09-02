@@ -49,7 +49,7 @@ titled "Bedrock Claude credential passthrough failure").
 
 - `EmbeddingModel` interface (`src/types.ts:189`) is already decoupled from
   the orchestrator: `{ id: string; dimensions: number; embed(text, signal?):
-  Promise<number[]> }`.
+Promise<number[]> }`.
 - `remem.memory_embeddings` and catalog embedding rows already store
   `embedding_model` and `embedding_dimensions` per row
   (`src/providers/postgres.ts`).
@@ -169,7 +169,7 @@ stale, they just fall back to keyword-only matching (today's existing
 behavior) until re-embedded, and draining resumes automatically the moment
 OpenCode is used again. A standing background service would remove this
 gap but adds real infrastructure (install/consent flow, OS service
-management) for a benefit that's about backlog *latency*, not correctness.
+management) for a benefit that's about backlog _latency_, not correctness.
 Revisit only if this proves to be a real problem in practice.
 
 This satisfies "an embedding backend failure does not break OpenCode prompt
@@ -255,12 +255,12 @@ job/`remem reembed` command.
 
 ## Acceptance criteria mapping (from issue #1)
 
-| Issue criterion | Covered by |
-|---|---|
-| Learned semantic similarity is the normal managed-mode Stage 1 path | `embedding.backend` default resolution |
-| Feature hashing remains a tested fallback | `LocalHashEmbeddingModel` unchanged; fallback tests |
-| Eval fixtures show improved recall vs. hashing alone | Testing plan |
-| Embedding backend failure does not break OpenCode prompt execution | Lazy-load + fail-open at every failure point |
-| Tests cover model identity/dimension mismatch and fallback | Testing plan |
-| Migration/re-embedding strategy when the model changes | Hook-triggered re-embed job + `remem reembed` |
-| `remem doctor` reports embedding backend/model health | Doctor surface section |
+| Issue criterion                                                     | Covered by                                          |
+| ------------------------------------------------------------------- | --------------------------------------------------- |
+| Learned semantic similarity is the normal managed-mode Stage 1 path | `embedding.backend` default resolution              |
+| Feature hashing remains a tested fallback                           | `LocalHashEmbeddingModel` unchanged; fallback tests |
+| Eval fixtures show improved recall vs. hashing alone                | Testing plan                                        |
+| Embedding backend failure does not break OpenCode prompt execution  | Lazy-load + fail-open at every failure point        |
+| Tests cover model identity/dimension mismatch and fallback          | Testing plan                                        |
+| Migration/re-embedding strategy when the model changes              | Hook-triggered re-embed job + `remem reembed`       |
+| `remem doctor` reports embedding backend/model health               | Doctor surface section                              |

@@ -755,11 +755,15 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
   }
 
   async reembedStale(batchSize = 25) {
-    return new PostgresReembedRunner(this.pool, (text, signal) => this.embeddingModel.embed(text, signal), {
-      modelId: this.embeddingModel.id,
-      dimensions: this.embeddingModel.dimensions,
-      batchSize,
-    }).run()
+    return new PostgresReembedRunner(
+      this.pool,
+      (text, signal) => this.embeddingModel.embed(text, signal),
+      {
+        modelId: this.embeddingModel.id,
+        dimensions: this.embeddingModel.dimensions,
+        batchSize,
+      },
+    ).run()
   }
 
   async health(): Promise<ProviderHealth> {

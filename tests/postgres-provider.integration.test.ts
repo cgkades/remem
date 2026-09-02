@@ -700,9 +700,10 @@ integration("PostgreSQL managed provider", () => {
       scope: { kind: "workspace", id: "phoenix" },
       type: "decision",
     })
-    await pool.query("UPDATE remem.memory_embeddings SET model = 'stale-model' WHERE memory_id = $1", [
-      written.id,
-    ])
+    await pool.query(
+      "UPDATE remem.memory_embeddings SET model = 'stale-model' WHERE memory_id = $1",
+      [written.id],
+    )
     const result = await provider.reembedStale(10)
     expect(result.status).toBe("completed")
     expect(result.reembedded).toBeGreaterThanOrEqual(1)
@@ -731,9 +732,10 @@ integration("PostgreSQL managed provider", () => {
       scope: { kind: "workspace", id: "phoenix" },
       type: "decision",
     })
-    await pool.query("UPDATE remem.memory_embeddings SET model = 'stale-model' WHERE memory_id = $1", [
-      written.id,
-    ])
+    await pool.query(
+      "UPDATE remem.memory_embeddings SET model = 'stale-model' WHERE memory_id = $1",
+      [written.id],
+    )
 
     const root = await mkdtemp(path.join(os.tmpdir(), "remem-reembed-cli-"))
     const paths = rememPaths({

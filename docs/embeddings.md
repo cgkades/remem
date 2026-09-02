@@ -68,6 +68,7 @@ stays lightweight.
    flag for it. Setting it makes Remem set `env.localModelPath` to that
    directory and `env.allowRemoteModels = false`, so no network call is
    attempted.
+
 3. **Automatic fallback**: if neither applies, Remem falls back to
    `remem-local-hash-v1` automatically and logs the failure. Run
    `remem doctor` to see the active backend (the "embedding configuration"

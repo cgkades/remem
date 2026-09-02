@@ -53,7 +53,9 @@ export function configureProxyFromEnvironment(
   return true
 }
 
-async function defaultLoadPipeline(modelPath: string | undefined): Promise<FeatureExtractionPipeline> {
+async function defaultLoadPipeline(
+  modelPath: string | undefined,
+): Promise<FeatureExtractionPipeline> {
   configureProxyFromEnvironment()
   const { pipeline, env } = await import("@huggingface/transformers")
   if (modelPath) {

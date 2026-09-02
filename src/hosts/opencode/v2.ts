@@ -181,7 +181,8 @@ export const RememPlugin = Plugin.define({
         })
       }
       const primaryPostgres = providers.find(
-        (provider): provider is PostgresMemoryProvider => provider instanceof PostgresMemoryProvider,
+        (provider): provider is PostgresMemoryProvider =>
+          provider instanceof PostgresMemoryProvider,
       )
       if (primaryPostgres) {
         reembedRegistration = await context.session.hook("prompt", () => {

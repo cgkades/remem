@@ -51,9 +51,9 @@ describe("createEmbeddingModel", () => {
     const model = await createEmbeddingModel(
       { backend: "neural" },
       {
-        loadPipeline: vi.fn().mockResolvedValue(
-          vi.fn().mockRejectedValue(new Error("inference failed")),
-        ),
+        loadPipeline: vi
+          .fn()
+          .mockResolvedValue(vi.fn().mockRejectedValue(new Error("inference failed"))),
       },
     )
     const embedding = await model.embed("hello world")
@@ -66,9 +66,9 @@ describe("createEmbeddingModel", () => {
     const model = await createEmbeddingModel(
       { backend: "neural" },
       {
-        loadPipeline: vi.fn().mockResolvedValue(
-          vi.fn().mockResolvedValue({ data: Float32Array.from(fakeVector) }),
-        ),
+        loadPipeline: vi
+          .fn()
+          .mockResolvedValue(vi.fn().mockResolvedValue({ data: Float32Array.from(fakeVector) })),
       },
     )
     expect(model.id).toBe("bge-small-en-v1.5")
@@ -78,8 +78,13 @@ describe("createEmbeddingModel", () => {
   })
 
   it("passes modelPath through to the pipeline loader", async () => {
-    const loadPipeline = vi.fn().mockResolvedValue(vi.fn().mockResolvedValue({ data: new Float32Array(384) }))
-    await createEmbeddingModel({ backend: "neural", modelPath: "/opt/models/bge-small" }, { loadPipeline })
+    const loadPipeline = vi
+      .fn()
+      .mockResolvedValue(vi.fn().mockResolvedValue({ data: new Float32Array(384) }))
+    await createEmbeddingModel(
+      { backend: "neural", modelPath: "/opt/models/bge-small" },
+      { loadPipeline },
+    )
     expect(loadPipeline).toHaveBeenCalledWith("/opt/models/bge-small")
   })
 

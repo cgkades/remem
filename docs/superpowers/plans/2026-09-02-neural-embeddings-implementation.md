@@ -21,11 +21,13 @@
 ### Task 1: Add the `@huggingface/transformers` dependency
 
 **Files:**
+
 - Modify: `package.json`
 
 - [ ] **Step 1: Add the dependency**
 
 Run:
+
 ```bash
 npm install --save @huggingface/transformers@^3
 ```
@@ -47,10 +49,12 @@ git commit -m "build: add @huggingface/transformers dependency for neural embedd
 ### Task 2: `BgeSmallEmbeddingModel` with lazy load and fail-open
 
 **Files:**
+
 - Create: `src/storage/embedding-neural.ts`
 - Test: `tests/embedding-neural.test.ts`
 
 `EmbeddingModel` (already defined, `src/types.ts:189-193`):
+
 ```ts
 export interface EmbeddingModel {
   readonly id: string
@@ -87,9 +91,9 @@ describe("createEmbeddingModel", () => {
     const model = await createEmbeddingModel(
       { backend: "neural" },
       {
-        loadPipeline: vi.fn().mockResolvedValue(
-          vi.fn().mockRejectedValue(new Error("inference failed")),
-        ),
+        loadPipeline: vi
+          .fn()
+          .mockResolvedValue(vi.fn().mockRejectedValue(new Error("inference failed"))),
       },
     )
     const embedding = await model.embed("hello world")
@@ -102,9 +106,9 @@ describe("createEmbeddingModel", () => {
     const model = await createEmbeddingModel(
       { backend: "neural" },
       {
-        loadPipeline: vi.fn().mockResolvedValue(
-          vi.fn().mockResolvedValue({ data: Float32Array.from(fakeVector) }),
-        ),
+        loadPipeline: vi
+          .fn()
+          .mockResolvedValue(vi.fn().mockResolvedValue({ data: Float32Array.from(fakeVector) })),
       },
     )
     expect(model.id).toBe("bge-small-en-v1.5")
@@ -145,7 +149,9 @@ const MODEL_ID = "bge-small-en-v1.5"
 const MODEL_DIMENSIONS = 384
 const HUGGING_FACE_MODEL = "Xenova/bge-small-en-v1.5"
 
-async function defaultLoadPipeline(modelPath: string | undefined): Promise<FeatureExtractionPipeline> {
+async function defaultLoadPipeline(
+  modelPath: string | undefined,
+): Promise<FeatureExtractionPipeline> {
   const { pipeline, env } = await import("@huggingface/transformers")
   if (modelPath) {
     env.localModelPath = modelPath
@@ -217,6 +223,7 @@ git commit -m "feat: add BgeSmallEmbeddingModel with fail-open to hash fallback"
 ### Task 3: Proxy-aware download for the neural model
 
 **Files:**
+
 - Modify: `src/storage/embedding-neural.ts`
 - Test: `tests/embedding-neural.test.ts`
 
@@ -293,10 +300,12 @@ git commit -m "feat: route neural model downloads through standard proxy env var
 ### Task 4: `embedding` block in plugin config (`src/config.ts`)
 
 **Files:**
+
 - Modify: `src/config.ts`
 - Test: `tests/config.test.ts` (existing file — add cases)
 
 Current `RememConfig` (`src/config.ts:57-61`):
+
 ```ts
 export interface RememConfig extends OrchestratorConfig {
   providers: MemoryProviderConfig[]
@@ -368,7 +377,8 @@ Add a parse helper above `parseConfig`:
 ```ts
 function parseEmbedding(value: unknown, diagnostics: ConfigDiagnostic[]): EmbeddingConfig {
   const options = isRecord(value) ? value : {}
-  const backend = options.backend === "neural" ? "neural" : options.backend === "hash" ? "hash" : undefined
+  const backend =
+    options.backend === "neural" ? "neural" : options.backend === "hash" ? "hash" : undefined
   if (options.backend !== undefined && backend === undefined) {
     diagnostics.push({
       level: "warn",
@@ -407,17 +417,19 @@ git commit -m "feat: add embedding backend config to plugin options schema"
 ### Task 5: Widen `RememAppConfig.embedding` and default managed/external init to neural
 
 **Files:**
+
 - Modify: `src/storage/config-file.ts`
 - Modify: `src/cli/index.ts`
 - Test: `tests/config-file.test.ts` (create if it doesn't exist — check first with `ls tests/config-file.test.ts`)
 
 Current type (`src/storage/config-file.ts:36-40`):
+
 ```ts
-  embedding: {
-    provider: "local-hash"
-    model: "remem-local-hash-v1"
-    dimensions: 384
-  }
+embedding: {
+  provider: "local-hash"
+  model: "remem-local-hash-v1"
+  dimensions: 384
+}
 ```
 
 Current `appConfig()` (`src/cli/index.ts:149-172`) hardcodes the same literal shape.
@@ -489,13 +501,13 @@ export interface RememAppConfig {
 In `validateAppConfig`, replace the existing `!isRecord(value.embedding)` check with:
 
 ```ts
-  if (!Array.isArray(value.providers) || !isRecord(value.embedding)) {
-    throw new Error("provider or embedding configuration is missing")
-  }
-  const embeddingProvider = value.embedding.provider
-  if (embeddingProvider !== "local-hash" && embeddingProvider !== "neural") {
-    throw new Error("embedding.provider must be 'local-hash' or 'neural'")
-  }
+if (!Array.isArray(value.providers) || !isRecord(value.embedding)) {
+  throw new Error("provider or embedding configuration is missing")
+}
+const embeddingProvider = value.embedding.provider
+if (embeddingProvider !== "local-hash" && embeddingProvider !== "neural") {
+  throw new Error("embedding.provider must be 'local-hash' or 'neural'")
+}
 ```
 
 - [ ] **Step 4: Update `appConfig()` in `src/cli/index.ts` to default to neural**
@@ -535,6 +547,7 @@ git commit -m "feat: default remem init to the neural embedding backend"
 ### Task 6: Print the download warning on `remem init`
 
 **Files:**
+
 - Modify: `src/cli/index.ts`
 - Test: `tests/cli-provisioning.test.ts` (existing — check its `output`/`stdout` capture pattern and match it)
 
@@ -565,14 +578,14 @@ Expected: FAIL — no such line is printed today.
 In `src/cli/index.ts`, immediately after `config = appConfig(...)` is assigned in both the `external` and `managed` branches (i.e., right before the shared `if (configureHost) await configureOpenCode(...)` line that follows the `if/else if` block), add:
 
 ```ts
-  if (config.embedding.provider === "neural") {
-    output(
-      `Remem will download the ${config.embedding.model} embedding model (~30MB, quantized) ` +
-        "from huggingface.co on first use. This happens once and is cached locally; " +
-        "no further network access is required afterward. If this download is blocked, " +
-        "Remem automatically falls back to local hash-based embeddings — see `remem doctor`.",
-    )
-  }
+if (config.embedding.provider === "neural") {
+  output(
+    `Remem will download the ${config.embedding.model} embedding model (~30MB, quantized) ` +
+      "from huggingface.co on first use. This happens once and is cached locally; " +
+      "no further network access is required afterward. If this download is blocked, " +
+      "Remem automatically falls back to local hash-based embeddings — see `remem doctor`.",
+  )
+}
 ```
 
 - [ ] **Step 4: Run to verify it passes**
@@ -592,6 +605,7 @@ git commit -m "feat: warn before the one-time neural embedding model download"
 ### Task 7: Migration 0005 — `embedding_settings` bookkeeping table
 
 **Files:**
+
 - Create: `migrations/0005_embedding_settings.sql`
 - Test: `tests/postgres-provider.integration.test.ts` (existing — add a case, gated behind `REMEM_TEST_DATABASE_URL`)
 
@@ -621,9 +635,7 @@ it("creates the embedding_settings singleton table", async () => {
     "SELECT column_name FROM information_schema.columns WHERE table_schema = 'remem' AND table_name = 'embedding_settings'",
   )
   const columns = result.rows.map((row: { column_name: string }) => row.column_name)
-  expect(columns).toEqual(
-    expect.arrayContaining(["id", "model", "dimensions", "updated_at"]),
-  )
+  expect(columns).toEqual(expect.arrayContaining(["id", "model", "dimensions", "updated_at"]))
 })
 ```
 
@@ -649,6 +661,7 @@ git commit -m "feat: add embedding_settings table for model-drift detection"
 ### Task 8: Configured-dimension check + `EmbeddingModel` injection wiring
 
 **Files:**
+
 - Modify: `src/providers/postgres.ts:186-196` (constructor)
 - Modify: `src/providers/factory.ts` (`createProviders`)
 - Modify: `src/hosts/opencode/v1.ts`, `src/hosts/opencode/v2.ts`
@@ -670,10 +683,18 @@ it("rejects an embedding model with the wrong dimensions", () => {
     embed: async () => new Array(768).fill(0),
   }
   expect(
-    () => new PostgresMemoryProvider(
-      { type: "postgres", id: "x", connectionString: databaseUrl ?? "", primary: true, maxConnections: 1, catalogLimit: 10 },
-      { embeddingModel: badModel },
-    ),
+    () =>
+      new PostgresMemoryProvider(
+        {
+          type: "postgres",
+          id: "x",
+          connectionString: databaseUrl ?? "",
+          primary: true,
+          maxConnections: 1,
+          catalogLimit: 10,
+        },
+        { embeddingModel: badModel },
+      ),
   ).toThrow(/384-dimensional/)
 })
 ```
@@ -694,24 +715,24 @@ const SUPPORTED_EMBEDDING_DIMENSIONS = 384
 Replace the constructor body (`src/providers/postgres.ts:194-196`):
 
 ```ts
-    this.embeddingModel = options.embeddingModel ?? new LocalHashEmbeddingModel()
-    if (this.embeddingModel.dimensions !== 384) {
-      throw new TypeError("PostgreSQL storage currently requires 384-dimensional embeddings")
-    }
+this.embeddingModel = options.embeddingModel ?? new LocalHashEmbeddingModel()
+if (this.embeddingModel.dimensions !== 384) {
+  throw new TypeError("PostgreSQL storage currently requires 384-dimensional embeddings")
+}
 ```
 
 with:
 
 ```ts
-    this.embeddingModel = options.embeddingModel ?? new LocalHashEmbeddingModel()
-    if (this.embeddingModel.dimensions !== SUPPORTED_EMBEDDING_DIMENSIONS) {
-      throw new TypeError(
-        `PostgreSQL storage currently requires ${SUPPORTED_EMBEDDING_DIMENSIONS}-dimensional ` +
-          "embeddings (the remem.memory_embeddings column is a fixed-width vector(384)); " +
-          "switching to a different-dimension model requires a dedicated schema migration " +
-          "that is not yet implemented",
-      )
-    }
+this.embeddingModel = options.embeddingModel ?? new LocalHashEmbeddingModel()
+if (this.embeddingModel.dimensions !== SUPPORTED_EMBEDDING_DIMENSIONS) {
+  throw new TypeError(
+    `PostgreSQL storage currently requires ${SUPPORTED_EMBEDDING_DIMENSIONS}-dimensional ` +
+      "embeddings (the remem.memory_embeddings column is a fixed-width vector(384)); " +
+      "switching to a different-dimension model requires a dedicated schema migration " +
+      "that is not yet implemented",
+  )
+}
 ```
 
 - [ ] **Step 4: Thread `embeddingModel` through `createProviders`**
@@ -741,14 +762,20 @@ Add the import: `import type { EmbeddingModel, MemoryProvider } from "../types.j
 In `src/hosts/opencode/v2.ts`, inside `RememPlugin.setup` (around where `parsed` and `location` are already computed, before `createProviders` is called at line 145):
 
 ```ts
-      const embeddingModel = await createEmbeddingModel(parsed.config.embedding)
-      const created = createProviders(parsed.config.providers, { worktree: location.worktree }, { embeddingModel })
+const embeddingModel = await createEmbeddingModel(parsed.config.embedding)
+const created = createProviders(
+  parsed.config.providers,
+  { worktree: location.worktree },
+  { embeddingModel },
+)
 ```
 
 and update the `RememOrchestrator` construction (line 150):
 
 ```ts
-      const orchestrator = new RememOrchestrator(created.providers, parsed.config, logger, { embeddingModel })
+const orchestrator = new RememOrchestrator(created.providers, parsed.config, logger, {
+  embeddingModel,
+})
 ```
 
 Add the import: `import { createEmbeddingModel } from "../../storage/embedding-neural.js"`.
@@ -758,50 +785,54 @@ Apply the identical change to `src/hosts/opencode/v1.ts` at its equivalent lines
 - [ ] **Step 6: Fix the two remaining silent defaults**
 
 In `src/cli/index.ts`, `primaryPostgresProvider` (line 270-277) currently does:
+
 ```ts
-  return new PostgresMemoryProvider(provider)
+return new PostgresMemoryProvider(provider)
 ```
+
 This one is intentionally left as the hash default for now — candidate management CLI commands (`candidates`/`review`/`consolidate`) operate on text content, not semantic search, so they don't need the configured embedding backend. Leave as-is; do not change this function in this task (documenting the decision here so a future reader doesn't "fix" it unnecessarily).
 
 In `src/cli/doctor.ts`, replace the hardcoded check (lines 168-178):
 
 ```ts
-  try {
-    const model = new LocalHashEmbeddingModel()
-    const embedding = await model.embed("Remem doctor")
-    checks.push({
-      name: "embedding configuration",
-      status: embedding.length === config.embedding.dimensions ? "ok" : "error",
-      detail: `${model.id}; ${embedding.length} dimensions`,
-    })
-  } catch {
-    checks.push({ name: "embedding configuration", status: "error", detail: "embedding failed" })
-  }
+try {
+  const model = new LocalHashEmbeddingModel()
+  const embedding = await model.embed("Remem doctor")
+  checks.push({
+    name: "embedding configuration",
+    status: embedding.length === config.embedding.dimensions ? "ok" : "error",
+    detail: `${model.id}; ${embedding.length} dimensions`,
+  })
+} catch {
+  checks.push({ name: "embedding configuration", status: "error", detail: "embedding failed" })
+}
 ```
 
 with:
 
 ```ts
-  try {
-    const model = await createEmbeddingModel({
-      backend: config.embedding.provider === "neural" ? "neural" : "hash",
-    })
-    const embedding = await model.embed("Remem doctor")
-    const usingConfiguredBackend =
-      (config.embedding.provider === "neural") === (model.id === "bge-small-en-v1.5")
-    checks.push({
-      name: "embedding configuration",
-      status: embedding.length === config.embedding.dimensions && usingConfiguredBackend ? "ok" : "warn",
-      detail: usingConfiguredBackend
-        ? `${model.id}; ${embedding.length} dimensions`
-        : `configured for ${config.embedding.provider} but running on ${model.id} (fallback active)`,
-    })
-  } catch {
-    checks.push({ name: "embedding configuration", status: "error", detail: "embedding failed" })
-  }
+try {
+  const model = await createEmbeddingModel({
+    backend: config.embedding.provider === "neural" ? "neural" : "hash",
+  })
+  const embedding = await model.embed("Remem doctor")
+  const usingConfiguredBackend =
+    (config.embedding.provider === "neural") === (model.id === "bge-small-en-v1.5")
+  checks.push({
+    name: "embedding configuration",
+    status:
+      embedding.length === config.embedding.dimensions && usingConfiguredBackend ? "ok" : "warn",
+    detail: usingConfiguredBackend
+      ? `${model.id}; ${embedding.length} dimensions`
+      : `configured for ${config.embedding.provider} but running on ${model.id} (fallback active)`,
+  })
+} catch {
+  checks.push({ name: "embedding configuration", status: "error", detail: "embedding failed" })
+}
 ```
 
 Update the import at the top of `src/cli/doctor.ts` — remove `LocalHashEmbeddingModel` from the `../storage/embedding.js` import and add:
+
 ```ts
 import { createEmbeddingModel } from "../storage/embedding-neural.js"
 ```
@@ -823,6 +854,7 @@ git commit -m "feat: wire the configured embedding backend through providers and
 ### Task 9: `PostgresReembedRunner` (batch-claim/recover, mirroring consolidation)
 
 **Files:**
+
 - Create: `src/reembedding.ts`
 - Modify: `src/providers/postgres.ts` (add `reembedStale` method)
 - Test: `tests/reembedding.test.ts`
@@ -935,7 +967,12 @@ export class PostgresReembedRunner {
           `UPDATE remem.memory_embeddings
              SET model = $2, dimensions = $3, embedding = $4::vector, updated_at = now()
            WHERE memory_id = $1`,
-          [target.memoryId, this.options.modelId, this.options.dimensions, `[${embedding.join(",")}]`],
+          [
+            target.memoryId,
+            this.options.modelId,
+            this.options.dimensions,
+            `[${embedding.join(",")}]`,
+          ],
         )
         reembedded++
       } catch (error) {
@@ -944,7 +981,13 @@ export class PostgresReembedRunner {
     }
     if (errors.length > 0 && reembedded === 0) {
       await this.fail(claim.id, errors)
-      return { id: claim.id, status: "failed", claimed: claim.targets.length, reembedded: 0, errors }
+      return {
+        id: claim.id,
+        status: "failed",
+        claimed: claim.targets.length,
+        reembedded: 0,
+        errors,
+      }
     }
     await this.complete(claim.id, reembedded, errors)
     return { id: claim.id, status: "completed", claimed: claim.targets.length, reembedded, errors }
@@ -1050,7 +1093,14 @@ Append to `tests/postgres-provider.integration.test.ts` (following its existing 
 ```ts
 it("reembeds a memory stored under a different model id", async () => {
   const provider = new PostgresMemoryProvider(
-    { type: "postgres", id: "reembed-test", connectionString: databaseUrl ?? "", primary: true, maxConnections: 2, catalogLimit: 10 },
+    {
+      type: "postgres",
+      id: "reembed-test",
+      connectionString: databaseUrl ?? "",
+      primary: true,
+      maxConnections: 2,
+      catalogLimit: 10,
+    },
     { pool },
   )
   const written = await provider.write?.({
@@ -1066,7 +1116,9 @@ it("reembeds a memory stored under a different model id", async () => {
   const result = await provider.reembedStale(10)
   expect(result.status).toBe("completed")
   expect(result.reembedded).toBeGreaterThanOrEqual(1)
-  const row = await pool.query("SELECT model FROM remem.memory_embeddings WHERE memory_id = $1", [written?.id])
+  const row = await pool.query("SELECT model FROM remem.memory_embeddings WHERE memory_id = $1", [
+    written?.id,
+  ])
   expect(row.rows[0]?.model).toBe("remem-local-hash-v1")
 })
 ```
@@ -1088,6 +1140,7 @@ git commit -m "feat: add PostgresReembedRunner mirroring the consolidation batch
 ### Task 10: Hook-triggered re-embed (cooldown, fire-and-forget)
 
 **Files:**
+
 - Modify: `src/hosts/opencode/v2.ts`
 - Test: `tests/reembedding.test.ts`
 
@@ -1141,21 +1194,21 @@ Expected: PASS
 Read the current hook registration first (`src/hosts/opencode/v2.ts:154-169`):
 
 ```ts
-        promptRegistration = await context.session.hook("prompt", (event) => {
-          try {
-            coordinator.enqueue({
-              host: "opencode-v2",
-              context: memoryContext(location, event.sessionID),
-              sessionId: event.sessionID,
-              messageId: event.messageID,
-              text: event.prompt.text,
-            })
-          } catch (error) {
-            safeLoggerCall(logger, "warn", "capture.enqueue_failed", {
-              error: error instanceof Error ? error.name : "unknown error",
-            })
-          }
-        })
+promptRegistration = await context.session.hook("prompt", (event) => {
+  try {
+    coordinator.enqueue({
+      host: "opencode-v2",
+      context: memoryContext(location, event.sessionID),
+      sessionId: event.sessionID,
+      messageId: event.messageID,
+      text: event.prompt.text,
+    })
+  } catch (error) {
+    safeLoggerCall(logger, "warn", "capture.enqueue_failed", {
+      error: error instanceof Error ? error.name : "unknown error",
+    })
+  }
+})
 ```
 
 Add a module-level (per-process) cooldown tracker above `RememPlugin.setup` — one entry per primary Postgres provider id, since multiple plugin instances/workspaces in the same process share it intentionally (cheap, no correctness requirement beyond "don't hammer the database"):
@@ -1167,24 +1220,25 @@ const lastReembedAttempt = new Map<string, number>()
 Inside the same `if (coordinator)` block, right after `promptRegistration = await context.session.hook(...)` closes, add a second, independent hook registration (do not merge into the capture hook's try/catch — a failure in one must never affect the other):
 
 ```ts
-        const primaryPostgres = providers.find(
-          (provider): provider is PostgresMemoryProvider => provider instanceof PostgresMemoryProvider,
-        )
-        if (primaryPostgres) {
-          await context.session.hook("prompt", () => {
-            if (!shouldAttemptReembed(lastReembedAttempt.get(primaryPostgres.id))) return
-            lastReembedAttempt.set(primaryPostgres.id, Date.now())
-            // Fire-and-forget: must never delay or fail prompt handling.
-            void primaryPostgres.reembedStale().catch((error) => {
-              safeLoggerCall(logger, "warn", "reembed.attempt_failed", {
-                error: error instanceof Error ? error.name : "unknown error",
-              })
-            })
-          })
-        }
+const primaryPostgres = providers.find(
+  (provider): provider is PostgresMemoryProvider => provider instanceof PostgresMemoryProvider,
+)
+if (primaryPostgres) {
+  await context.session.hook("prompt", () => {
+    if (!shouldAttemptReembed(lastReembedAttempt.get(primaryPostgres.id))) return
+    lastReembedAttempt.set(primaryPostgres.id, Date.now())
+    // Fire-and-forget: must never delay or fail prompt handling.
+    void primaryPostgres.reembedStale().catch((error) => {
+      safeLoggerCall(logger, "warn", "reembed.attempt_failed", {
+        error: error instanceof Error ? error.name : "unknown error",
+      })
+    })
+  })
+}
 ```
 
 Add imports at the top of `src/hosts/opencode/v2.ts`:
+
 ```ts
 import { PostgresMemoryProvider } from "../../providers/postgres.js"
 import { shouldAttemptReembed } from "../../reembedding.js"
@@ -1209,6 +1263,7 @@ git commit -m "feat: trigger re-embedding opportunistically from the prompt hook
 ### Task 11: `remem reembed` manual CLI command
 
 **Files:**
+
 - Modify: `src/cli/index.ts`
 - Test: `tests/cli-provisioning.test.ts`
 
@@ -1242,18 +1297,18 @@ Expected: FAIL — `reembed` is not a recognized command
 In `src/cli/index.ts`, update the command-dispatch set (line ~397-407) to include `"reembed"`:
 
 ```ts
-      new Set([
-        "init",
-        "start",
-        "stop",
-        "migrate",
-        "backup",
-        "restore",
-        "reset",
-        "review",
-        "consolidate",
-        "reembed",
-      ]).has(parsed.command)
+new Set([
+  "init",
+  "start",
+  "stop",
+  "migrate",
+  "backup",
+  "restore",
+  "reset",
+  "review",
+  "consolidate",
+  "reembed",
+]).has(parsed.command)
 ```
 
 Update the dispatch condition (line ~437-439):
@@ -1270,17 +1325,18 @@ Update the dispatch condition (line ~437-439):
 Add the branch inside that block, alongside the existing `consolidate` handling:
 
 ```ts
-        if (parsed.command === "reembed") {
-          const batchSize = Number(stringFlag(parsed, "batch-size") ?? 25)
-          if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 1_000) {
-            throw new Error("--batch-size must be an integer from 1 to 1000")
-          }
-          output(JSON.stringify(await provider.reembedStale(batchSize), null, 2))
-          return 0
-        }
+if (parsed.command === "reembed") {
+  const batchSize = Number(stringFlag(parsed, "batch-size") ?? 25)
+  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 1_000) {
+    throw new Error("--batch-size must be an integer from 1 to 1000")
+  }
+  output(JSON.stringify(await provider.reembedStale(batchSize), null, 2))
+  return 0
+}
 ```
 
 Update `usage()` (line ~374-384) to add a line:
+
 ```
   reembed [--batch-size NUMBER]
 ```
@@ -1302,6 +1358,7 @@ git commit -m "feat: add remem reembed manual CLI command"
 ### Task 12: `remem doctor` backlog reporting
 
 **Files:**
+
 - Modify: `src/cli/doctor.ts`
 - Test: `tests/postgres-provider.integration.test.ts`
 
@@ -1310,7 +1367,11 @@ git commit -m "feat: add remem reembed manual CLI command"
 ```ts
 it("reports a re-embed backlog in doctor output", async () => {
   await pool.query("UPDATE remem.memory_embeddings SET model = 'stale-model'")
-  const report = await runDoctor(appConfigFixture /* this file's existing config fixture */, paths, runner)
+  const report = await runDoctor(
+    appConfigFixture /* this file's existing config fixture */,
+    paths,
+    runner,
+  )
   const check = report.checks.find((c) => c.name === "embedding backlog")
   expect(check?.status).toBe("warn")
   expect(check?.detail).toMatch(/\d+ memor(y|ies) pending re-embedding/)
@@ -1327,26 +1388,26 @@ Expected: FAIL — no "embedding backlog" check exists yet
 In `src/cli/doctor.ts`, after the existing "embedding configuration" check block (added in Task 8, Step 6), add:
 
 ```ts
-  try {
-    const backlog = await pool.query<{ count: string }>(
-      `SELECT count(*)::text AS count FROM remem.memory_embeddings
+try {
+  const backlog = await pool.query<{ count: string }>(
+    `SELECT count(*)::text AS count FROM remem.memory_embeddings
         WHERE model <> $1 OR dimensions <> $2`,
-      [config.embedding.model, config.embedding.dimensions],
-    )
-    const pending = Number(backlog.rows[0]?.count ?? 0)
-    checks.push({
-      name: "embedding backlog",
-      status: pending === 0 ? "ok" : "warn",
-      detail:
-        pending === 0
-          ? "all memories use the configured embedding model"
-          : `${pending} ${pending === 1 ? "memory" : "memories"} pending re-embedding; ` +
-            "this drains automatically during normal use, or run `remem reembed` now",
-    })
-  } catch {
-    // The main PostgreSQL connectivity check above already reports connection
-    // failures; skip silently here rather than double-reporting.
-  }
+    [config.embedding.model, config.embedding.dimensions],
+  )
+  const pending = Number(backlog.rows[0]?.count ?? 0)
+  checks.push({
+    name: "embedding backlog",
+    status: pending === 0 ? "ok" : "warn",
+    detail:
+      pending === 0
+        ? "all memories use the configured embedding model"
+        : `${pending} ${pending === 1 ? "memory" : "memories"} pending re-embedding; ` +
+          "this drains automatically during normal use, or run `remem reembed` now",
+  })
+} catch {
+  // The main PostgreSQL connectivity check above already reports connection
+  // failures; skip silently here rather than double-reporting.
+}
 ```
 
 Note: this reuses the `pool` variable already opened earlier in `runDoctor` (line 109-114) for the PostgreSQL connectivity checks — place this new block before that pool's `finally { await pool.end() }` (line 164-166), not after.
@@ -1368,6 +1429,7 @@ git commit -m "feat: report embedding re-embed backlog in remem doctor"
 ### Task 13: Local `modelPath` override wiring
 
 **Files:**
+
 - Modify: `src/storage/embedding-neural.ts` (already accepts `modelPath` — verify end-to-end)
 - Modify: `src/config.ts` (already parses `modelPath` — done in Task 4)
 - Test: `tests/embedding-neural.test.ts`
@@ -1376,8 +1438,13 @@ git commit -m "feat: report embedding re-embed backlog in remem doctor"
 
 ```ts
 it("passes modelPath through to the pipeline loader", async () => {
-  const loadPipeline = vi.fn().mockResolvedValue(vi.fn().mockResolvedValue({ data: new Float32Array(384) }))
-  await createEmbeddingModel({ backend: "neural", modelPath: "/opt/models/bge-small" }, { loadPipeline })
+  const loadPipeline = vi
+    .fn()
+    .mockResolvedValue(vi.fn().mockResolvedValue({ data: new Float32Array(384) }))
+  await createEmbeddingModel(
+    { backend: "neural", modelPath: "/opt/models/bge-small" },
+    { loadPipeline },
+  )
   expect(loadPipeline).toHaveBeenCalledWith("/opt/models/bge-small")
 })
 ```
@@ -1399,6 +1466,7 @@ git commit -m "test: lock in modelPath override contract for air-gapped installs
 ### Task 14: Evaluation fixtures — paraphrase / low-lexical-overlap recall
 
 **Files:**
+
 - Check first: `find . -iname "*eval*" -not -path "*/node_modules/*" -not -path "*/dist/*"` to see if an eval harness already exists; if none exists, create `tests/embedding-recall.eval.test.ts` as a regular vitest file (not a separate harness) to stay consistent with this repo's all-tests-in-vitest convention.
 - Create: `tests/embedding-recall.eval.test.ts`
 
@@ -1481,6 +1549,7 @@ git commit -m "test: add paraphrase recall eval fixtures comparing hash vs neura
 ### Task 15: Documentation
 
 **Files:**
+
 - Create: `docs/embeddings.md`
 - Modify: `docs/configuration.md`
 - Modify: `docs/installation.md`
@@ -1595,20 +1664,20 @@ git commit -m "fix: address issues found in full verification pass"
 
 **Spec coverage:**
 
-| Spec requirement | Task |
-|---|---|
-| `BgeSmallEmbeddingModel`, lazy dynamic import, fail-open | Task 2 |
-| Managed-mode default via `embedding.backend` | Tasks 4, 5 |
-| Configured dimension (not hardcoded 384) | Task 8 |
-| Model-change detection + automatic re-embed | Tasks 7, 9 |
-| Hook-triggered (not cron/daemon) trigger, cooldown, fire-and-forget | Task 10 |
-| Manual `remem reembed` override | Task 11 |
-| Three-layer offline/firewall fallback (proxy, modelPath, fail-open) | Tasks 2, 3, 13 |
-| `remem init` download warning | Task 6 |
-| `remem doctor` backend + backlog reporting | Tasks 8 (Step 6), 12 |
-| Unit tests: fallback, dimension mismatch, cooldown, batch-claim | Tasks 2, 3, 8, 9, 10 |
-| Eval fixtures: paraphrase/low-lexical-overlap recall | Task 14 |
-| Documentation: size/dims/license/runtime/upgrade policy | Task 15 |
+| Spec requirement                                                    | Task                 |
+| ------------------------------------------------------------------- | -------------------- |
+| `BgeSmallEmbeddingModel`, lazy dynamic import, fail-open            | Task 2               |
+| Managed-mode default via `embedding.backend`                        | Tasks 4, 5           |
+| Configured dimension (not hardcoded 384)                            | Task 8               |
+| Model-change detection + automatic re-embed                         | Tasks 7, 9           |
+| Hook-triggered (not cron/daemon) trigger, cooldown, fire-and-forget | Task 10              |
+| Manual `remem reembed` override                                     | Task 11              |
+| Three-layer offline/firewall fallback (proxy, modelPath, fail-open) | Tasks 2, 3, 13       |
+| `remem init` download warning                                       | Task 6               |
+| `remem doctor` backend + backlog reporting                          | Tasks 8 (Step 6), 12 |
+| Unit tests: fallback, dimension mismatch, cooldown, batch-claim     | Tasks 2, 3, 8, 9, 10 |
+| Eval fixtures: paraphrase/low-lexical-overlap recall                | Task 14              |
+| Documentation: size/dims/license/runtime/upgrade policy             | Task 15              |
 
 No gaps found.
 

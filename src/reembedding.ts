@@ -71,7 +71,12 @@ export class PostgresReembedRunner {
           `UPDATE remem.memory_embeddings
              SET model = $2, dimensions = $3, embedding = $4::vector, updated_at = now()
            WHERE memory_id = $1`,
-          [target.memoryId, this.options.modelId, this.options.dimensions, `[${embedding.join(",")}]`],
+          [
+            target.memoryId,
+            this.options.modelId,
+            this.options.dimensions,
+            `[${embedding.join(",")}]`,
+          ],
         )
         reembedded++
       } catch (error) {
@@ -80,7 +85,13 @@ export class PostgresReembedRunner {
     }
     if (errors.length > 0 && reembedded === 0) {
       await this.fail(claim.id, errors)
-      return { id: claim.id, status: "failed", claimed: claim.targets.length, reembedded: 0, errors }
+      return {
+        id: claim.id,
+        status: "failed",
+        claimed: claim.targets.length,
+        reembedded: 0,
+        errors,
+      }
     }
     await this.complete(claim.id, reembedded, errors)
     return { id: claim.id, status: "completed", claimed: claim.targets.length, reembedded, errors }
