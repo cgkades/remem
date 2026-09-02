@@ -8,6 +8,7 @@ import {
   PostgresConsolidationRunner,
 } from "../src/consolidation.js"
 import { PostgresMemoryProvider } from "../src/providers/postgres.js"
+import { runCli } from "../src/cli/index.js"
 import { runDoctor } from "../src/cli/doctor.js"
 import type { CandidateMemory, SessionObservation } from "../src/observation.js"
 import { writeAppConfig, type RememAppConfig } from "../src/storage/config-file.js"
@@ -709,6 +710,73 @@ integration("PostgreSQL managed provider", () => {
       [written.id],
     )
     expect(row.rows[0]?.model).toBe("remem-local-hash-v1")
+  })
+
+  it("runs a manual reembed via the CLI", async () => {
+    const seedProvider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "reembed-cli-seed",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 10,
+      },
+      { pool },
+    )
+    const written = await seedProvider.write({
+      title: "Reembed CLI target",
+      content: "Manual reembed CLI wiring check",
+      scope: { kind: "workspace", id: "phoenix" },
+      type: "decision",
+    })
+    await pool.query("UPDATE remem.memory_embeddings SET model = 'stale-model' WHERE memory_id = $1", [
+      written.id,
+    ])
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "remem-reembed-cli-"))
+    const paths = rememPaths({
+      REMEM_CONFIG_DIR: path.join(root, "config"),
+      REMEM_DATA_DIR: path.join(root, "data"),
+    })
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: databaseUrl ?? "" },
+      providers: [
+        {
+          type: "postgres",
+          id: "remem-local",
+          connectionString: databaseUrl ?? "",
+          primary: true,
+          maxConnections: 2,
+          catalogLimit: 100,
+        },
+      ],
+      embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
+    }
+    try {
+      await mkdir(paths.dataDir, { recursive: true, mode: 0o700 })
+      await writeAppConfig(config, paths)
+
+      const lines: string[] = []
+      const exitCode = await runCli(["reembed", "--batch-size", "5"], {
+        paths,
+        stdout: (line) => lines.push(line),
+      })
+
+      expect(exitCode).toBe(0)
+      const output = JSON.parse(lines.join("\n")) as { status: string; reembedded: number }
+      expect(output.status).toBe("completed")
+      expect(output.reembedded).toBeGreaterThanOrEqual(1)
+
+      const row = await pool.query<{ model: string }>(
+        "SELECT model FROM remem.memory_embeddings WHERE memory_id = $1",
+        [written.id],
+      )
+      expect(row.rows[0]?.model).toBe("remem-local-hash-v1")
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
 import { randomUUID } from "node:crypto"

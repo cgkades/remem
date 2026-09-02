@@ -149,6 +149,35 @@ describe("CLI provisioning", () => {
     expect(errors.join("\n")).toContain("--status must be one of")
   })
 
+  it("rejects an out-of-range --batch-size for reembed before connecting to PostgreSQL", async () => {
+    const paths = await temporaryPaths()
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: "postgres://user:secret@localhost/remem" },
+      providers: [
+        {
+          type: "postgres",
+          id: "remem-local",
+          connectionString: "postgres://user:secret@localhost/remem",
+          primary: true,
+          maxConnections: 1,
+          catalogLimit: 10,
+        },
+      ],
+      embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
+    }
+    await writeAppConfig(config, paths)
+    const errors: string[] = []
+
+    expect(
+      await runCli(["reembed", "--batch-size", "0"], {
+        paths,
+        stderr: (line) => errors.push(line),
+      }),
+    ).toBe(1)
+    expect(errors.join("\n")).toContain("--batch-size must be an integer from 1 to 1000")
+  })
+
   it("redacts configured secrets from subprocess failures", async () => {
     const runner = new NodeProcessRunner()
     await expect(

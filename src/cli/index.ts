@@ -393,6 +393,7 @@ Commands:
   candidates [--status STATUS]
   review <CANDIDATE_ID> --approve|--reject
   consolidate [--batch-size NUMBER]
+  reembed [--batch-size NUMBER]
   backup [--output FILE]
   restore <FILE> --confirm
   reset --confirm`
@@ -422,6 +423,7 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
         "reset",
         "review",
         "consolidate",
+        "reembed",
       ]).has(parsed.command)
     ) {
       return await withInstallLock(paths, () =>
@@ -449,7 +451,8 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
     if (
       parsed.command === "candidates" ||
       parsed.command === "review" ||
-      parsed.command === "consolidate"
+      parsed.command === "consolidate" ||
+      parsed.command === "reembed"
     ) {
       const provider = primaryPostgresProvider(config)
       try {
@@ -468,6 +471,14 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
             throw new Error("review requires exactly one of --approve or --reject")
           await provider.reviewCandidate(id, approve ? "approved" : "rejected")
           output(`Candidate ${id} ${approve ? "approved" : "rejected"}.`)
+          return 0
+        }
+        if (parsed.command === "reembed") {
+          const batchSize = Number(stringFlag(parsed, "batch-size") ?? 25)
+          if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 1_000) {
+            throw new Error("--batch-size must be an integer from 1 to 1000")
+          }
+          output(JSON.stringify(await provider.reembedStale(batchSize), null, 2))
           return 0
         }
         const batchSize = Number(stringFlag(parsed, "batch-size") ?? 50)
