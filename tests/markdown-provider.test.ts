@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import { describe, expect, it } from "vitest"
 import type { MarkdownProviderConfig } from "../src/config.js"
 import { MarkdownMemoryProvider } from "../src/providers/markdown.js"
@@ -68,5 +71,37 @@ describe("MarkdownMemoryProvider", () => {
     })
 
     expect(results).toEqual([])
+  })
+
+  it("honors path exclusions, file limits, and symlink boundaries", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remem-markdown-"))
+    try {
+      await mkdir(path.join(root, "private"))
+      await writeFile(path.join(root, "keep.md"), "# Kept note\n\nVisible memory.")
+      await writeFile(path.join(root, "private", "hidden.md"), "# Hidden note\n\nExcluded.")
+      await writeFile(path.join(root, "oversized.md"), `# Oversized\n\n${"x".repeat(2_000)}`)
+      await symlink(path.join(root, "keep.md"), path.join(root, "linked.md"))
+      const provider = new MarkdownMemoryProvider(
+        {
+          type: "markdown",
+          id: "bounded",
+          paths: [root],
+          exclude: ["private/**"],
+          scope: "workspace",
+          maxFileBytes: 1_000,
+          maxFiles: 10,
+        },
+        [root],
+      )
+      const catalog = await provider.catalog(
+        { ...memoryContext, directory: root, worktree: root },
+        new AbortController().signal,
+      )
+
+      expect(catalog.map(({ title }) => title)).toEqual(["Kept note"])
+      expect((await provider.health()).status).toBe("degraded")
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })

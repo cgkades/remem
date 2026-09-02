@@ -365,6 +365,7 @@ export class MarkdownMemoryProvider implements MemoryProvider {
   readonly id: string
   private documents: Promise<MarkdownDocument[]> | undefined
   private cacheExpiresAt = 0
+  private scanController: AbortController | undefined
   private warnings: string[] = []
   private readonly exclusions: RegExp[]
   private visitedEntries = 0
@@ -485,6 +486,8 @@ export class MarkdownMemoryProvider implements MemoryProvider {
   }
 
   refresh(): void {
+    this.scanController?.abort()
+    this.scanController = undefined
     this.documents = undefined
     this.cacheExpiresAt = 0
   }
@@ -492,7 +495,8 @@ export class MarkdownMemoryProvider implements MemoryProvider {
   private loadDocuments(signal: AbortSignal): Promise<MarkdownDocument[]> {
     if (this.cacheExpiresAt <= Date.now()) this.documents = undefined
     if (!this.documents) {
-      const scan = this.scan(new AbortController().signal)
+      this.scanController = new AbortController()
+      const scan = this.scan(this.scanController.signal)
       const cached = scan.catch((error: unknown) => {
         if (this.documents === cached) this.documents = undefined
         throw error
@@ -511,6 +515,7 @@ export class MarkdownMemoryProvider implements MemoryProvider {
     return new Promise((resolve, reject) => {
       const onAbort = () => {
         signal.removeEventListener("abort", onAbort)
+        if (this.documents === documents) this.scanController?.abort(signal.reason)
         reject(abortError())
       }
       signal.addEventListener("abort", onAbort, { once: true })
