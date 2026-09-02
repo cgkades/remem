@@ -11,6 +11,12 @@ export interface PlannerConfig {
   maxTopics: number
 }
 
+export interface SemanticPlannerConfig {
+  enabled: boolean
+  minimumSimilarity: number
+  deterministicHighConfidence: number
+}
+
 export interface MarkdownProviderConfig {
   type: "markdown"
   id: string
@@ -21,16 +27,28 @@ export interface MarkdownProviderConfig {
   maxFiles: number
 }
 
+export interface PostgresProviderConfig {
+  type: "postgres"
+  id: string
+  connectionString: string
+  primary: boolean
+  maxConnections: number
+  catalogLimit: number
+}
+
+export type MemoryProviderConfig = MarkdownProviderConfig | PostgresProviderConfig
+
 export interface OrchestratorConfig {
   budgets: TokenBudgets
   planner: PlannerConfig
+  semantic?: SemanticPlannerConfig
   providerTimeoutMs: number
   maxResults: number
   debug: boolean
 }
 
 export interface RememConfig extends OrchestratorConfig {
-  providers: MarkdownProviderConfig[]
+  providers: MemoryProviderConfig[]
   compaction: boolean
 }
 
@@ -62,7 +80,11 @@ function strings(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
 }
 
-function parseProvider(value: unknown, index: number, diagnostics: ConfigDiagnostic[]) {
+function parseProvider(
+  value: unknown,
+  index: number,
+  diagnostics: ConfigDiagnostic[],
+): MemoryProviderConfig | undefined {
   if (!isRecord(value)) {
     diagnostics.push({
       level: "warn",
@@ -70,7 +92,7 @@ function parseProvider(value: unknown, index: number, diagnostics: ConfigDiagnos
     })
     return undefined
   }
-  if (value.type !== "markdown") {
+  if (value.type !== "markdown" && value.type !== "postgres") {
     diagnostics.push({
       level: "warn",
       message: `providers[${index}] has unsupported type and was disabled`,
@@ -83,6 +105,29 @@ function parseProvider(value: unknown, index: number, diagnostics: ConfigDiagnos
       message: `providers[${index}] has an invalid id and was disabled`,
     })
     return undefined
+  }
+  if (value.type === "postgres") {
+    const environmentValue =
+      typeof value.connectionStringEnv === "string"
+        ? process.env[value.connectionStringEnv]
+        : undefined
+    const connectionString =
+      typeof value.connectionString === "string" ? value.connectionString : environmentValue
+    if (!connectionString) {
+      diagnostics.push({
+        level: "warn",
+        message: `provider ${value.id} has no database connection and was disabled`,
+      })
+      return undefined
+    }
+    return {
+      type: "postgres",
+      id: value.id,
+      connectionString,
+      primary: value.primary === true,
+      maxConnections: finiteNumber(value.maxConnections, 5, 1, 50),
+      catalogLimit: finiteNumber(value.catalogLimit, 2_000, 10, 20_000),
+    }
   }
   const paths = strings(value.paths)
   if (paths.length === 0) {
@@ -132,7 +177,7 @@ export function parseConfig(options: unknown): ParsedConfig {
   const parsedProviders = rawProviders
     ? rawProviders
         .map((provider, index) => parseProvider(provider, index, diagnostics))
-        .filter((provider): provider is MarkdownProviderConfig => provider !== undefined)
+        .filter((provider): provider is MemoryProviderConfig => provider !== undefined)
     : providersSpecified
       ? []
       : [
@@ -173,6 +218,16 @@ export function parseConfig(options: unknown): ParsedConfig {
       planner: {
         minimumConfidence: finiteNumber(plannerOptions.minimumConfidence, 0.42, 0, 1),
         maxTopics: finiteNumber(plannerOptions.maxTopics, 3, 1, 20),
+      },
+      semantic: {
+        enabled: plannerOptions.semantic !== false,
+        minimumSimilarity: finiteNumber(plannerOptions.semanticMinimumSimilarity, 0.55, 0, 1),
+        deterministicHighConfidence: finiteNumber(
+          plannerOptions.deterministicHighConfidence,
+          0.82,
+          0,
+          1,
+        ),
       },
       providerTimeoutMs: finiteNumber(root.providerTimeoutMs, 2_000, 50, 60_000),
       maxResults: finiteNumber(root.maxResults, 8, 1, 100),

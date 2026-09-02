@@ -1,10 +1,11 @@
 import { estimateTokens, truncateToTokens } from "./token-budget.js"
 import { compactWhitespace, normalizeText, stripControlCharacters } from "./text.js"
 import { OperationTimeoutError, withTimeout } from "./timeout.js"
-import type { CatalogEntry, MemoryContext, MemoryProvider } from "./types.js"
+import type { CatalogEntry, MemoryContext, MemoryProvider, ProviderDescriptor } from "./types.js"
 
 export interface CatalogSnapshot {
   entries: CatalogEntry[]
+  providers: ProviderDescriptor[]
   text: string
   estimatedTokens: number
   diagnostics: string[]
@@ -52,7 +53,11 @@ function catalogValue(value: string): string {
     .replace(/>/gu, "&gt;")
 }
 
-export function renderCatalog(entries: CatalogEntry[], maxTokens: number): CatalogSnapshot {
+export function renderCatalog(
+  entries: CatalogEntry[],
+  maxTokens: number,
+  providers: ProviderDescriptor[] = [],
+): CatalogSnapshot {
   const diagnostics: string[] = []
   const prefix = [
     "<memory-catalog>",
@@ -71,6 +76,7 @@ export function renderCatalog(entries: CatalogEntry[], maxTokens: number): Catal
     const text = ["<memory-catalog>", instruction.text, suffix].join("\n")
     return {
       entries,
+      providers,
       text,
       estimatedTokens: estimateTokens(text),
       diagnostics: ["catalog instructions were reduced by the token budget"],
@@ -78,6 +84,19 @@ export function renderCatalog(entries: CatalogEntry[], maxTokens: number): Catal
   }
   const lines = [...prefix]
   let omitted = 0
+
+  if (providers.length > 0) {
+    lines.push("Provider awareness:")
+    for (const provider of providers) {
+      const line = `- ${catalogValue(provider.name)} [${catalogValue(provider.id)}; ${provider.categories.map(catalogValue).join(", ")}] - ${catalogValue(provider.summary)}`
+      if (estimateTokens([...lines, line, suffix].join("\n")) > maxTokens) {
+        omitted++
+        continue
+      }
+      lines.push(line)
+    }
+    lines.push("Known topics:")
+  }
 
   for (const entry of entries) {
     const providers = entry.providerIds.map(catalogValue).join(",")
@@ -110,6 +129,7 @@ export function renderCatalog(entries: CatalogEntry[], maxTokens: number): Catal
   const text = lines.join("\n")
   return {
     entries,
+    providers,
     text,
     estimatedTokens: estimateTokens(text),
     diagnostics,
@@ -186,6 +206,7 @@ export class MemoryCatalog {
       ),
     )
     const entries: CatalogEntry[] = []
+    const descriptors: ProviderDescriptor[] = []
 
     settled.forEach((result, index) => {
       const provider = candidates[index]
@@ -201,7 +222,33 @@ export class MemoryCatalog {
       )
     })
 
-    const rendered = renderCatalog(mergeEntries(entries), this.maxTokens)
+    const descriptorResults = await Promise.allSettled(
+      this.providers.map((provider) =>
+        withTimeout(this.timeoutMs, async () => {
+          if (provider.descriptor) return provider.descriptor()
+          const capabilities = provider.capabilities()
+          const descriptor: ProviderDescriptor = {
+            id: provider.id,
+            name: provider.id,
+            summary: "Configured memory provider that may contain additional relevant prior work.",
+            categories: Object.entries(capabilities)
+              .filter(([, enabled]) => enabled)
+              .map(([name]) => name),
+            aliases: [],
+            scopeKinds: ["global", "workspace", "project", "session"],
+          }
+          return descriptor
+        }),
+      ),
+    )
+    descriptorResults.forEach((result, index) => {
+      const provider = this.providers[index]
+      if (!provider) return
+      if (result.status === "fulfilled") descriptors.push(result.value)
+      else diagnostics.push(`catalog provider ${provider.id} descriptor failed`)
+    })
+
+    const rendered = renderCatalog(mergeEntries(entries), this.maxTokens, descriptors)
     return { ...rendered, diagnostics: [...diagnostics, ...rendered.diagnostics] }
   }
 }

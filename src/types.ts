@@ -10,6 +10,38 @@ export type MemoryType =
 
 export type MemoryFreshness = "current" | "stale" | "superseded" | "unknown"
 
+export interface MemorySource {
+  id?: string
+  kind: "user" | "session" | "document" | "provider" | "import" | "generated" | "other"
+  uri?: string
+  providerId?: string
+  externalId?: string
+  observedAt?: string
+  metadata?: Record<string, unknown>
+}
+
+export interface MemoryProvenance {
+  source: MemorySource
+  capturedAt: string
+  original: boolean
+  note?: string
+}
+
+export interface MemoryEntity {
+  id?: string
+  name: string
+  type?: string
+  aliases?: string[]
+  metadata?: Record<string, unknown>
+}
+
+export interface MemoryRelationship {
+  type: string
+  targetMemoryId?: string
+  targetEntity?: string
+  metadata?: Record<string, unknown>
+}
+
 export interface MemoryCapabilities {
   lexicalSearch: boolean
   semanticSearch: boolean
@@ -42,6 +74,18 @@ export interface CatalogEntry {
   importance: number
   unresolved: boolean
   source?: string
+  parentId?: string
+  embedding?: number[]
+}
+
+export interface ProviderDescriptor {
+  id: string
+  name: string
+  summary: string
+  categories: string[]
+  aliases: string[]
+  scopeKinds: MemoryScopeKind[]
+  embedding?: number[]
 }
 
 export interface MemoryRecord {
@@ -49,14 +93,22 @@ export interface MemoryRecord {
   id: string
   title: string
   content: string
+  summary?: string
   source: string
   scope: MemoryScope
   type: MemoryType
   freshness: MemoryFreshness
   createdAt?: string
   updatedAt?: string
+  observedAt?: string
   confidence?: number
   importance?: number
+  aliases?: string[]
+  tags?: string[]
+  entities?: MemoryEntity[]
+  relationships?: MemoryRelationship[]
+  unresolved?: boolean
+  provenance?: MemoryProvenance[]
   metadata?: Record<string, unknown>
 }
 
@@ -80,14 +132,32 @@ export interface MemorySearchRequest {
 }
 
 export interface MemoryWrite {
+  id?: string
   title: string
   content: string
+  summary?: string
   source?: string
   scope: MemoryScope
   type: MemoryType
+  freshness?: MemoryFreshness
+  observedAt?: string
   confidence?: number
   importance?: number
+  aliases?: string[]
+  tags?: string[]
+  entities?: MemoryEntity[]
+  relationships?: MemoryRelationship[]
+  unresolved?: boolean
+  provenance?: MemoryProvenance[]
+  embedding?: number[]
   metadata?: Record<string, unknown>
+}
+
+export interface MemoryMutationOptions {
+  context?: MemoryContext
+  signal?: AbortSignal
+  actor?: string
+  reason?: string
 }
 
 export interface ProviderHealth {
@@ -99,14 +169,26 @@ export interface ProviderHealth {
 export interface MemoryProvider {
   readonly id: string
   capabilities(): MemoryCapabilities
+  descriptor?(): ProviderDescriptor | Promise<ProviderDescriptor>
   catalog(context: MemoryContext, signal: AbortSignal): Promise<CatalogEntry[]>
   search(request: MemorySearchRequest): Promise<MemoryResult[]>
   get?(id: string, context: MemoryContext): Promise<MemoryRecord | undefined>
-  write?(memory: MemoryWrite): Promise<MemoryRecord>
-  update?(id: string, memory: MemoryWrite): Promise<MemoryRecord>
-  delete?(id: string, context: MemoryContext): Promise<void>
+  write?(memory: MemoryWrite, options?: MemoryMutationOptions): Promise<MemoryRecord>
+  update?(id: string, memory: MemoryWrite, options?: MemoryMutationOptions): Promise<MemoryRecord>
+  supersede?(
+    id: string,
+    replacement: MemoryWrite,
+    options?: MemoryMutationOptions,
+  ): Promise<MemoryRecord>
+  delete?(id: string, context: MemoryContext, options?: MemoryMutationOptions): Promise<void>
   health?(): Promise<ProviderHealth>
   refresh?(): void | Promise<void>
+}
+
+export interface EmbeddingModel {
+  readonly id: string
+  readonly dimensions: number
+  embed(text: string, signal?: AbortSignal): Promise<number[]>
 }
 
 export interface CatalogMatch {
@@ -179,6 +261,14 @@ export interface MemoryTrace {
   recallTokens: number
   totalDurationMs: number
   diagnostics: string[]
+  recognitionStage?: "none" | "deterministic" | "semantic" | "continuity"
+  semanticAttempted?: boolean
+  timings?: {
+    catalogMs: number
+    planningMs: number
+    recallMs: number
+    synthesisMs: number
+  }
 }
 
 export interface MemoryInjection {

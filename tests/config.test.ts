@@ -21,6 +21,26 @@ describe("parseConfig", () => {
     expect(parsed.diagnostics[0]?.message).toContain("unsupported type")
   })
 
+  it("accepts a PostgreSQL provider without exposing its connection in diagnostics", () => {
+    const parsed = parseConfig({
+      providers: [
+        {
+          type: "postgres",
+          id: "remem-local",
+          connectionString: "postgres://user:secret@127.0.0.1/remem",
+          primary: true,
+        },
+      ],
+    })
+
+    expect(parsed.config.providers[0]).toMatchObject({
+      type: "postgres",
+      id: "remem-local",
+      primary: true,
+    })
+    expect(JSON.stringify(parsed.diagnostics)).not.toContain("secret")
+  })
+
   it("bounds unsafe budget and timeout values", () => {
     const parsed = parseConfig({
       providers: [],

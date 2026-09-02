@@ -1,8 +1,9 @@
 import os from "node:os"
 import path from "node:path"
-import type { MarkdownProviderConfig } from "../config.js"
+import type { MemoryProviderConfig } from "../config.js"
 import type { MemoryProvider } from "../types.js"
 import { MarkdownMemoryProvider } from "./markdown.js"
+import { PostgresMemoryProvider } from "./postgres.js"
 
 export interface ProviderFactoryLocation {
   worktree: string
@@ -20,7 +21,7 @@ export function resolveProviderPath(value: string, worktree: string): string {
 }
 
 export function createProviders(
-  configs: MarkdownProviderConfig[],
+  configs: MemoryProviderConfig[],
   location: ProviderFactoryLocation,
 ): ProviderFactoryResult {
   const providers: MemoryProvider[] = []
@@ -28,12 +29,16 @@ export function createProviders(
 
   for (const config of configs) {
     try {
-      providers.push(
-        new MarkdownMemoryProvider(
-          config,
-          config.paths.map((memoryPath) => resolveProviderPath(memoryPath, location.worktree)),
-        ),
-      )
+      if (config.type === "postgres") {
+        providers.push(new PostgresMemoryProvider(config))
+      } else {
+        providers.push(
+          new MarkdownMemoryProvider(
+            config,
+            config.paths.map((memoryPath) => resolveProviderPath(memoryPath, location.worktree)),
+          ),
+        )
+      }
     } catch (error) {
       diagnostics.push(
         `provider ${config.id} initialization failed: ${error instanceof Error ? error.name : "unknown error"}`,

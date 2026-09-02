@@ -55,7 +55,7 @@ function result(id: string, source: string): MemoryResult {
       title: "Phoenix decision",
       content: "Decision: use logical replication.",
       source,
-      scope: { kind: "workspace" },
+      scope: { kind: "workspace", id: memoryContext.worktree },
       type: "decision",
       freshness: "current",
       importance: 0.9,
@@ -129,5 +129,18 @@ describe("RecallEngine", () => {
         expect.objectContaining({ providerId: "broken", status: "failed" }),
       ]),
     )
+  })
+
+  it("stamps provider identity and rejects cross-scope provider output", async () => {
+    const valid = result("valid", "valid.md")
+    valid.record.providerId = "spoofed-provider"
+    const foreign = result("foreign", "foreign.md")
+    foreign.record.scope = { kind: "project", id: "another-project" }
+    const engine = new RecallEngine([new FakeProvider("healthy", [valid, foreign])], testConfig())
+    const recall = await engine.execute({ ...plan, requests: [plan.requests[0]!] }, memoryContext)
+
+    expect(recall.memories).toHaveLength(1)
+    expect(recall.memories[0]?.record.providerId).toBe("healthy")
+    expect(recall.attempts[0]?.error).toContain("out-of-scope")
   })
 })

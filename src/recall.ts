@@ -1,5 +1,6 @@
 import type { OrchestratorConfig } from "./config.js"
 import { clamp, contentFingerprint } from "./text.js"
+import { truncateToTokens } from "./token-budget.js"
 import { OperationTimeoutError, withTimeout } from "./timeout.js"
 import type {
   MemoryContext,
@@ -25,6 +26,74 @@ const FRESHNESS_BONUS: Record<MemoryFreshness, number> = {
   unknown: 0,
   stale: -0.08,
   superseded: -0.2,
+}
+
+const MEMORY_TYPES = new Set([
+  "semantic",
+  "episodic",
+  "decision",
+  "preference",
+  "procedure",
+  "task",
+  "other",
+])
+const FRESHNESS_VALUES = new Set(["current", "stale", "superseded", "unknown"])
+
+function scopeAllowed(scope: unknown, context: MemoryContext): boolean {
+  if (!scope || typeof scope !== "object" || !("kind" in scope)) return false
+  const id = "id" in scope && typeof scope.id === "string" ? scope.id : undefined
+  if (scope.kind === "global") return id === undefined
+  if (scope.kind === "workspace") return id === context.worktree
+  if (scope.kind === "project") return id === context.projectId
+  if (scope.kind === "session") return id !== undefined && id === context.sessionId
+  return false
+}
+
+function normalizeResult(
+  value: unknown,
+  providerId: string,
+  context: MemoryContext,
+  maxTokens: number,
+): MemoryResult | undefined {
+  if (!value || typeof value !== "object" || !("record" in value)) return undefined
+  const candidate = value as Partial<MemoryResult>
+  const record = candidate.record
+  if (
+    !record ||
+    typeof record !== "object" ||
+    typeof record.id !== "string" ||
+    typeof record.title !== "string" ||
+    typeof record.content !== "string" ||
+    typeof record.source !== "string" ||
+    !MEMORY_TYPES.has(record.type) ||
+    !FRESHNESS_VALUES.has(record.freshness) ||
+    !scopeAllowed(record.scope, context)
+  ) {
+    return undefined
+  }
+  const content = truncateToTokens(record.content, maxTokens).text
+  if (!content) return undefined
+  return {
+    record: {
+      ...record,
+      providerId,
+      id: record.id.slice(0, 500),
+      title: record.title.slice(0, 500),
+      content,
+      source: record.source.slice(0, 2_000),
+      importance: clamp(record.importance ?? 0.5),
+      confidence: clamp(record.confidence ?? 0.5),
+    },
+    score: clamp(Number.isFinite(candidate.score) ? (candidate.score ?? 0) : 0),
+    reasons: Array.isArray(candidate.reasons)
+      ? candidate.reasons
+          .filter((reason): reason is string => typeof reason === "string")
+          .slice(0, 20)
+      : [],
+    ...(typeof candidate.fingerprint === "string"
+      ? { fingerprint: candidate.fingerprint.slice(0, 500) }
+      : {}),
+  }
 }
 
 function recencyBonus(updatedAt?: string): number {
@@ -137,7 +206,7 @@ export class RecallEngine {
               } satisfies ProviderAttempt,
             }
           }
-          const results = await withTimeout(
+          const providerResults = await withTimeout(
             this.config.providerTimeoutMs,
             (signal) =>
               provider.search({
@@ -151,6 +220,11 @@ export class RecallEngine {
               }),
             parentSignal,
           )
+          const results = providerResults
+            .map((result) =>
+              normalizeResult(result, provider.id, context, this.config.budgets.perProviderTokens),
+            )
+            .filter((result): result is MemoryResult => result !== undefined)
           return {
             results: results.slice(0, this.config.maxResults),
             attempt: {
@@ -158,6 +232,11 @@ export class RecallEngine {
               status: "ok",
               durationMs: Math.round(performance.now() - started),
               resultCount: results.length,
+              ...(providerResults.length === results.length
+                ? {}
+                : {
+                    error: `${providerResults.length - results.length} invalid or out-of-scope result(s) omitted`,
+                  }),
             } satisfies ProviderAttempt,
           }
         } catch (error) {

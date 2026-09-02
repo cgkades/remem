@@ -1,0 +1,316 @@
+{
+  "entries": [
+    {
+      "id": "bedrock-auth",
+      "title": "Bedrock Claude credential passthrough failure",
+      "aliases": ["AWS auth incident"],
+      "summary": "Amazon identity credentials flow through the default provider chain.",
+      "tags": ["identity", "cloud", "incident"],
+      "type": "decision",
+      "freshness": "current",
+      "content": "Forward the default credential provider chain into the Bedrock client."
+    },
+    {
+      "id": "phoenix-kafka",
+      "title": "Project Phoenix Kafka migration",
+      "aliases": ["Phoenix streaming cutover", "PX Kafka"],
+      "summary": "Migration from the legacy queue to Kafka with dual writes.",
+      "tags": ["phoenix", "kafka", "migration"],
+      "type": "decision",
+      "freshness": "current",
+      "content": "Use dual writes, compare offsets, then cut consumers over."
+    },
+    {
+      "id": "global-concise",
+      "title": "Concise engineering updates",
+      "aliases": ["brief updates"],
+      "summary": "The user prefers direct, concise implementation summaries.",
+      "tags": ["preference", "communication"],
+      "type": "preference",
+      "freshness": "current",
+      "content": "Keep engineering updates concise and factual."
+    },
+    {
+      "id": "deploy-task",
+      "title": "Unresolved production deployment",
+      "aliases": ["release blocker"],
+      "summary": "Production deploy remains blocked on certificate rotation.",
+      "tags": ["deployment", "task", "certificate"],
+      "type": "task",
+      "freshness": "current",
+      "unresolved": true,
+      "content": "Rotate the production certificate before resuming deployment."
+    },
+    {
+      "id": "old-mysql",
+      "title": "Phoenix MySQL persistence decision",
+      "aliases": ["old database choice"],
+      "summary": "An older decision selected MySQL for Phoenix.",
+      "tags": ["phoenix", "database"],
+      "type": "decision",
+      "freshness": "superseded",
+      "content": "The original design selected MySQL."
+    },
+    {
+      "id": "current-postgres",
+      "title": "Phoenix PostgreSQL persistence decision",
+      "aliases": ["current database choice"],
+      "summary": "The current decision uses PostgreSQL and logical replication.",
+      "tags": ["phoenix", "database"],
+      "type": "decision",
+      "freshness": "current",
+      "content": "Use PostgreSQL with logical replication."
+    },
+    {
+      "id": "phoenix-mobile",
+      "title": "Phoenix Mobile redesign",
+      "aliases": ["PX mobile"],
+      "summary": "Navigation redesign for the mobile client.",
+      "tags": ["phoenix", "mobile", "design"],
+      "type": "semantic",
+      "freshness": "current",
+      "content": "Use bottom navigation on small screens."
+    },
+    {
+      "id": "phoenix-payments",
+      "title": "Phoenix Payments reconciliation",
+      "aliases": ["PX payments"],
+      "summary": "Nightly financial reconciliation procedure.",
+      "tags": ["phoenix", "payments"],
+      "type": "procedure",
+      "freshness": "current",
+      "content": "Reconcile settlements against processor exports."
+    },
+    {
+      "id": "phoenix-search",
+      "title": "Phoenix Search indexing",
+      "aliases": ["PX search"],
+      "summary": "Search index refresh and relevance tuning.",
+      "tags": ["phoenix", "search"],
+      "type": "procedure",
+      "freshness": "current",
+      "content": "Refresh the index after catalog imports."
+    },
+    {
+      "id": "phoenix-analytics",
+      "title": "Phoenix Analytics dashboard",
+      "aliases": ["PX analytics"],
+      "summary": "Dashboard query and metric definitions.",
+      "tags": ["phoenix", "analytics"],
+      "type": "semantic",
+      "freshness": "current",
+      "content": "Revenue metrics use settled orders."
+    },
+    {
+      "id": "phoenix-email",
+      "title": "Phoenix Email delivery",
+      "aliases": ["PX mail"],
+      "summary": "Email retry and bounce handling.",
+      "tags": ["phoenix", "email"],
+      "type": "procedure",
+      "freshness": "current",
+      "content": "Retry transient SMTP errors three times."
+    },
+    {
+      "id": "project-phoenixville",
+      "title": "Project Phoenixville onboarding",
+      "aliases": ["Phoenixville"],
+      "summary": "Unrelated customer onboarding project.",
+      "tags": ["onboarding"],
+      "type": "episodic",
+      "freshness": "current",
+      "content": "Customer kickoff is scheduled for October."
+    },
+    {
+      "id": "mercury-kafka",
+      "title": "Project Mercury Kafka retention",
+      "aliases": ["Mercury streaming"],
+      "summary": "Kafka retention policy for Mercury.",
+      "tags": ["mercury", "kafka"],
+      "type": "decision",
+      "freshness": "current",
+      "content": "Retain Mercury events for seven days."
+    },
+    {
+      "id": "apollo-auth",
+      "title": "Apollo OAuth callback failure",
+      "aliases": ["Apollo auth"],
+      "summary": "OAuth callback state mismatch in Apollo.",
+      "tags": ["apollo", "authentication"],
+      "type": "episodic",
+      "freshness": "stale",
+      "content": "The callback state cookie used the wrong domain."
+    },
+    {
+      "id": "s3-credentials",
+      "title": "S3 upload credentials",
+      "aliases": ["object store auth"],
+      "summary": "Credentials for signed object-store uploads.",
+      "tags": ["aws", "storage"],
+      "type": "procedure",
+      "freshness": "current",
+      "content": "Use short-lived upload credentials."
+    },
+    {
+      "id": "azure-identity",
+      "title": "Azure managed identity rollout",
+      "aliases": ["Azure auth"],
+      "summary": "Managed identity deployment for Azure resources.",
+      "tags": ["azure", "identity"],
+      "type": "decision",
+      "freshness": "current",
+      "content": "Use workload managed identity in production."
+    },
+    {
+      "id": "css-buttons",
+      "title": "Button visual system",
+      "aliases": ["button CSS"],
+      "summary": "Spacing, radius, and color tokens for buttons.",
+      "tags": ["css", "design"],
+      "type": "semantic",
+      "freshness": "current",
+      "content": "Buttons use the compact radius token."
+    },
+    {
+      "id": "typography",
+      "title": "Typography scale",
+      "aliases": ["font scale"],
+      "summary": "Responsive typography tokens.",
+      "tags": ["css", "design"],
+      "type": "semantic",
+      "freshness": "current",
+      "content": "Use the modular type scale."
+    },
+    {
+      "id": "coffee",
+      "title": "Coffee grinder notes",
+      "aliases": ["espresso setup"],
+      "summary": "Personal coffee calibration notes.",
+      "tags": ["personal"],
+      "type": "other",
+      "freshness": "current",
+      "content": "Use a finer grind for light roasts."
+    },
+    {
+      "id": "vacation",
+      "title": "Vacation itinerary",
+      "aliases": ["travel plan"],
+      "summary": "Personal travel itinerary.",
+      "tags": ["personal", "travel"],
+      "type": "episodic",
+      "freshness": "current",
+      "content": "The train leaves at nine."
+    },
+    {
+      "id": "billing-incident",
+      "title": "Billing duplicate charge incident",
+      "aliases": ["double charge"],
+      "summary": "Resolved idempotency failure in billing.",
+      "tags": ["billing", "incident"],
+      "type": "episodic",
+      "freshness": "current",
+      "content": "Add the invoice ID to the idempotency key."
+    },
+    {
+      "id": "cache-incident",
+      "title": "Redis cache eviction incident",
+      "aliases": ["cache outage"],
+      "summary": "Resolved memory pressure and eviction failure.",
+      "tags": ["cache", "incident"],
+      "type": "episodic",
+      "freshness": "current",
+      "content": "Lower TTLs and cap the largest keys."
+    },
+    {
+      "id": "dns-incident",
+      "title": "DNS propagation incident",
+      "aliases": ["DNS outage"],
+      "summary": "Resolved stale DNS records during cutover.",
+      "tags": ["dns", "incident"],
+      "type": "episodic",
+      "freshness": "current",
+      "content": "Lower TTL one day before cutover."
+    },
+    {
+      "id": "graphql-procedure",
+      "title": "GraphQL schema release procedure",
+      "aliases": ["schema rollout"],
+      "summary": "Backward-compatible GraphQL release steps.",
+      "tags": ["graphql", "procedure"],
+      "type": "procedure",
+      "freshness": "current",
+      "content": "Deploy additive schema changes before clients."
+    },
+    {
+      "id": "python-style",
+      "title": "Python type annotation preference",
+      "aliases": ["Python typing"],
+      "summary": "Prefer explicit public API annotations.",
+      "tags": ["python", "preference"],
+      "type": "preference",
+      "freshness": "current",
+      "content": "Annotate public Python APIs."
+    },
+    {
+      "id": "typescript-style",
+      "title": "TypeScript strictness preference",
+      "aliases": ["TS strict"],
+      "summary": "Keep strict TypeScript and avoid any.",
+      "tags": ["typescript", "preference"],
+      "type": "preference",
+      "freshness": "current",
+      "content": "Use strict TypeScript without unsafe any."
+    },
+    {
+      "id": "open-task-docs",
+      "title": "Documentation refresh task",
+      "aliases": ["docs todo"],
+      "summary": "Installation docs still need screenshots.",
+      "tags": ["documentation", "task"],
+      "type": "task",
+      "freshness": "current",
+      "unresolved": true,
+      "content": "Capture installation screenshots."
+    },
+    {
+      "id": "resolved-test",
+      "title": "Flaky timezone test",
+      "aliases": ["timezone failure"],
+      "summary": "Resolved test failure caused by local timezone assumptions.",
+      "tags": ["testing", "incident"],
+      "type": "episodic",
+      "freshness": "current",
+      "content": "Pin the fixture clock to UTC."
+    },
+    {
+      "id": "legacy-auth",
+      "title": "Legacy API key authentication",
+      "aliases": ["old API auth"],
+      "summary": "Superseded static API key authentication.",
+      "tags": ["authentication", "legacy"],
+      "type": "decision",
+      "freshness": "superseded",
+      "content": "The old service used a static API key."
+    },
+    {
+      "id": "session-private",
+      "title": "Current session scratch state",
+      "aliases": ["scratch"],
+      "summary": "Ephemeral session-only debugging state.",
+      "tags": ["session"],
+      "type": "episodic",
+      "freshness": "current",
+      "content": "Temporary breakpoint is active."
+    }
+  ],
+  "cases": [
+    { "prompt": "What did we end up doing about the AWS auth thing?", "expected": "bedrock-auth" },
+    { "prompt": "Continue the PX Kafka cutover work.", "expected": "phoenix-kafka" },
+    { "prompt": "What is my preference for engineering updates?", "expected": "global-concise" },
+    { "prompt": "Are there any unresolved release blockers?", "expected": "deploy-task" },
+    { "prompt": "What is the current Phoenix database choice?", "expected": "current-postgres" },
+    { "prompt": "Calculate the prime factorization of 391.", "expected": null },
+    { "prompt": "Translate hello into Swahili.", "expected": null },
+    { "prompt": "Write a new sorting function with no prior context.", "expected": null }
+  ]
+}

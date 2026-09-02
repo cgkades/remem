@@ -22,6 +22,7 @@ import type {
   MemoryScopeKind,
   MemorySearchRequest,
   MemoryType,
+  ProviderDescriptor,
   ProviderHealth,
 } from "../types.js"
 
@@ -389,6 +390,18 @@ export class MarkdownMemoryProvider implements MemoryProvider {
       episodicHistory: false,
       structuredEntities: false,
       filesystemDocuments: true,
+    }
+  }
+
+  descriptor(): ProviderDescriptor {
+    return {
+      id: this.id,
+      name: "Markdown memory",
+      summary:
+        "Local documents that may contain project notes, decisions, preferences, tasks, and prior incidents.",
+      categories: ["documents", "decisions", "preferences", "tasks", "incidents"],
+      aliases: ["notes", "Obsidian", "local documents"],
+      scopeKinds: ["global", "workspace", "project", "session"],
     }
   }
 

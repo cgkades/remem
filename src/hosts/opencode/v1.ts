@@ -2,6 +2,7 @@ import { tool, type Hooks, type Plugin, type PluginInput } from "opencode-plugin
 import { parseConfig, type RememConfig } from "../../config.js"
 import { RememOrchestrator } from "../../orchestrator.js"
 import { createProviders } from "../../providers/factory.js"
+import { loadInstalledPluginOptions } from "../../storage/config-file.js"
 import type { MemoryContext, RememLogger } from "../../types.js"
 import {
   memoryContext,
@@ -140,7 +141,7 @@ export function createOpenCodeV1Hooks(
   return hooks
 }
 
-export const RememV1Plugin = ((input, options) => {
+export const RememV1Plugin = (async (input, options) => {
   const logger: RememLogger = {
     async log(level, event, data) {
       await input.client.app.log({
@@ -155,7 +156,7 @@ export const RememV1Plugin = ((input, options) => {
   }
 
   try {
-    const parsed = parseConfig(options)
+    const parsed = parseConfig(await loadInstalledPluginOptions(options))
     for (const diagnostic of parsed.diagnostics) {
       safeLoggerCall(logger, diagnostic.level, "config.invalid", { message: diagnostic.message })
     }
@@ -164,11 +165,11 @@ export const RememV1Plugin = ((input, options) => {
       safeLoggerCall(logger, "warn", "provider.initialization_failed", { message: diagnostic })
     }
     const orchestrator = new RememOrchestrator(created.providers, parsed.config, logger)
-    return Promise.resolve(createOpenCodeV1Hooks(input, orchestrator, parsed.config, logger))
+    return createOpenCodeV1Hooks(input, orchestrator, parsed.config, logger)
   } catch (error) {
     safeLoggerCall(logger, "error", "plugin.initialization_failed", {
       error: error instanceof Error ? error.name : "unknown error",
     })
-    return Promise.resolve({})
+    return {}
   }
 }) satisfies Plugin

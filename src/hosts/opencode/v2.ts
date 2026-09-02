@@ -3,6 +3,7 @@ import type { Context } from "@opencode-ai/plugin/promise/plugin"
 import { parseConfig } from "../../config.js"
 import { RememOrchestrator } from "../../orchestrator.js"
 import { createProviders } from "../../providers/factory.js"
+import { loadInstalledPluginOptions } from "../../storage/config-file.js"
 import type { MemoryContext, RememLogger } from "../../types.js"
 import {
   TRUSTED_REMEM_INSTRUCTION,
@@ -130,7 +131,7 @@ export const RememPlugin = Plugin.define({
   async setup(context) {
     const logger = consoleLogger()
     try {
-      const parsed = parseConfig(context.options)
+      const parsed = parseConfig(await loadInstalledPluginOptions(context.options))
       for (const diagnostic of parsed.diagnostics) {
         safeLoggerCall(logger, diagnostic.level, "config.invalid", { message: diagnostic.message })
       }

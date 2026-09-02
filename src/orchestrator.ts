@@ -2,11 +2,14 @@ import { MemoryCatalog, renderCatalog } from "./catalog.js"
 import type { OrchestratorConfig } from "./config.js"
 import { MemoryDiagnostics } from "./diagnostics.js"
 import { DeterministicRetrievalPlanner } from "./planner.js"
+import { SemanticCatalogRecognizer, type SemanticRecognitionResult } from "./planning/semantic.js"
 import { RecallEngine } from "./recall.js"
-import { DeterministicSynthesizer } from "./synthesizer.js"
+import { LocalHashEmbeddingModel } from "./storage/embedding.js"
+import { DeterministicSynthesizer, type SynthesisStrategy } from "./synthesizer.js"
 import { withTimeout } from "./timeout.js"
 import type {
   MemoryContext,
+  EmbeddingModel,
   MemoryInjection,
   MemoryProvider,
   MemoryTrace,
@@ -24,6 +27,58 @@ function emptyPlan(): RetrievalPlan {
     requests: [],
     matches: [],
     signals: [],
+  }
+}
+
+function semanticPlan(
+  prompt: string,
+  result: SemanticRecognitionResult,
+  providerIds: string[],
+  minimumSimilarity: number,
+  maxTopics: number,
+  maxResults: number,
+): RetrievalPlan | undefined {
+  const selected = result.matches
+    .filter((match) => match.score >= minimumSimilarity)
+    .slice(0, maxTopics)
+  const providerReasons = new Map<string, string[]>()
+  for (const match of selected) {
+    for (const providerId of match.entry.providerIds) {
+      if (!providerIds.includes(providerId)) continue
+      providerReasons.set(providerId, [
+        ...(providerReasons.get(providerId) ?? []),
+        `${match.entry.title}: semantic catalog similarity ${match.score.toFixed(3)}`,
+      ])
+    }
+  }
+  if (selected.length === 0) {
+    for (const match of result.providerMatches.filter(
+      ({ score, provider }) => score >= minimumSimilarity && providerIds.includes(provider.id),
+    )) {
+      providerReasons.set(match.provider.id, [
+        `provider awareness similarity ${match.score.toFixed(3)}`,
+      ])
+    }
+  }
+  if (providerReasons.size === 0) return undefined
+  const query = prompt.trim().slice(0, 2_000)
+  return {
+    shouldRetrieve: true,
+    confidence: Math.max(
+      selected[0]?.score ?? 0,
+      ...result.providerMatches
+        .filter(({ provider }) => providerReasons.has(provider.id))
+        .map(({ score }) => score),
+    ),
+    topics: selected.map((match) => match.entry.title),
+    requests: [...providerReasons].map(([providerId, reasons]) => ({
+      providerId,
+      query,
+      reason: reasons.join("; "),
+      limit: maxResults,
+    })),
+    matches: selected,
+    signals: [selected.length > 0 ? "semantic catalog match" : "semantic provider awareness"],
   }
 }
 
@@ -45,11 +100,17 @@ export interface ManualSearchResult {
   trace: MemoryTrace
 }
 
+export interface OrchestratorDependencies {
+  embeddingModel?: EmbeddingModel
+  synthesizer?: SynthesisStrategy
+}
+
 export class RememOrchestrator {
   private readonly catalog: MemoryCatalog
   private readonly planner: DeterministicRetrievalPlanner
+  private readonly semantic: SemanticCatalogRecognizer
   private readonly recall: RecallEngine
-  private readonly synthesizer: DeterministicSynthesizer
+  private readonly synthesizer: SynthesisStrategy
   private readonly diagnostics = new MemoryDiagnostics()
   private readonly providerIds: string[]
   private readonly providers: MemoryProvider[]
@@ -58,6 +119,7 @@ export class RememOrchestrator {
     providers: MemoryProvider[],
     private readonly config: OrchestratorConfig,
     private readonly logger: RememLogger = NOOP_LOGGER,
+    dependencies: OrchestratorDependencies = {},
   ) {
     const byId = new Map<string, MemoryProvider>()
     for (const provider of providers) {
@@ -76,8 +138,11 @@ export class RememOrchestrator {
       config.providerTimeoutMs,
     )
     this.planner = new DeterministicRetrievalPlanner(config.planner)
+    this.semantic = new SemanticCatalogRecognizer(
+      dependencies.embeddingModel ?? new LocalHashEmbeddingModel(),
+    )
     this.recall = new RecallEngine(this.providers, config)
-    this.synthesizer = new DeterministicSynthesizer(config.budgets)
+    this.synthesizer = dependencies.synthesizer ?? new DeterministicSynthesizer(config.budgets)
     this.providerIds = this.providers.map((provider) => provider.id)
   }
 
@@ -85,14 +150,63 @@ export class RememOrchestrator {
     const started = performance.now()
     const fallbackCatalog = renderCatalog([], this.config.budgets.catalogTokens)
     let catalog = fallbackCatalog
+    let catalogMs = 0
+    let planningMs = 0
+    let recallMs = 0
+    let synthesisMs = 0
+    let semanticAttempted = false
+    const stageDiagnostics: string[] = []
 
     try {
+      const catalogStarted = performance.now()
       catalog = await this.catalog.get(context)
-      const plan = this.planner.plan(prompt, catalog.entries, this.providerIds)
+      catalogMs = performance.now() - catalogStarted
+      const planningStarted = performance.now()
+      let plan = this.planner.plan(prompt, catalog.entries, this.providerIds)
+      const semanticConfig = this.config.semantic ?? {
+        enabled: true,
+        minimumSimilarity: 0.55,
+        deterministicHighConfidence: 0.82,
+      }
+      if (
+        prompt.trim() &&
+        semanticConfig.enabled &&
+        (!plan.shouldRetrieve || plan.confidence < semanticConfig.deterministicHighConfidence)
+      ) {
+        semanticAttempted = true
+        try {
+          const recognized = await this.semantic.recognize(
+            prompt,
+            catalog.entries,
+            catalog.providers,
+          )
+          const candidate = semanticPlan(
+            prompt,
+            recognized,
+            this.providerIds,
+            semanticConfig.minimumSimilarity,
+            this.config.planner.maxTopics,
+            this.config.maxResults,
+          )
+          if (candidate && (!plan.shouldRetrieve || candidate.confidence > plan.confidence)) {
+            plan = candidate
+          }
+        } catch (error) {
+          stageDiagnostics.push(
+            `semantic recognition failed: ${error instanceof Error ? error.name : "unknown error"}`,
+          )
+        }
+      }
+      planningMs = performance.now() - planningStarted
+      const recallStarted = performance.now()
       const recall = await this.recall.execute(plan, context)
+      recallMs = performance.now() - recallStarted
+      const synthesisStarted = performance.now()
       const synthesis = this.synthesizer.synthesize(plan.topics, recall.memories)
+      synthesisMs = performance.now() - synthesisStarted
       const diagnostics = [
         ...catalog.diagnostics,
+        ...stageDiagnostics,
         ...recall.attempts
           .filter((attempt) => attempt.status !== "ok")
           .map((attempt) => `provider ${attempt.providerId} ${attempt.status}`),
@@ -118,6 +232,22 @@ export class RememOrchestrator {
         recallTokens: synthesis.estimatedTokens,
         totalDurationMs: Math.round(performance.now() - started),
         diagnostics,
+        recognitionStage: plan.signals.includes("semantic catalog match")
+          ? "semantic"
+          : plan.signals.includes("semantic provider awareness")
+            ? "semantic"
+            : plan.signals.includes("explicit continuity phrase") && plan.matches.length === 0
+              ? "continuity"
+              : plan.shouldRetrieve
+                ? "deterministic"
+                : "none",
+        semanticAttempted,
+        timings: {
+          catalogMs: Math.round(catalogMs),
+          planningMs: Math.round(planningMs),
+          recallMs: Math.round(recallMs),
+          synthesisMs: Math.round(synthesisMs),
+        },
       }
       this.diagnostics.record(trace)
       this.logTrace(trace)
@@ -146,7 +276,15 @@ export class RememOrchestrator {
         catalogTokens: catalog.estimatedTokens,
         recallTokens: 0,
         totalDurationMs: Math.round(performance.now() - started),
-        diagnostics: [`orchestration failed: ${diagnostic}`],
+        diagnostics: [...stageDiagnostics, `orchestration failed: ${diagnostic}`],
+        recognitionStage: "none",
+        semanticAttempted,
+        timings: {
+          catalogMs: Math.round(catalogMs),
+          planningMs: Math.round(planningMs),
+          recallMs: Math.round(recallMs),
+          synthesisMs: Math.round(synthesisMs),
+        },
       }
       this.diagnostics.record(trace)
       safeLog(this.logger, "warn", "orchestration.failed", { error: diagnostic })
@@ -259,6 +397,7 @@ export class RememOrchestrator {
       providers,
       catalog: {
         entries: catalog.entries.length,
+        providers: catalog.providers,
         estimatedTokens: catalog.estimatedTokens,
         diagnostics: catalog.diagnostics,
       },

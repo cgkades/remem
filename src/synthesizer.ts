@@ -3,6 +3,11 @@ import { compactWhitespace, stripControlCharacters } from "./text.js"
 import { estimateTokens, truncateToTokens } from "./token-budget.js"
 import type { RankedMemory, SynthesisResult } from "./types.js"
 
+export interface SynthesisStrategy {
+  readonly id: string
+  synthesize(topics: string[], memories: RankedMemory[]): SynthesisResult
+}
+
 function escapeXml(value: string): string {
   return compactWhitespace(stripControlCharacters(value))
     .replace(/&/gu, "&amp;")
@@ -20,7 +25,9 @@ function sourceLines(memory: RankedMemory): string[] {
   ]
 }
 
-export class DeterministicSynthesizer {
+export class DeterministicSynthesizer implements SynthesisStrategy {
+  readonly id = "deterministic-excerpt"
+
   constructor(private readonly budgets: TokenBudgets) {}
 
   synthesize(topics: string[], memories: RankedMemory[]): SynthesisResult {
