@@ -24,6 +24,14 @@ vi.mock("@huggingface/transformers", () => ({
 }))
 
 describe("createEmbeddingModel", () => {
+  afterEach(() => {
+    // fakeTransformersEnv is mutated in place by defaultLoadPipeline; reset it
+    // so a later test that also omits `loadPipeline` doesn't silently inherit
+    // a previous test's localModelPath/allowRemoteModels values.
+    delete fakeTransformersEnv.localModelPath
+    delete fakeTransformersEnv.allowRemoteModels
+  })
+
   it("returns LocalHashEmbeddingModel for backend 'hash'", async () => {
     const model = await createEmbeddingModel({ backend: "hash" })
     expect(model).toBeInstanceOf(LocalHashEmbeddingModel)
