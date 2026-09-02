@@ -14,6 +14,15 @@ vi.mock("undici", async (importOriginal) => {
   return { ...actual, setGlobalDispatcher: vi.fn() }
 })
 
+// Fakes the transformers.js module so we can inspect what defaultLoadPipeline
+// (the real, non-test loader) does to `env` when a modelPath is supplied,
+// without downloading real model weights or hitting the network.
+const fakeTransformersEnv: { localModelPath?: string; allowRemoteModels?: boolean } = {}
+vi.mock("@huggingface/transformers", () => ({
+  env: fakeTransformersEnv,
+  pipeline: vi.fn().mockResolvedValue(vi.fn().mockResolvedValue({ data: new Float32Array(384) })),
+}))
+
 describe("createEmbeddingModel", () => {
   it("returns LocalHashEmbeddingModel for backend 'hash'", async () => {
     const model = await createEmbeddingModel({ backend: "hash" })
@@ -58,6 +67,22 @@ describe("createEmbeddingModel", () => {
     expect(model.dimensions).toBe(384)
     const embedding = await model.embed("hello world")
     expect(embedding).toEqual(fakeVector)
+  })
+
+  it("passes modelPath through to the pipeline loader", async () => {
+    const loadPipeline = vi.fn().mockResolvedValue(vi.fn().mockResolvedValue({ data: new Float32Array(384) }))
+    await createEmbeddingModel({ backend: "neural", modelPath: "/opt/models/bge-small" }, { loadPipeline })
+    expect(loadPipeline).toHaveBeenCalledWith("/opt/models/bge-small")
+  })
+
+  it("defaultLoadPipeline disables remote model downloads when modelPath is set (air-gapped escape hatch)", async () => {
+    // Exercises the real, non-test loader (no `loadPipeline` override) against
+    // the mocked @huggingface/transformers module above, to confirm that
+    // providing modelPath genuinely prevents any network fetch attempt —
+    // not just that the string is forwarded.
+    await createEmbeddingModel({ backend: "neural", modelPath: "/opt/models/bge-small" })
+    expect(fakeTransformersEnv.localModelPath).toBe("/opt/models/bge-small")
+    expect(fakeTransformersEnv.allowRemoteModels).toBe(false)
   })
 
   it("calls onFallback with the error when the neural loader throws", async () => {
