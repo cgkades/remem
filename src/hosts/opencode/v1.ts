@@ -1,4 +1,5 @@
 import { tool, type Hooks, type Plugin, type PluginInput } from "opencode-plugin-v1"
+import { createCaptureCoordinator, type CaptureCoordinator } from "../../capture.js"
 import { parseConfig, type RememConfig } from "../../config.js"
 import { RememOrchestrator } from "../../orchestrator.js"
 import { createProviders } from "../../providers/factory.js"
@@ -40,9 +41,22 @@ export function createOpenCodeV1Hooks(
   orchestrator: RememOrchestrator,
   config: Pick<RememConfig, "compaction">,
   logger: RememLogger,
+  capture?: CaptureCoordinator,
 ): Hooks {
   const hooks: Hooks = {
     "chat.message": async ({ sessionID }, output) => {
+      try {
+        capture?.enqueue({
+          host: "opencode-v1",
+          context: memoryContext(locationFor(input), sessionID),
+          sessionId: sessionID,
+          text: textFromParts(output.parts),
+        })
+      } catch (error) {
+        safeLoggerCall(logger, "warn", "capture.enqueue_failed", {
+          error: error instanceof Error ? error.name : "unknown error",
+        })
+      }
       try {
         await injectV1PromptMemory(
           orchestrator,
@@ -166,8 +180,12 @@ export const RememV1Plugin = (async (input, options) => {
       safeLoggerCall(logger, "warn", "provider.initialization_failed", { message: diagnostic })
     }
     const orchestrator = new RememOrchestrator(created.providers, parsed.config, logger)
-    const hooks = createOpenCodeV1Hooks(input, orchestrator, parsed.config, logger)
-    hooks.dispose = () => disposeProviders(created.providers)
+    const capture = createCaptureCoordinator(created.providers, parsed.config, logger)
+    const hooks = createOpenCodeV1Hooks(input, orchestrator, parsed.config, logger, capture)
+    hooks.dispose = async () => {
+      await capture?.dispose()
+      await disposeProviders(created.providers)
+    }
     return hooks
   } catch (error) {
     safeLoggerCall(logger, "error", "plugin.initialization_failed", {

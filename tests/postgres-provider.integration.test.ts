@@ -9,6 +9,7 @@ import {
 } from "../src/consolidation.js"
 import { PostgresMemoryProvider } from "../src/providers/postgres.js"
 import { runDoctor } from "../src/cli/doctor.js"
+import type { CandidateMemory, SessionObservation } from "../src/observation.js"
 import { writeAppConfig, type RememAppConfig } from "../src/storage/config-file.js"
 import { MigrationIntegrityError, runMigrations } from "../src/storage/migrations.js"
 import { rememPaths } from "../src/storage/paths.js"
@@ -448,6 +449,110 @@ integration("PostgreSQL managed provider", () => {
         )
       ).rows[0]?.count,
     ).toBe("1")
+  })
+
+  it("persists a captured observation and pending candidate atomically with body-free status", async () => {
+    const provider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "remem-local",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 100,
+      },
+      { pool },
+    )
+    const observation: SessionObservation = {
+      id: randomUUID(),
+      kind: "decision",
+      context,
+      occurredAt: "2026-09-02T12:00:00.000Z",
+      source: "remem://opencode-v2/sessions/session-1/messages/message-1",
+      payload: {
+        host: "opencode-v2",
+        messageId: "message-1",
+        text: "We decided to use blue-green deploys.",
+      },
+    }
+    const candidate: CandidateMemory = {
+      id: randomUUID(),
+      observationIds: [observation.id],
+      memory: {
+        title: "Explicit decision: blue-green deploys",
+        content: "We decided to use blue-green deploys.",
+        type: "decision",
+        scope: { kind: "project", id: "phoenix" },
+        provenance: [
+          {
+            source: { kind: "user", uri: observation.source, externalId: "message-1" },
+            capturedAt: observation.occurredAt,
+            original: true,
+          },
+        ],
+      },
+      confidence: 0.9,
+      status: "pending",
+      reasons: ["explicit decision"],
+    }
+
+    await provider.persistCandidate(observation, candidate)
+    await provider.persistCandidate(observation, candidate)
+
+    expect(await provider.candidateStatus(context)).toMatchObject({ pending: 1 })
+    const persisted = (
+      await pool.query<{ payload: Record<string, unknown>; metadata: Record<string, unknown> }>(
+        `SELECT e.payload, c.metadata
+           FROM remem.session_events e
+           JOIN remem.candidate_memories c ON c.session_event_id = e.id
+           WHERE c.id = $1`,
+        [candidate.id],
+      )
+    ).rows[0]
+    expect(persisted).toMatchObject({
+      payload: { host: "opencode-v2", messageId: "message-1" },
+      metadata: { providerId: "remem-local", reasons: ["explicit decision"] },
+    })
+    expect(persisted?.payload).not.toHaveProperty("text")
+    expect(
+      (persisted?.metadata.memory as Record<string, unknown> | undefined)?.content,
+    ).toBeUndefined()
+    expect(
+      (persisted?.metadata.memory as Record<string, unknown> | undefined)?.summary,
+    ).toBeUndefined()
+    expect(
+      (
+        await pool.query<{ count: string }>(
+          "SELECT count(*) FROM remem.candidate_memories WHERE id = $1",
+          [candidate.id],
+        )
+      ).rows[0]?.count,
+    ).toBe("1")
+    expect(await provider.listCandidates("pending")).toContainEqual(
+      expect.objectContaining({
+        id: candidate.id,
+        title: candidate.memory.title,
+        content: candidate.memory.content,
+      }),
+    )
+    const otherProviderCandidate = randomUUID()
+    await pool.query(
+      `INSERT INTO remem.candidate_memories
+        (id, type, title, content, scope_kind, scope_id, confidence, status, metadata)
+       VALUES ($1, 'decision', 'Other provider decision', 'This must not be promoted here.', 'project', 'phoenix', 0.9, 'approved', $2::jsonb)`,
+      [otherProviderCandidate, JSON.stringify({ providerId: "other-provider" })],
+    )
+    await provider.reviewCandidate(candidate.id, "approved")
+    expect(await provider.candidateStatus(context)).toMatchObject({ approved: 1, pending: 0 })
+    expect(await provider.consolidateCandidates()).toMatchObject({ candidates: 1, promoted: 1 })
+    expect(
+      (
+        await pool.query<{ status: string }>(
+          "SELECT status FROM remem.candidate_memories WHERE id = $1",
+          [otherProviderCandidate],
+        )
+      ).rows[0]?.status,
+    ).toBe("approved")
   })
 
   it("reports database, migration, provider, filesystem, and embedding health", async () => {

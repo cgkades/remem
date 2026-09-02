@@ -1,6 +1,17 @@
 import { randomUUID } from "node:crypto"
 import { Pool, type PoolClient, type QueryResultRow } from "pg"
 import type { PostgresProviderConfig } from "../config.js"
+import type {
+  CandidateMemory,
+  CandidateReviewItem,
+  CandidateReviewStore,
+  CandidateStatusSummary,
+  SessionObservation,
+} from "../observation.js"
+import {
+  DeterministicConsolidationPipeline,
+  PostgresConsolidationRunner,
+} from "../consolidation.js"
 import { LocalHashEmbeddingModel, vectorLiteral } from "../storage/embedding.js"
 import type {
   CatalogEntry,
@@ -169,7 +180,7 @@ const BASE_SELECT = `
   LEFT JOIN remem.sources s ON s.id = m.source_id
 `
 
-export class PostgresMemoryProvider implements MemoryProvider {
+export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewStore {
   readonly id: string
   private readonly pool: Pool
   private readonly embeddingModel: EmbeddingModel
@@ -570,6 +581,161 @@ export class PostgresMemoryProvider implements MemoryProvider {
       id,
       this.id,
     ])
+  }
+
+  async persistCandidate(
+    observation: SessionObservation,
+    candidate: CandidateMemory,
+    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<void> {
+    options.signal?.throwIfAborted()
+    if (candidate.status !== "pending")
+      throw new TypeError("automatic capture may only persist pending candidates")
+    const sessionId = observation.context.sessionId
+    if (!sessionId) throw new TypeError("captured observations require a session id")
+    const client = await this.pool.connect()
+    try {
+      await client.query("BEGIN")
+      if (options.timeoutMs) {
+        await client.query("SELECT set_config('statement_timeout', $1, true)", [
+          String(options.timeoutMs),
+        ])
+      }
+      options.signal?.throwIfAborted()
+      await client.query(
+        `INSERT INTO remem.session_events
+         (id, session_id, project_id, kind, occurred_at, payload)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb)
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          observation.id,
+          sessionId,
+          observation.context.projectId,
+          observation.kind,
+          observation.occurredAt,
+          JSON.stringify({
+            ...Object.fromEntries(
+              Object.entries(observation.payload).filter(([key]) => key !== "text"),
+            ),
+            source: observation.source,
+          }),
+        ],
+      )
+      options.signal?.throwIfAborted()
+      await client.query(
+        `INSERT INTO remem.candidate_memories
+         (id, session_event_id, type, title, content, scope_kind, scope_id, confidence, status, metadata)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9::jsonb)
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          candidate.id,
+          observation.id,
+          candidate.memory.type,
+          candidate.memory.title,
+          candidate.memory.content,
+          candidate.memory.scope.kind,
+          scopeId(candidate.memory, observation.context) ?? null,
+          clamp(candidate.confidence, 0.5),
+          JSON.stringify({
+            providerId: this.id,
+            memory: Object.fromEntries(
+              Object.entries(candidate.memory).filter(
+                ([key]) => key !== "title" && key !== "content" && key !== "summary",
+              ),
+            ),
+            reasons: candidate.reasons,
+            observationIds: candidate.observationIds,
+          }),
+        ],
+      )
+      options.signal?.throwIfAborted()
+      await client.query("COMMIT")
+    } catch (error) {
+      await client.query("ROLLBACK")
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
+  async candidateStatus(context: MemoryContext): Promise<CandidateStatusSummary> {
+    const result = await this.pool.query<{ status: keyof CandidateStatusSummary; count: string }>(
+      `SELECT c.status, count(*)::text AS count
+       FROM remem.candidate_memories c
+       JOIN remem.session_events e ON e.id = c.session_event_id
+       WHERE c.metadata->>'providerId' = $1
+         AND e.project_id = $2
+         AND ($3::text IS NULL OR e.session_id = $3)
+       GROUP BY c.status`,
+      [this.id, context.projectId, context.sessionId ?? null],
+    )
+    const summary: CandidateStatusSummary = {
+      pending: 0,
+      approved: 0,
+      consolidating: 0,
+      rejected: 0,
+      promoted: 0,
+      expired: 0,
+    }
+    for (const row of result.rows) summary[row.status] = Number(row.count)
+    return summary
+  }
+
+  async listCandidates(status?: CandidateMemory["status"]): Promise<CandidateReviewItem[]> {
+    const result = await this.pool.query<{
+      id: string
+      type: MemoryRecord["type"]
+      title: string
+      content: string
+      scope_kind: MemoryScope["kind"]
+      scope_id: string | null
+      confidence: number | null
+      status: CandidateMemory["status"]
+      created_at: Date
+      reasons: string[]
+    }>(
+      `SELECT c.id, c.type, c.title, c.content, c.scope_kind, c.scope_id, c.confidence, c.status, c.created_at,
+         COALESCE(c.metadata->'reasons', '[]'::jsonb) AS reasons
+       FROM remem.candidate_memories c
+       WHERE c.metadata->>'providerId' = $1
+         AND ($2::text IS NULL OR c.status = $2)
+       ORDER BY c.created_at DESC
+       LIMIT 100`,
+      [this.id, status ?? null],
+    )
+    return result.rows.map((row) => ({
+      id: row.id,
+      type: row.type,
+      title: row.title,
+      content: row.content,
+      scope: { kind: row.scope_kind, ...(row.scope_id ? { id: row.scope_id } : {}) },
+      ...(row.confidence === null ? {} : { confidence: row.confidence }),
+      status: row.status,
+      createdAt: row.created_at.toISOString(),
+      reasons: row.reasons,
+    }))
+  }
+
+  async reviewCandidate(id: string, status: "approved" | "rejected"): Promise<void> {
+    if (!UUID_PATTERN.test(id)) throw new TypeError("candidate id must be a UUID")
+    const result = await this.pool.query<{ id: string }>(
+      `UPDATE remem.candidate_memories
+       SET status = $3, reviewed_at = now()
+       WHERE id = $1 AND metadata->>'providerId' = $2 AND status = 'pending'
+       RETURNING id`,
+      [id, this.id, status],
+    )
+    if (!result.rows[0]) throw new Error("pending candidate not found")
+  }
+
+  async consolidateCandidates(batchSize = 50) {
+    return new PostgresConsolidationRunner(
+      this.pool,
+      new DeterministicConsolidationPipeline(this, { batchSize }),
+      batchSize,
+      undefined,
+      this.id,
+    ).run()
   }
 
   async health(): Promise<ProviderHealth> {

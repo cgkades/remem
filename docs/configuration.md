@@ -72,11 +72,36 @@ A managed installation writes a protected config similar to:
 }
 ```
 
-Config format `version: 1` is not the database schema version. The current database schema is version 3.
+Config format `version: 1` is not the database schema version. The current database schema is version 4.
 
 The config and managed `.env` contain credentials. On POSIX platforms Remem writes config, `.env`,
 and generated Compose files with mode `0600`, and creates config/data/backup directories with mode
 `0700`. It also writes backup artifacts with mode `0600`.
+
+## Session Capture
+
+Capture is disabled by default. Enable it on first setup with `remem init --capture`, enable it for
+an existing setup by rerunning that command, or set `capture.enabled` to `true` in application or
+inline plugin configuration. A partial inline `capture` configuration overrides only the supplied
+capture fields and retains the installed provider configuration when inline `providers` are omitted.
+
+```json
+{
+  "capture": {
+    "enabled": true,
+    "queueLimit": 32,
+    "maxInputCharacters": 2000,
+    "maxCandidateCharacters": 1500,
+    "timeoutMs": 1000
+  }
+}
+```
+
+Only explicit user corrections, decisions, and preferences qualify. Prompts containing reusable
+credentials, reported quoted/retrieved text, or tool output are excluded. Capture never reads model or tool
+responses. It creates pending candidates only; inspect them with `remem candidates`, approve or
+reject each with `remem review <ID> --approve|--reject`, and promote approved candidates with
+`remem consolidate`.
 
 ## OpenCode v2 Plugin Options
 

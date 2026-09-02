@@ -35,13 +35,15 @@ What works now:
 - managed CRUD and supersession through `PostgresMemoryProvider` and `MemoryManager`;
 - deterministic, bounded consolidation of approved candidates with duplicate merging, provenance,
   conflict preservation, supersession, and restart-safe PostgreSQL run records;
+- opt-in bounded, deterministic capture of explicit user corrections, decisions, and preferences into
+  reviewable pending candidates;
 - OpenCode tools `memory_search`, `memory_status`, and `memory_explain`;
 - logical backup and guarded restore/reset commands; and
 - an executable evaluation corpus plus PostgreSQL integration tests in CI on Node.js 22 and 24.
 
-Remem does **not** automatically write sessions or model output to durable memory. The observation
-and candidate types and schema are foundations only; applications must make explicit, authorized
-mutation calls.
+Remem never stores model or tool output as durable memory. Capture is disabled by default and must be
+enabled with `remem init --capture` or `capture.enabled`; it writes only eligible explicit user
+statements into **pending** candidates. Review/approval and consolidation remain explicit operations.
 
 ## Install from Source
 

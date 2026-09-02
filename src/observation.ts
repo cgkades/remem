@@ -24,8 +24,54 @@ export interface CandidateMemory {
   observationIds: string[]
   memory: MemoryWrite
   confidence: number
-  status: "pending" | "approved" | "rejected" | "promoted" | "expired"
+  status: "pending" | "approved" | "consolidating" | "rejected" | "promoted" | "expired"
   reasons: string[]
+}
+
+export interface CandidateStatusSummary {
+  pending: number
+  approved: number
+  consolidating: number
+  rejected: number
+  promoted: number
+  expired: number
+}
+
+export interface CandidateReviewItem {
+  id: string
+  type: MemoryWrite["type"]
+  title: string
+  content: string
+  scope: MemoryWrite["scope"]
+  confidence?: number
+  status: CandidateMemory["status"]
+  createdAt: string
+  reasons: string[]
+}
+
+export interface ObservationStore {
+  persistCandidate(
+    observation: SessionObservation,
+    candidate: CandidateMemory,
+    options?: { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<void>
+  candidateStatus(context: MemoryContext): Promise<CandidateStatusSummary>
+}
+
+export interface CandidateReviewStore extends ObservationStore {
+  listCandidates(status?: CandidateMemory["status"]): Promise<CandidateReviewItem[]>
+  reviewCandidate(id: string, status: "approved" | "rejected"): Promise<void>
+}
+
+export function isObservationStore(value: unknown): value is ObservationStore {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "persistCandidate" in value &&
+    typeof value.persistCandidate === "function" &&
+    "candidateStatus" in value &&
+    typeof value.candidateStatus === "function"
+  )
 }
 
 export interface CandidateExtractor {

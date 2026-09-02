@@ -18,7 +18,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Platform-specific configuration and data directories, environment overrides, generated database
   credentials, and restrictive file permissions.
 - Ordered transactional migrations with advisory locking and checksum validation. The current
-  database schema is version 3.
+  database schema is version 4.
 - `PostgresMemoryProvider` with scoped full-text and pgvector search, provenance, entities,
   relationships, catalog records, health checks, CRUD, and transactional supersession.
 - `MemoryManager` as the explicit provider-neutral API for point reads and managed mutations.

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto"
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
-import type { MemoryProviderConfig, PlannerConfig, TokenBudgets } from "../config.js"
+import type { CaptureConfig, MemoryProviderConfig, PlannerConfig, TokenBudgets } from "../config.js"
 import { rememPaths, type RememPaths } from "./paths.js"
 
 export interface ManagedStorageConfig {
@@ -34,6 +34,7 @@ export interface RememAppConfig {
   maxResults?: number
   debug?: boolean
   compaction?: boolean
+  capture?: Partial<CaptureConfig>
   embedding: {
     provider: "local-hash"
     model: "remem-local-hash-v1"
@@ -96,7 +97,17 @@ export async function writeAppConfig(
 export async function loadInstalledPluginOptions(options: unknown): Promise<unknown> {
   if (isRecord(options) && Object.hasOwn(options, "providers")) return options
   try {
-    return await readAppConfig()
+    const installed = await readAppConfig()
+    if (!isRecord(options)) return installed
+    return {
+      ...installed,
+      ...options,
+      providers: Object.hasOwn(options, "providers") ? options.providers : installed.providers,
+      capture:
+        isRecord(installed.capture) && isRecord(options.capture)
+          ? { ...installed.capture, ...options.capture }
+          : (options.capture ?? installed.capture),
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
     return options

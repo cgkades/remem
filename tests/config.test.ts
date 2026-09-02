@@ -12,6 +12,7 @@ describe("parseConfig", () => {
       type: "markdown",
     })
     expect(parsed.config.debug).toBe(false)
+    expect(parsed.config.capture.enabled).toBe(false)
   })
 
   it("disables unsupported providers without rejecting the plugin configuration", () => {
@@ -51,6 +52,19 @@ describe("parseConfig", () => {
     expect(parsed.config.budgets.catalogTokens).toBe(200)
     expect(parsed.config.budgets.recallTokens).toBe(50_000)
     expect(parsed.config.providerTimeoutMs).toBe(50)
+  })
+
+  it("requires explicit capture enablement and bounds its queue and input limits", () => {
+    const parsed = parseConfig({
+      providers: [],
+      capture: { enabled: true, queueLimit: 0, maxInputCharacters: 999_999 },
+    })
+
+    expect(parsed.config.capture).toMatchObject({
+      enabled: true,
+      queueLimit: 1,
+      maxInputCharacters: 20_000,
+    })
   })
 
   it("disables duplicate provider IDs deterministically", () => {

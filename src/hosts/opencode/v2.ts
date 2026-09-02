@@ -1,5 +1,6 @@
 import { Plugin } from "@opencode-ai/plugin"
 import type { Context } from "@opencode-ai/plugin/promise/plugin"
+import { createCaptureCoordinator, type CaptureCoordinator } from "../../capture.js"
 import { parseConfig } from "../../config.js"
 import { RememOrchestrator } from "../../orchestrator.js"
 import { createProviders } from "../../providers/factory.js"
@@ -133,6 +134,8 @@ export const RememPlugin = Plugin.define({
     const logger = consoleLogger()
     let providers: MemoryProvider[] = []
     let contextRegistration: { dispose(): Promise<void> } | undefined
+    let promptRegistration: { dispose(): Promise<void> } | undefined
+    let capture: CaptureCoordinator | undefined
     try {
       const parsed = parseConfig(await loadInstalledPluginOptions(context.options))
       for (const diagnostic of parsed.diagnostics) {
@@ -145,6 +148,25 @@ export const RememPlugin = Plugin.define({
         safeLoggerCall(logger, "warn", "provider.initialization_failed", { message: diagnostic })
       }
       const orchestrator = new RememOrchestrator(created.providers, parsed.config, logger)
+      capture = createCaptureCoordinator(created.providers, parsed.config, logger)
+      const coordinator = capture
+      if (coordinator) {
+        promptRegistration = await context.session.hook("prompt", (event) => {
+          try {
+            coordinator.enqueue({
+              host: "opencode-v2",
+              context: memoryContext(location, event.sessionID),
+              sessionId: event.sessionID,
+              messageId: event.messageID,
+              text: event.prompt.text,
+            })
+          } catch (error) {
+            safeLoggerCall(logger, "warn", "capture.enqueue_failed", {
+              error: error instanceof Error ? error.name : "unknown error",
+            })
+          }
+        })
+      }
       contextRegistration = await context.session.hook("context", async (event) => {
         try {
           await injectV2DispatchMemory(
@@ -160,14 +182,13 @@ export const RememPlugin = Plugin.define({
       })
       const toolRegistration = await registerTools(context, orchestrator, location)
       return async () => {
-        await Promise.allSettled([
-          contextRegistration?.dispose(),
-          toolRegistration.dispose(),
-          disposeProviders(providers),
-        ])
+        await Promise.allSettled([contextRegistration?.dispose(), promptRegistration?.dispose()])
+        await capture?.dispose()
+        await Promise.allSettled([toolRegistration.dispose(), disposeProviders(providers)])
       }
     } catch (error) {
-      await Promise.allSettled([contextRegistration?.dispose(), disposeProviders(providers)])
+      await Promise.allSettled([contextRegistration?.dispose(), promptRegistration?.dispose()])
+      await Promise.allSettled([capture?.dispose(), disposeProviders(providers)])
       safeLoggerCall(logger, "error", "plugin.initialization_failed", {
         error: error instanceof Error ? error.name : "unknown error",
       })

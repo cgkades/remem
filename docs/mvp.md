@@ -15,7 +15,7 @@ that path durable without coupling orchestration policy to one database.
 - Managed and external `PostgresMemoryProvider` using the same schema.
 - Docker Compose provisioning pinned to `pgvector/pgvector:0.8.1-pg16` on loopback.
 - CLI lifecycle, diagnostics, migrations, backup, restore, and managed reset.
-- Database schema version 3 with checksummed transactional migrations.
+- Database schema version 4 with checksummed transactional migrations.
 - PostgreSQL full-text search and 384-dimensional pgvector search.
 - Deterministic Stage 0 and local semantic Stage 1 provider/topic recognition.
 - `EmbeddingModel` extension point and the local `remem-local-hash-v1` feature-hash model.

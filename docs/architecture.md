@@ -24,13 +24,15 @@ It is deliberately not `prompt -> vector search -> nearest-neighbor dump`.
 ## Architecture Status
 
 The implementation includes the host-independent core, Markdown and PostgreSQL providers, managed
-and external database modes, schema version 3, deterministic and local semantic recognition,
+and external database modes, schema version 4, deterministic and local semantic recognition,
 provider/topic awareness, bounded extractive synthesis, explicit CRUD/supersession APIs, logical
 backup/restore commands, the primary OpenCode v2 adapter, and the isolated v1 adapter.
 
-Automatic session writing and consolidation are not implemented. Arbitrary-depth topic population
-and branch rendering, a general neural embedding model, model planning/synthesis, scheduled backup
-and retention, and non-Markdown/non-PostgreSQL adapters remain target architecture.
+Opt-in capture observes only explicit user corrections, decisions, and preferences from the OpenCode
+adapters. It excludes sensitive, reported quoted speech, tool, and retrieved text; writes pending candidates; and
+requires explicit review before consolidation. Arbitrary-depth topic population and branch rendering,
+a general neural embedding model, model planning/synthesis, scheduled backup and retention, and
+non-Markdown/non-PostgreSQL adapters remain target architecture.
 
 OpenCode v2 is the current official API but is still beta as of 2026-09-01. Remem therefore treats
 its API as a versioned adapter boundary rather than as a stable core dependency.

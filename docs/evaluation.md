@@ -65,7 +65,7 @@ Separate tests cover:
 - provenance-preserving exact-content deduplication;
 - untrusted instruction-like memory rendering;
 - v2 system-policy/user-data separation and the v1 compatibility path;
-- migration clean install, version 1 through version 3 upgrade, and repeated no-op migration;
+- migration clean install, version 1 through version 4 upgrade, and repeated no-op migration;
 - PostgreSQL CRUD, scope filtering, provenance, full-text/vector search, supersession, and embedding
   failure fallback;
 - managed loopback Compose generation and protected files; and

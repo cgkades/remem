@@ -66,4 +66,35 @@ describe("installed configuration", () => {
       "postgres://override/other",
     )
   })
+
+  it("merges a capture-only inline override with installed providers", async () => {
+    const location = await paths()
+    const installed = {
+      ...config("managed", "postgres://managed/remem"),
+      providers: [
+        {
+          type: "postgres" as const,
+          id: "remem-local",
+          connectionString: "postgres://managed/remem",
+          primary: true,
+          maxConnections: 2,
+          catalogLimit: 100,
+        },
+      ],
+      capture: { enabled: true },
+    }
+    await writeAppConfig(installed, location)
+    vi.stubEnv("REMEM_CONFIG", location.configFile)
+
+    expect(await loadInstalledPluginOptions({ capture: { enabled: false } })).toMatchObject({
+      providers: [{ id: "remem-local" }],
+      capture: { enabled: false },
+    })
+    expect(
+      await loadInstalledPluginOptions({
+        providers: [],
+        capture: { enabled: false },
+      }),
+    ).toEqual({ providers: [], capture: { enabled: false } })
+  })
 })

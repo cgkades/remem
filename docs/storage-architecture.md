@@ -79,15 +79,16 @@ Migration `0001_initial_schema.sql` creates:
 - GIN, scope/freshness, HNSW cosine, and catalog-provider indexes.
 
 Migration `0002_consolidation_observation.sql` adds session events, candidate memories, and
-consolidation records. These tables are foundations only. No current host adapter automatically
-writes session events, candidates, or consolidated memories.
+consolidation records. Opt-in OpenCode capture writes only metadata/provenance to session events and
+keeps candidate text in the candidate row. Candidates begin pending, are explicitly approved or
+rejected, and approved batches can be consolidated.
 
 Migration `0003_scoped_entities_catalog_embeddings.sql` splits legacy entities by provider and scope,
 then adds metadata-only catalog embeddings. Migration `0001` remains immutable so databases created
 by earlier builds upgrade without checksum drift.
 
 The application config has `version: 1`; that is the config-file format and is independent of
-database schema version 3.
+database schema version 4.
 
 ## Migration Integrity
 

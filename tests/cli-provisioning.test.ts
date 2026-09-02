@@ -120,6 +120,35 @@ describe("CLI provisioning", () => {
     expect(errors.join("\n")).not.toContain("secret")
   })
 
+  it("rejects an invalid candidate status before connecting to PostgreSQL", async () => {
+    const paths = await temporaryPaths()
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: "postgres://user:secret@localhost/remem" },
+      providers: [
+        {
+          type: "postgres",
+          id: "remem-local",
+          connectionString: "postgres://user:secret@localhost/remem",
+          primary: true,
+          maxConnections: 1,
+          catalogLimit: 10,
+        },
+      ],
+      embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
+    }
+    await writeAppConfig(config, paths)
+    const errors: string[] = []
+
+    expect(
+      await runCli(["candidates", "--status", "invalid"], {
+        paths,
+        stderr: (line) => errors.push(line),
+      }),
+    ).toBe(1)
+    expect(errors.join("\n")).toContain("--status must be one of")
+  })
+
   it("redacts configured secrets from subprocess failures", async () => {
     const runner = new NodeProcessRunner()
     await expect(
