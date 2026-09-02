@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { appendFile, copyFile, mkdir, mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -779,4 +780,3 @@ integration("PostgreSQL managed provider", () => {
     }
   })
 })
-import { randomUUID } from "node:crypto"
