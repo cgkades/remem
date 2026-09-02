@@ -209,7 +209,9 @@ async function mockModel() {
   const server = createServer((incoming, response) => {
     handleModelRequest(incoming, response, requests).catch((error) => {
       if (!response.headersSent) response.writeHead(500, { "content-type": "application/json" })
-      response.end(JSON.stringify({ error: error instanceof Error ? error.message : "mock model failure" }))
+      response.end(
+        JSON.stringify({ error: error instanceof Error ? error.message : "mock model failure" }),
+      )
     })
   })
   await new Promise((resolve, reject) => {
@@ -325,7 +327,16 @@ async function startOpenCodeServer(executable, workspace, environment, attempts 
     const serverURL = `http://127.0.0.1:${port}`
     const handle = start(
       executable,
-      ["serve", "--hostname", "127.0.0.1", "--port", String(port), "--log-level", "debug", "--print-logs"],
+      [
+        "serve",
+        "--hostname",
+        "127.0.0.1",
+        "--port",
+        String(port),
+        "--log-level",
+        "debug",
+        "--print-logs",
+      ],
       { cwd: workspace, env: environment },
     )
     try {
