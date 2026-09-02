@@ -87,7 +87,7 @@ integration("PostgreSQL managed provider", () => {
       )
 
       const upgraded = await runMigrations(pool)
-      expect(upgraded).toMatchObject({ applied: [2, 3, 4], currentVersion: 4 })
+      expect(upgraded).toMatchObject({ applied: [2, 3, 4, 5], currentVersion: 5 })
       expect(
         (
           await pool.query<{ count: string }>(
@@ -105,7 +105,7 @@ integration("PostgreSQL managed provider", () => {
       ).toBeNull()
 
       const repeated = await runMigrations(pool)
-      expect(repeated).toMatchObject({ applied: [], currentVersion: 4 })
+      expect(repeated).toMatchObject({ applied: [], currentVersion: 5 })
 
       await copyFile(
         path.join(process.cwd(), "migrations/0002_consolidation_observation.sql"),
@@ -613,6 +613,16 @@ integration("PostgreSQL managed provider", () => {
     } finally {
       await rm(root, { recursive: true, force: true })
     }
+  })
+
+  it("creates the embedding_settings singleton table", async () => {
+    const result = await pool.query(
+      "SELECT column_name FROM information_schema.columns WHERE table_schema = 'remem' AND table_name = 'embedding_settings'",
+    )
+    const columns = result.rows.map((row: { column_name: string }) => row.column_name)
+    expect(columns).toEqual(
+      expect.arrayContaining(["id", "model", "dimensions", "updated_at"]),
+    )
   })
 })
 import { randomUUID } from "node:crypto"
