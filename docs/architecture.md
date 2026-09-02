@@ -116,7 +116,7 @@ The injector builds two sections:
 1. Persistent memory awareness and the compact catalog.
 2. Retrieved working memory for the current prompt, only when planning and recall succeed.
 
-The stable OpenCode hook writes these sections to `UserMessage.system` during prompt admission.
+The non-experimental OpenCode hook writes these sections to `UserMessage.system` during prompt admission.
 OpenCode then includes that field while assembling each model dispatch for the turn. Experimental
 compaction support is isolated in the OpenCode compatibility module.
 
@@ -131,7 +131,7 @@ deduplication, and estimated token use. Normal logging contains no raw memory co
 An orchestrator instance belongs to one OpenCode project instance. It stores only:
 
 - the current in-memory catalog snapshot;
-- provider health metadata;
+- provider capabilities and bounded last-turn diagnostics;
 - bounded last-turn traces by session; and
 - no durable memory contents beyond provider-owned files.
 
@@ -147,7 +147,7 @@ Every augmentation path fails open:
 - one provider failure: use settled results from other providers;
 - all providers fail: inject no recalled memory;
 - synthesis failure: inject catalog only;
-- OpenCode compatibility-hook mismatch: retain stable prompt admission;
+- OpenCode compatibility-hook mismatch: retain non-experimental prompt admission;
 - logging failure: do not affect context assembly.
 
 Errors appear in diagnostics but are not inserted into the model context as facts.

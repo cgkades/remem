@@ -8,6 +8,10 @@ Remem is not intended to replace Mem0, Cognee, Obsidian, Markdown notes, session
 servers, or other memory stores. It is the control plane that teaches OpenCode what can be
 remembered and when to look.
 
+This project is not affiliated with the existing Rust project
+[`majiayu000/remem`](https://github.com/majiayu000/remem), which targets Claude Code and Codex. The
+distinct npm package name for this OpenCode plugin is `opencode-remem`.
+
 ```text
 recognition -> retrieval planning -> recall -> synthesis -> context injection
 ```
@@ -21,7 +25,7 @@ The current MVP provides:
 - a compact, token-budgeted memory catalog;
 - deterministic prompt recognition and staged retrieval planning;
 - failure-isolated provider queries, deduplication, ranking, and attributed synthesis;
-- per-turn context injection through OpenCode's stable `chat.message` hook;
+- per-turn context injection through OpenCode's non-experimental `chat.message` hook;
 - compact catalog preservation through OpenCode's currently experimental compaction hook;
 - `memory_search` and `memory_status` tools;
 - structured, content-safe debug traces; and
@@ -47,7 +51,7 @@ Reference the built plugin from `opencode.json`:
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
     [
-      "file:///absolute/path/to/remem/dist/index.js",
+      "file:///absolute/path/to/remem/dist/server.js",
       {
         "providers": [
           {
@@ -65,7 +69,8 @@ Reference the built plugin from `opencode.json`:
 ```
 
 Paths are resolved from OpenCode's worktree. If no provider is configured, Remem looks in
-`.remem/memory` and remains inert when that directory does not exist.
+`.remem/memory`. When that directory does not exist, Remem injects only the bounded memory-awareness
+instructions and retrieves no notes.
 
 Restart OpenCode after changing plugin configuration.
 
@@ -90,6 +95,10 @@ Decision: use logical replication.
 
 Previous blocker: extension compatibility.
 ```
+
+`workspace` notes are visible when their configured root is inside the current worktree. `project`
+and `session` notes require a matching `scope-id` frontmatter value. Use `global` only for content
+that may be recalled in every workspace using that provider.
 
 See [`examples/`](examples/) for a complete setup.
 

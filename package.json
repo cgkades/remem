@@ -2,12 +2,21 @@
   "name": "opencode-remem",
   "version": "0.1.0",
   "description": "Memory orchestration for OpenCode",
+  "homepage": "https://github.com/cgkades/remem#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cgkades/remem.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cgkades/remem/issues"
+  },
   "type": "module",
   "license": "Apache-2.0",
   "private": false,
   "sideEffects": false,
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "opencode": ">=1.18.26 <2"
   },
   "files": [
     "dist",
@@ -22,6 +31,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
     "./core": {
       "types": "./dist/core.d.ts",
       "import": "./dist/core.js"
@@ -33,6 +46,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
+    "prepack": "npm run build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit"
@@ -47,7 +61,7 @@
     "agent"
   ],
   "dependencies": {
-    "@opencode-ai/plugin": "^1.18.26"
+    "@opencode-ai/plugin": "1.18.26"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

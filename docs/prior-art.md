@@ -71,6 +71,12 @@ before integration.
 These projects show valuable retrieval, storage, and lifecycle patterns. Remem's distinction is
 that providers remain adapters and the main product is recognition and routing policy.
 
+## Same-Name Project
+
+[`majiayu000/remem`](https://github.com/majiayu000/remem) is an existing, unrelated Rust project for
+local-first Claude Code and Codex memory. This project retains the user-selected Remem name but uses
+the distinct `opencode-remem` npm identity and documents the difference to reduce confusion.
+
 ## MCP and Agent Memory
 
 The [official MCP memory server](https://github.com/modelcontextprotocol/servers/tree/main/src/memory)

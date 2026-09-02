@@ -29,21 +29,21 @@ belong in an entry.
 
 A normalized record contains:
 
-| Field | Meaning |
-| --- | --- |
-| `providerId` | Adapter that supplied the record |
-| `id` | Provider-specific stable identifier |
-| `title` | Human-readable subject |
-| `content` | Original provider content or excerpt |
-| `source` | Path, URI, session reference, or provider locator |
-| `scope` | Visibility boundary |
-| `type` | Semantic, episodic, decision, preference, procedure, task, or other |
-| `createdAt` | Source creation time, when known |
-| `updatedAt` | Source update time, when known |
-| `confidence` | Source/provider confidence, not retrieval relevance |
-| `importance` | Durable priority hint |
-| `freshness` | Current, stale, superseded, or unknown |
-| `metadata` | Provider-specific non-secret metadata |
+| Field        | Meaning                                                             |
+| ------------ | ------------------------------------------------------------------- |
+| `providerId` | Adapter that supplied the record                                    |
+| `id`         | Provider-specific stable identifier                                 |
+| `title`      | Human-readable subject                                              |
+| `content`    | Original provider content or excerpt                                |
+| `source`     | Path, URI, session reference, or provider locator                   |
+| `scope`      | Visibility boundary                                                 |
+| `type`       | Semantic, episodic, decision, preference, procedure, task, or other |
+| `createdAt`  | Source creation time, when known                                    |
+| `updatedAt`  | Source update time, when known                                      |
+| `confidence` | Source/provider confidence, not retrieval relevance                 |
+| `importance` | Durable priority hint                                               |
+| `freshness`  | Current, stale, superseded, or unknown                              |
+| `metadata`   | Provider-specific non-secret metadata                               |
 
 `MemoryResult` wraps a record with query-dependent data such as retrieval score and match reasons.
 Generated synthesis is never converted into an original provider record without an explicit write
@@ -53,15 +53,20 @@ and provenance link.
 
 Initial scopes are:
 
-| Scope | Intended content |
-| --- | --- |
-| `global` | Durable user preferences and cross-project knowledge |
-| `workspace` | Knowledge attached to an OpenCode worktree |
-| `project` | Logical project knowledge when a workspace hosts multiple projects |
-| `session` | Temporary continuity and episodic state |
+| Scope       | Intended content                                                   |
+| ----------- | ------------------------------------------------------------------ |
+| `global`    | Durable user preferences and cross-project knowledge               |
+| `workspace` | Knowledge attached to an OpenCode worktree                         |
+| `project`   | Logical project knowledge when a workspace hosts multiple projects |
+| `session`   | Temporary continuity and episodic state                            |
 
 Retrieval orders equally relevant memories from narrowest to broadest scope, but broader scopes
 remain searchable. Scope is an access and relevance boundary, not merely a ranking tag.
+
+The Markdown adapter binds a `workspace` note to the current worktree only when its configured root
+is inside that worktree. Markdown notes using `project` or `session` scope require `scope-id` in
+frontmatter and are excluded unless it matches the current project or session ID. Global notes have
+no owner ID and are intentionally available across contexts that configure the provider.
 
 Future scopes may include organization, team, repository, and branch. Adding one should not change
 provider method signatures.

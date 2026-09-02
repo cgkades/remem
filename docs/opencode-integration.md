@@ -36,14 +36,14 @@ and global plugins are loaded once at startup, so configuration changes require 
 
 ## Hooks Used
 
-| Hook | Stability | Remem use |
-| --- | --- | --- |
-| `chat.message` | stable | Read the admitted prompt, plan recall, and append bounded context to `output.message.system` |
-| `tool` | stable | Register `memory_search` and `memory_status` |
-| `event` | stable | Reserved for future session observation; not used for durable capture in the MVP |
-| `experimental.session.compacting` | experimental | Add catalog-only continuity guidance to compaction context |
+| Hook                              | Stability                      | Remem use                                                                                    |
+| --------------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------- |
+| `chat.message`                    | non-experimental typed surface | Read the admitted prompt, plan recall, and append bounded context to `output.message.system` |
+| `tool`                            | non-experimental typed surface | Register `memory_search` and `memory_status`                                                 |
+| `event`                           | non-experimental typed surface | Reserved for future session observation; not used for durable capture in the MVP             |
+| `experimental.session.compacting` | experimental                   | Add catalog-only continuity guidance to compaction context                                   |
 
-Remem does not use `chat.params` for context. That stable hook modifies sampling and provider
+Remem does not use `chat.params` for context. That non-experimental hook modifies sampling and provider
 options, not messages. Provider-specific request-option tricks would break model portability.
 
 ## Prompt Lifecycle
@@ -61,16 +61,16 @@ For a normal user prompt, current OpenCode behavior is:
 9. run `chat.params` and `chat.headers`; and
 10. dispatch to the provider.
 
-Tool-loop dispatches reuse the admitted user message, so Remem's stable `UserMessage.system`
+Tool-loop dispatches reuse the admitted user message, so Remem's `UserMessage.system`
 injection remains available throughout that turn.
 
 ## Why Stable Prompt Admission
 
-As of the research snapshot, there is no stable hook that mutates the complete assembled system or
+As of the research snapshot, there is no non-experimental hook that mutates the complete assembled system or
 message list immediately before every model dispatch. The dispatch-time hooks are still named
 `experimental.chat.system.transform` and `experimental.chat.messages.transform`.
 
-Remem therefore performs retrieval in stable `chat.message` and writes to the supported
+Remem therefore performs retrieval in non-experimental `chat.message` and writes to the supported
 `UserMessage.system` field. This is persisted by OpenCode and consumed while assembling the provider
 request. It also avoids another LLM call and provides a session ID and the actual admitted parts.
 
@@ -145,10 +145,15 @@ Example:
 }
 ```
 
+Published packages expose `./server` as a plugin-only v1 module (`{ id, server }`). The package root
+and `./core` are library APIs and are not loaded as legacy plugin modules. Source checkouts should
+reference `dist/server.js`, not `dist/index.js`.
+
 ## Compatibility Policy
 
 - Core orchestration imports no OpenCode types.
 - Stable hooks are preferred whenever they can express the behavior.
 - Experimental APIs are isolated in one module and never required for basic prompt operation.
-- Remem tests against its declared minimum and latest OpenCode plugin package in CI when practical.
+- The package declares `engines.opencode: ">=1.18.26 <2"` and pins the hook declarations used for
+  the release. CI currently verifies that declared version on Node.js 22 and 24.
 - Hook mismatches fail open and surface a diagnostic without memory content.

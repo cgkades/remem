@@ -74,8 +74,9 @@ factual confidence.
 ## Deduplication
 
 Results are first deduplicated by `(providerId, id)`, then by normalized content fingerprint. When
-two providers contain equivalent text, Remem keeps one body and preserves all source references in
-the trace. Near-duplicate semantic merging is future work.
+two providers contain equivalent text, Remem keeps one body and preserves duplicate source
+references on the ranked result and in selected synthesis. Near-duplicate semantic merging is
+future work.
 
 ## Synthesis
 
@@ -98,9 +99,10 @@ Configuration separates:
 - `perProviderTokens` for source balance; and
 - a future `synthesisTokens` budget for model-backed synthesis.
 
-The MVP uses a conservative character-based token estimate because tokenizer behavior differs by
-model. Budget accounting is observable and exact provider tokenization can be added behind a model
-adapter.
+The MVP uses UTF-8 byte length as a deliberately conservative upper bound because tokenizer behavior
+differs by model. Truncation occurs at code-point boundaries. This underfills context rather than
+risking a model-specific tokenizer exceeding the configured soft budget. Exact provider
+tokenization can be added behind a model adapter.
 
 When over budget, Remem shortens summaries and excerpts, then drops the lowest-ranked items. It does
 not exceed a configured context budget to preserve every result.

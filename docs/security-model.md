@@ -19,8 +19,12 @@ project names even when note bodies are not injected.
 ### Unintended Disclosure
 
 A broad scope or path could expose one project's memory in another workspace. Remem resolves and
-records scopes explicitly, defaults to a worktree-local directory, and applies configured path
-exclusions before indexing.
+enforces scope owners, defaults to a worktree-local directory, and applies configured path
+exclusions before indexing. Project/session Markdown notes require a matching `scope-id`; external
+workspace roots require one as well.
+
+Explicitly malformed provider lists or scope values fail closed by disabling the affected provider
+or note and emitting a sanitized diagnostic. Defaults apply only when the setting is omitted.
 
 ### Prompt Injection in Memory
 
@@ -82,7 +86,8 @@ Redaction should occur before remote calls, not only before final context inject
 ## Data Retention and Deletion
 
 The MVP reads provider-owned Markdown and retains only an in-memory index and bounded diagnostics.
-It creates no hidden memory database. Deleting a source file removes it on the next catalog refresh.
+It creates no hidden memory database. Index and catalog snapshots expire after 30 seconds; explicit
+refresh also invalidates them. Deleting a source file becomes visible after either event.
 
 Future adapters must document deletion semantics, caches, backups, and whether provider deletion is
 hard, soft, or eventually consistent. `memory_forget` must show the target source and scope before a
@@ -101,6 +106,7 @@ destructive operation.
 
 ## Residual Risks
 
-System-context labeling reduces but cannot eliminate prompt injection from recalled data. Character-
-based token estimates are approximate. A user who configures broad global paths grants Remem access
+System-context labeling and metadata escaping reduce but cannot eliminate prompt injection from
+recalled data. The UTF-8 byte budget deliberately underfills most model token budgets. A user who
+configures broad global paths grants Remem access
 to them. Experimental OpenCode compaction hooks may change before stabilization.

@@ -9,10 +9,11 @@ Memory selected too early can become stale before a model call, while memory ins
 conversation text can be mistaken for user-authored content. The ideal boundary is the assembled
 context immediately before model dispatch.
 
-OpenCode `v1.18.26` has no stable hook that mutates the fully assembled system context at every
-dispatch. Its stable `chat.message` hook can mutate `UserMessage.system`, which OpenCode persists and
-includes when assembling model requests for that turn. Direct dispatch-time transform hooks remain
-experimental.
+OpenCode `v1.18.26` has no non-experimental hook that mutates the fully assembled system context at
+every dispatch. Its non-experimental `chat.message` hook can mutate `UserMessage.system`, which
+OpenCode persists and includes when assembling model requests for that turn. Direct dispatch-time
+transform hooks remain experimental. OpenCode does not publish a broader stability guarantee for
+the non-experimental hook surface.
 
 ## Decision
 
@@ -22,7 +23,7 @@ experimental compaction or future dispatch hook behind the OpenCode compatibilit
 
 ## Consequences
 
-- The MVP uses a stable, typed hook and remains model-provider independent.
+- The MVP uses a non-experimental, typed hook and remains model-provider independent.
 - Tool-loop calls retain the turn's memory context.
 - Synthetic messages do not trigger fresh retrieval.
 - Compaction continuity needs the isolated experimental hook until OpenCode provides a stable one.

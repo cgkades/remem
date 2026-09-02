@@ -1,0 +1,79 @@
+const STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "can",
+  "do",
+  "for",
+  "from",
+  "how",
+  "i",
+  "in",
+  "is",
+  "it",
+  "let",
+  "of",
+  "on",
+  "or",
+  "our",
+  "that",
+  "the",
+  "this",
+  "to",
+  "we",
+  "what",
+  "with",
+  "you",
+])
+
+export function normalizeText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+}
+
+export function containsPhrase(value: string, phrase: string): boolean {
+  const normalizedValue = normalizeText(value)
+  const normalizedPhrase = normalizeText(phrase)
+  return normalizedPhrase.length > 0 && ` ${normalizedValue} `.includes(` ${normalizedPhrase} `)
+}
+
+export function tokenize(value: string): string[] {
+  const tokens = normalizeText(value).split(/\s+/u)
+  return [...new Set(tokens.filter((token) => token.length > 1 && !STOP_WORDS.has(token)))]
+}
+
+export function overlapRatio(left: string[], right: string[]): number {
+  if (left.length === 0 || right.length === 0) return 0
+  const rightSet = new Set(right)
+  const matches = left.filter((token) => rightSet.has(token)).length
+  return matches / left.length
+}
+
+export function clamp(value: number, minimum = 0, maximum = 1): number {
+  return Math.min(maximum, Math.max(minimum, value))
+}
+
+export function compactWhitespace(value: string): string {
+  return value.replace(/\s+/gu, " ").trim()
+}
+
+export function stripControlCharacters(value: string): string {
+  return [...value]
+    .map((character) => {
+      const codePoint = character.codePointAt(0) ?? 0
+      return codePoint <= 31 || codePoint === 127 ? " " : character
+    })
+    .join("")
+}
+
+export function contentFingerprint(value: string): string {
+  return normalizeText(value).replace(/\s+/gu, " ")
+}

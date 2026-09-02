@@ -24,6 +24,9 @@ interface MemoryProvider {
 
 The implemented TypeScript declaration in `src/types.ts` is authoritative.
 
+`RememOrchestrator` accepts the backend-neutral `OrchestratorConfig`. Markdown provider options and
+OpenCode compaction options live only in the plugin-level `RememConfig` and composition adapter.
+
 ## Capabilities
 
 Capabilities are explicit booleans for:
@@ -54,11 +57,17 @@ A search request includes:
 Results return normalized records and query-dependent retrieval signals. Provider scores should be
 normalized to `0..1` when possible, but are not assumed comparable across providers.
 
+Providers must honor `limit` and `maxTokens` before returning result bodies. Core synthesis applies
+its own independent context budget as a second boundary.
+
 ## Catalog Contract
 
 Catalog enumeration should be cheaper and smaller than full retrieval. A provider can return
 metadata-native entries or derive entries from document titles and frontmatter. Catalog failure
 does not disable direct tool search.
+
+Providers may implement `refresh()` to invalidate local indexes. The core keeps context-keyed
+catalog snapshots for a short TTL and does not cache snapshots produced with provider failures.
 
 Providers with no cheap enumeration can return an empty catalog and still support explicit search.
 
@@ -76,6 +85,10 @@ Health checks must not return credentials or sample memory content.
 The reference adapter recursively indexes configured Markdown directories, parses a conservative
 frontmatter subset, applies path exclusions, and performs local lexical search. It does not require
 Obsidian or a database.
+
+The OpenCode composition root currently constructs only this adapter from plugin configuration.
+Other providers are roadmap integrations; the orchestration core already accepts arbitrary
+`MemoryProvider` instances without importing their SDK types.
 
 ### Obsidian
 
