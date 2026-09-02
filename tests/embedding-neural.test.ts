@@ -10,7 +10,7 @@ import {
 // Spy on setGlobalDispatcher while letting ProxyAgent's real constructor
 // run, so tests verify the call without faking the whole undici module.
 vi.mock("undici", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("undici")>()
+  const actual = await importOriginal<typeof undici>()
   return { ...actual, setGlobalDispatcher: vi.fn() }
 })
 
