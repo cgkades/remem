@@ -25,6 +25,11 @@ export interface CaptureConfig {
   timeoutMs: number
 }
 
+export interface EmbeddingConfig {
+  backend: "hash" | "neural"
+  modelPath?: string
+}
+
 export interface MarkdownProviderConfig {
   type: "markdown"
   id: string
@@ -59,6 +64,7 @@ export interface RememConfig extends OrchestratorConfig {
   providers: MemoryProviderConfig[]
   compaction: boolean
   capture: CaptureConfig
+  embedding: EmbeddingConfig
 }
 
 export interface ConfigDiagnostic {
@@ -165,6 +171,22 @@ function parseProvider(
   }
 }
 
+function parseEmbedding(value: unknown, diagnostics: ConfigDiagnostic[]): EmbeddingConfig {
+  const options = isRecord(value) ? value : {}
+  const backend =
+    options.backend === "neural" ? "neural" : options.backend === "hash" ? "hash" : undefined
+  if (options.backend !== undefined && backend === undefined) {
+    diagnostics.push({
+      level: "warn",
+      message: "embedding.backend must be 'hash' or 'neural'; defaulted to 'hash'",
+    })
+  }
+  return {
+    backend: backend ?? "hash",
+    ...(typeof options.modelPath === "string" ? { modelPath: options.modelPath } : {}),
+  }
+}
+
 export function parseConfig(options: unknown): ParsedConfig {
   const diagnostics: ConfigDiagnostic[] = []
   const root = isRecord(options) ? options : {}
@@ -255,6 +277,7 @@ export function parseConfig(options: unknown): ParsedConfig {
         ),
         timeoutMs: finiteNumber(captureOptions.timeoutMs, 1_000, 50, 10_000),
       },
+      embedding: parseEmbedding(root.embedding, diagnostics),
     },
     diagnostics,
   }

@@ -87,3 +87,32 @@ describe("parseConfig", () => {
     expect(malformedScope.diagnostics[0]?.message).toContain("invalid scope")
   })
 })
+
+describe("embedding config", () => {
+  it("defaults to the hash backend", () => {
+    const parsed = parseConfig({})
+
+    expect(parsed.config.embedding).toEqual({ backend: "hash", modelPath: undefined })
+  })
+
+  it("accepts an explicit neural backend", () => {
+    const parsed = parseConfig({ embedding: { backend: "neural" } })
+
+    expect(parsed.config.embedding.backend).toBe("neural")
+  })
+
+  it("accepts a modelPath override", () => {
+    const parsed = parseConfig({
+      embedding: { backend: "neural", modelPath: "/opt/models/bge-small" },
+    })
+
+    expect(parsed.config.embedding.modelPath).toBe("/opt/models/bge-small")
+  })
+
+  it("falls back to hash and warns on an invalid backend value", () => {
+    const parsed = parseConfig({ embedding: { backend: "gpt4" } })
+
+    expect(parsed.config.embedding.backend).toBe("hash")
+    expect(parsed.diagnostics.some((d) => d.message.includes("embedding.backend"))).toBe(true)
+  })
+})
