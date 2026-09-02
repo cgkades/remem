@@ -12,6 +12,7 @@ import {
   DeterministicConsolidationPipeline,
   PostgresConsolidationRunner,
 } from "../consolidation.js"
+import { PostgresReembedRunner } from "../reembedding.js"
 import { LocalHashEmbeddingModel, vectorLiteral } from "../storage/embedding.js"
 import type {
   CatalogEntry,
@@ -751,6 +752,14 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
       undefined,
       this.id,
     ).run()
+  }
+
+  async reembedStale(batchSize = 25) {
+    return new PostgresReembedRunner(this.pool, (text, signal) => this.embeddingModel.embed(text, signal), {
+      modelId: this.embeddingModel.id,
+      dimensions: this.embeddingModel.dimensions,
+      batchSize,
+    }).run()
   }
 
   async health(): Promise<ProviderHealth> {

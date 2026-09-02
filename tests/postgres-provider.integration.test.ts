@@ -679,5 +679,36 @@ integration("PostgreSQL managed provider", () => {
     const columns = result.rows.map((row: { column_name: string }) => row.column_name)
     expect(columns).toEqual(expect.arrayContaining(["id", "model", "dimensions", "updated_at"]))
   })
+
+  it("reembeds a memory stored under a different model id", async () => {
+    const provider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "reembed-test",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 10,
+      },
+      { pool },
+    )
+    const written = await provider.write({
+      title: "Reembed target",
+      content: "Bedrock Claude credential passthrough failure",
+      scope: { kind: "workspace", id: "phoenix" },
+      type: "decision",
+    })
+    await pool.query("UPDATE remem.memory_embeddings SET model = 'stale-model' WHERE memory_id = $1", [
+      written.id,
+    ])
+    const result = await provider.reembedStale(10)
+    expect(result.status).toBe("completed")
+    expect(result.reembedded).toBeGreaterThanOrEqual(1)
+    const row = await pool.query<{ model: string }>(
+      "SELECT model FROM remem.memory_embeddings WHERE memory_id = $1",
+      [written.id],
+    )
+    expect(row.rows[0]?.model).toBe("remem-local-hash-v1")
+  })
 })
 import { randomUUID } from "node:crypto"
