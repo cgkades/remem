@@ -69,6 +69,7 @@
     "prepack": "npm run build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:opencode-v2": "node tests/opencode-v2.e2e.mjs",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
