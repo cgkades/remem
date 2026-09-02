@@ -231,7 +231,9 @@ export class PostgresMemoryProvider implements MemoryProvider {
     signal.throwIfAborted()
     const result = await this.pool.query<CatalogRow>(
       `
-        SELECT ce.*,
+        SELECT ce.id, ce.memory_id, ce.parent_id, ce.title, ce.summary, ce.aliases, ce.tags,
+          ce.scope_kind, ce.scope_id, ce.unresolved, ce.source,
+          CASE WHEN m.freshness = 'stale' THEN ce.importance * 0.5 ELSE ce.importance END AS importance,
           CASE WHEN ce.embedding_model = $6 AND ce.embedding_dimensions = $7
             THEN ce.embedding::text ELSE NULL END AS embedding
         FROM remem.catalog_entries ce
@@ -241,8 +243,8 @@ export class PostgresMemoryProvider implements MemoryProvider {
           (ce.scope_kind = 'workspace' AND ce.scope_id = $2) OR
           (ce.scope_kind = 'project' AND ce.scope_id = $3) OR
           (ce.scope_kind = 'session' AND ce.scope_id = $4)
-        ) AND (m.id IS NULL OR m.freshness = 'current')
-        ORDER BY ce.importance DESC, ce.updated_at DESC
+        ) AND (m.id IS NULL OR m.freshness <> 'superseded')
+        ORDER BY importance DESC, ce.updated_at DESC
         LIMIT $5
       `,
       [

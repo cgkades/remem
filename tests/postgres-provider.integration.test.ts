@@ -253,12 +253,18 @@ integration("PostgreSQL managed provider", () => {
       ],
     })
     expect((await provider.get(memory.id, context))?.freshness).toBe("superseded")
-    expect(
-      (await provider.catalog(context, new AbortController().signal)).map((entry) => entry.id),
-    ).not.toContain(memory.id)
-    expect(
-      (await provider.catalog(context, new AbortController().signal)).map((entry) => entry.id),
-    ).toContain(replacement.id)
+    const stale = await provider.write({
+      type: "decision",
+      title: "Stale Bedrock migration note",
+      content: "The legacy credential flow used static access keys.",
+      scope: { kind: "project", id: "phoenix" },
+      freshness: "stale",
+      importance: 0.8,
+    })
+    const catalog = await provider.catalog(context, new AbortController().signal)
+    expect(catalog.map((entry) => entry.id)).not.toContain(memory.id)
+    expect(catalog.map((entry) => entry.id)).toContain(replacement.id)
+    expect(catalog).toContainEqual(expect.objectContaining({ id: stale.id, importance: 0.4 }))
     await expect(
       provider.update(memory.id, {
         type: "decision",
@@ -377,6 +383,71 @@ integration("PostgreSQL managed provider", () => {
         )
       ).rows[0],
     ).toMatchObject({ status: "completed", output_memory_ids: firstRun.outputMemoryIds })
+  })
+
+  it("recovers an interrupted claim before reclaiming and promoting its candidate", async () => {
+    const provider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "remem-local",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 100,
+      },
+      { pool },
+    )
+    const candidateId = randomUUID()
+    const interruptedRunId = randomUUID()
+    const title = "Recovered interrupted consolidation candidate"
+    await pool.query(
+      `INSERT INTO remem.candidate_memories
+        (id, type, title, content, scope_kind, scope_id, confidence, status, metadata)
+       VALUES ($1, 'procedure', $2, 'This candidate was claimed before the process crashed.', 'project', 'phoenix', 0.9, 'consolidating', '{}'::jsonb)`,
+      [candidateId, title],
+    )
+    await pool.query(
+      `INSERT INTO remem.consolidation_records
+        (id, kind, status, input_memory_ids, started_at)
+       VALUES ($1, 'candidate-consolidation', 'started', $2, now() - interval '1 hour')`,
+      [interruptedRunId, [candidateId]],
+    )
+    const runner = new PostgresConsolidationRunner(
+      pool,
+      new DeterministicConsolidationPipeline(provider),
+      50,
+      1,
+    )
+
+    const recoveredRun = await runner.run()
+    const repeatedRun = await runner.run()
+
+    expect(recoveredRun).toMatchObject({ status: "completed", candidates: 1, promoted: 1 })
+    expect(repeatedRun).toMatchObject({ status: "completed", candidates: 0 })
+    expect(
+      (
+        await pool.query<{ status: string }>(
+          "SELECT status FROM remem.consolidation_records WHERE id = $1",
+          [interruptedRunId],
+        )
+      ).rows[0]?.status,
+    ).toBe("failed")
+    expect(
+      (
+        await pool.query<{ status: string }>(
+          "SELECT status FROM remem.candidate_memories WHERE id = $1",
+          [candidateId],
+        )
+      ).rows[0]?.status,
+    ).toBe("promoted")
+    expect(
+      (
+        await pool.query<{ count: string }>(
+          "SELECT count(*) FROM remem.memories WHERE provider_id = 'remem-local' AND title = $1",
+          [title],
+        )
+      ).rows[0]?.count,
+    ).toBe("1")
   })
 
   it("reports database, migration, provider, filesystem, and embedding health", async () => {
