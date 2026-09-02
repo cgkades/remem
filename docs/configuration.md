@@ -65,12 +65,17 @@ A managed installation writes a protected config similar to:
     }
   ],
   "embedding": {
-    "provider": "local-hash",
-    "model": "remem-local-hash-v1",
+    "provider": "neural",
+    "model": "bge-small-en-v1.5",
     "dimensions": 384
   }
 }
 ```
+
+`remem init` writes `provider: "neural"` by default for both `--mode managed` and `--mode external`.
+This `embedding` object is the app-config shape (`provider`/`model`/`dimensions`); it is distinct
+from the plugin-options `embedding` shape described in
+[Embedding Options](#embedding-options) below — see that section for the difference.
 
 Config format `version: 1` is not the database schema version. The current database schema is version 4.
 
@@ -154,6 +159,39 @@ If `providers` is omitted from both inline options and installed config, Remem d
 read-only Markdown provider named `workspace-memory` at `.remem/memory`. The generated application
 config includes `providers`, so a normal `remem init` installation uses PostgreSQL instead.
 
+## Embedding Options
+
+An optional `embedding` block selects the `EmbeddingModel` used for Stage 1
+semantic recall:
+
+```json
+{
+  "options": {
+    "embedding": {
+      "backend": "neural",
+      "modelPath": "/absolute/path/to/pre-staged/bge-small-en-v1.5"
+    }
+  }
+}
+```
+
+- `backend`: `"hash"` (default when omitted) or `"neural"`. `"hash"` uses the
+  zero-dependency `remem-local-hash-v1` model; `"neural"` loads
+  `bge-small-en-v1.5` via `@huggingface/transformers` and falls back to
+  `"hash"` automatically if the model can't be loaded.
+- `modelPath` (optional): a local directory of pre-staged model weights,
+  for air-gapped installs where downloading from huggingface.co isn't
+  possible. Only meaningful with `backend: "neural"`.
+
+This `{ backend, modelPath }` shape is the plugin-options `embedding` block. It is a **separate,
+non-interchangeable** object from the app-config `embedding` shape (`{ provider, model, dimensions }`)
+shown in [Generated Application Config](#generated-application-config) above — the two happen to
+share the key name `embedding` but have no overlapping fields. `remem init` writes the app-config
+shape with the neural backend already selected, independent of this plugin-options block. See
+[`docs/embeddings.md`](./embeddings.md) for model details and re-embedding behavior, or
+[`docs/embeddings.md#if-the-download-is-blocked-firewalls-air-gapped-environments`](./embeddings.md#if-the-download-is-blocked-firewalls-air-gapped-environments)
+for the first-time download flow and offline fallback.
+
 ## PostgreSQL Provider Options
 
 Inline PostgreSQL configuration accepts a direct connection string or an environment-variable name:
@@ -190,10 +228,15 @@ Out-of-range numeric values are clamped. Non-numeric values use defaults.
 deterministic recognition has no plan or is below `deterministicHighConfidence`. Set
 `planner.semantic` to `false` to disable it.
 
-The default local model is always `remem-local-hash-v1` with 384 dimensions in app-generated config.
-It performs deterministic feature hashing with a small concept vocabulary. It is not a general
-neural model. Library consumers can construct `RememOrchestrator` or `PostgresMemoryProvider` with a
-different `EmbeddingModel`.
+The default local model depends on how Remem was configured. App-generated config from
+`remem init --mode managed` or `--mode external` defaults to the neural `bge-small-en-v1.5` model,
+384 dimensions, with automatic fail-open fallback to `remem-local-hash-v1` if the neural backend
+can't be loaded. Plugin-only installs (no app-generated config, `providers` set inline) default to
+`remem-local-hash-v1`, 384 dimensions, deterministic feature hashing with a small concept
+vocabulary — not a general neural model — unless `embedding.backend` is set to `"neural"`. See
+[Embedding Options](#embedding-options) and [`docs/embeddings.md`](./embeddings.md) for details.
+Library consumers can construct `RememOrchestrator` or `PostgresMemoryProvider` with a different
+`EmbeddingModel`.
 
 ## Debugging
 

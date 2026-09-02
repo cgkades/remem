@@ -30,9 +30,11 @@ backup/restore commands, the primary OpenCode v2 adapter, and the isolated v1 ad
 
 Opt-in capture observes only explicit user corrections, decisions, and preferences from the OpenCode
 adapters. It excludes sensitive, reported quoted speech, tool, and retrieved text; writes pending candidates; and
-requires explicit review before consolidation. Arbitrary-depth topic population and branch rendering,
-a general neural embedding model, model planning/synthesis, scheduled backup and retention, and
-non-Markdown/non-PostgreSQL adapters remain target architecture.
+requires explicit review before consolidation. A general neural embedding model
+(`bge-small-en-v1.5`, via `@huggingface/transformers`) is implemented and is the `remem init`
+default; see [Embeddings](embeddings.md). Arbitrary-depth topic population and branch rendering,
+model planning/synthesis, scheduled backup and retention, and non-Markdown/non-PostgreSQL adapters
+remain target architecture.
 
 OpenCode v2 is the current official API but is still beta as of 2026-09-01. Remem therefore treats
 its API as a versioned adapter boundary rather than as a stable core dependency.
@@ -110,11 +112,12 @@ Planning has three bounded stages:
 3. Stage 2 is reserved for an optional model planner when earlier stages are ambiguous; it is not
    implemented.
 
-The current Stage 1 uses a local 384-dimensional deterministic feature-hash model for topic and
-provider awareness. PostgreSQL persists those vectors in pgvector for record retrieval. The model
-has small concept groups and is not a general neural embedding model; `EmbeddingModel` permits an
-explicit replacement. Embedding generation or vector-search failure falls back to deterministic and
-lexical signals.
+The current Stage 1 uses a local 384-dimensional `EmbeddingModel` for topic and provider awareness.
+`remem init` selects the neural `bge-small-en-v1.5` model by default; plugin-only installs default
+to the deterministic feature-hash `remem-local-hash-v1` model with small concept groups, and either
+model can fail open to the other. PostgreSQL persists those vectors in pgvector for record
+retrieval. See [Embeddings](embeddings.md) for both models. Embedding generation or vector-search
+failure falls back to deterministic and lexical signals.
 
 ## Provider Orchestration
 

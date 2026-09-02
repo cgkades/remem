@@ -45,6 +45,12 @@ Initialization:
 6. applies schema migrations through version 4; and
 7. runs doctor checks.
 
+`remem init` selects the `bge-small-en-v1.5` neural embedding model by
+default for both `--mode managed` and `--mode external`, and prints a
+warning that its weights (~30MB) download once, on first use. See
+[`docs/embeddings.md#if-the-download-is-blocked-firewalls-air-gapped-environments`](./embeddings.md#if-the-download-is-blocked-firewalls-air-gapped-environments)
+for offline/air-gapped fallback options, and `remem doctor` to check backlog status.
+
 Choose a starting port explicitly when needed:
 
 ```sh

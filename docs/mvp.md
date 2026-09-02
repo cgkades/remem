@@ -33,8 +33,8 @@ The canonical runtime, storage, installation, and future-learning diagrams remai
 ## Not Included
 
 - Automatic session observation, candidate extraction, durable capture, or consolidation.
-- A general neural embedding model; the default uses deterministic feature hashing and small concept
-  groups.
+- Standing background re-embedding for idle instances; re-embedding after a model change only
+  progresses opportunistically while OpenCode is in active use (see [Embeddings](embeddings.md)).
 - An LLM planner or model-backed synthesizer.
 - Full automatic population/rendering of arbitrary-depth topic branches.
 - Mem0, Cognee, MCP, OpenCode session-history, or Obsidian-specific adapters.
