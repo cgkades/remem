@@ -1,6 +1,7 @@
 import { MemoryCatalog, renderCatalog } from "./catalog.js"
 import type { OrchestratorConfig } from "./config.js"
 import { MemoryDiagnostics } from "./diagnostics.js"
+import type { ObservationStore } from "./observation.js"
 import { DeterministicRetrievalPlanner } from "./planner.js"
 import { SemanticCatalogRecognizer, type SemanticRecognitionResult } from "./planning/semantic.js"
 import { RecallEngine } from "./recall.js"
@@ -400,6 +401,25 @@ export class RememOrchestrator {
         }
       }),
     )
+    const candidates = await Promise.all(
+      this.providers.map(async (provider) => {
+        const store = provider as MemoryProvider & Partial<ObservationStore>
+        if (!store.candidateStatus) return undefined
+        try {
+          const candidateStatus = store.candidateStatus.bind(store)
+          return {
+            providerId: provider.id,
+            ...(await withTimeout(this.config.providerTimeoutMs, () => candidateStatus(context))),
+          }
+        } catch (error) {
+          return {
+            providerId: provider.id,
+            status: "unavailable",
+            error: error instanceof Error ? error.name : "unknown error",
+          }
+        }
+      }),
+    )
     return {
       providers,
       catalog: {
@@ -409,6 +429,7 @@ export class RememOrchestrator {
         diagnostics: catalog.diagnostics,
       },
       budgets: this.config.budgets,
+      candidates: candidates.filter((candidate) => candidate !== undefined),
       lastTrace: this.diagnostics.latest(context.sessionId),
     }
   }

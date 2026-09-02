@@ -143,6 +143,7 @@ function appConfig(
       model: "remem-local-hash-v1",
       dimensions: 384,
     },
+    capture: { enabled: true },
     ...(opencode ? { opencode } : {}),
   }
 }

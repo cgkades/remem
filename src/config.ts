@@ -17,6 +17,14 @@ export interface SemanticPlannerConfig {
   deterministicHighConfidence: number
 }
 
+export interface CaptureConfig {
+  enabled: boolean
+  queueLimit: number
+  maxInputCharacters: number
+  maxCandidateCharacters: number
+  timeoutMs: number
+}
+
 export interface MarkdownProviderConfig {
   type: "markdown"
   id: string
@@ -50,6 +58,7 @@ export interface OrchestratorConfig {
 export interface RememConfig extends OrchestratorConfig {
   providers: MemoryProviderConfig[]
   compaction: boolean
+  capture: CaptureConfig
 }
 
 export interface ConfigDiagnostic {
@@ -206,6 +215,7 @@ export function parseConfig(options: unknown): ParsedConfig {
 
   const budgetOptions = isRecord(root.budgets) ? root.budgets : {}
   const plannerOptions = isRecord(root.planner) ? root.planner : {}
+  const captureOptions = isRecord(root.capture) ? root.capture : {}
 
   return {
     config: {
@@ -233,6 +243,18 @@ export function parseConfig(options: unknown): ParsedConfig {
       maxResults: finiteNumber(root.maxResults, 8, 1, 100),
       debug: root.debug === true,
       compaction: root.compaction !== false,
+      capture: {
+        enabled: captureOptions.enabled === true,
+        queueLimit: finiteNumber(captureOptions.queueLimit, 32, 1, 1_000),
+        maxInputCharacters: finiteNumber(captureOptions.maxInputCharacters, 2_000, 256, 20_000),
+        maxCandidateCharacters: finiteNumber(
+          captureOptions.maxCandidateCharacters,
+          1_500,
+          128,
+          10_000,
+        ),
+        timeoutMs: finiteNumber(captureOptions.timeoutMs, 1_000, 50, 10_000),
+      },
     },
     diagnostics,
   }

@@ -24,8 +24,26 @@ export interface CandidateMemory {
   observationIds: string[]
   memory: MemoryWrite
   confidence: number
-  status: "pending" | "approved" | "rejected" | "promoted" | "expired"
+  status: "pending" | "approved" | "consolidating" | "rejected" | "promoted" | "expired"
   reasons: string[]
+}
+
+export interface CandidateStatusSummary {
+  pending: number
+  approved: number
+  consolidating: number
+  rejected: number
+  promoted: number
+  expired: number
+}
+
+export interface ObservationStore {
+  persistCandidate(
+    observation: SessionObservation,
+    candidate: CandidateMemory,
+    signal?: AbortSignal,
+  ): Promise<void>
+  candidateStatus(context: MemoryContext): Promise<CandidateStatusSummary>
 }
 
 export interface CandidateExtractor {

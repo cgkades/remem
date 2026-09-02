@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto"
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
-import type { MemoryProviderConfig, PlannerConfig, TokenBudgets } from "../config.js"
+import type { CaptureConfig, MemoryProviderConfig, PlannerConfig, TokenBudgets } from "../config.js"
 import { rememPaths, type RememPaths } from "./paths.js"
 
 export interface ManagedStorageConfig {
@@ -34,6 +34,7 @@ export interface RememAppConfig {
   maxResults?: number
   debug?: boolean
   compaction?: boolean
+  capture?: Partial<CaptureConfig>
   embedding: {
     provider: "local-hash"
     model: "remem-local-hash-v1"

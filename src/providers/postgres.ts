@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto"
 import { Pool, type PoolClient, type QueryResultRow } from "pg"
 import type { PostgresProviderConfig } from "../config.js"
+import type {
+  CandidateMemory,
+  CandidateStatusSummary,
+  ObservationStore,
+  SessionObservation,
+} from "../observation.js"
 import { LocalHashEmbeddingModel, vectorLiteral } from "../storage/embedding.js"
 import type {
   CatalogEntry,
@@ -169,7 +175,7 @@ const BASE_SELECT = `
   LEFT JOIN remem.sources s ON s.id = m.source_id
 `
 
-export class PostgresMemoryProvider implements MemoryProvider {
+export class PostgresMemoryProvider implements MemoryProvider, ObservationStore {
   readonly id: string
   private readonly pool: Pool
   private readonly embeddingModel: EmbeddingModel
@@ -570,6 +576,86 @@ export class PostgresMemoryProvider implements MemoryProvider {
       id,
       this.id,
     ])
+  }
+
+  async persistCandidate(
+    observation: SessionObservation,
+    candidate: CandidateMemory,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    signal?.throwIfAborted()
+    if (candidate.status !== "pending")
+      throw new TypeError("automatic capture may only persist pending candidates")
+    const sessionId = observation.context.sessionId
+    if (!sessionId) throw new TypeError("captured observations require a session id")
+    const client = await this.pool.connect()
+    try {
+      await client.query("BEGIN")
+      await client.query(
+        `INSERT INTO remem.session_events
+          (id, session_id, project_id, kind, occurred_at, payload)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb)`,
+        [
+          observation.id,
+          sessionId,
+          observation.context.projectId,
+          observation.kind,
+          observation.occurredAt,
+          JSON.stringify({ ...observation.payload, source: observation.source }),
+        ],
+      )
+      await client.query(
+        `INSERT INTO remem.candidate_memories
+          (id, session_event_id, type, title, content, scope_kind, scope_id, confidence, status, metadata)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9::jsonb)`,
+        [
+          candidate.id,
+          observation.id,
+          candidate.memory.type,
+          candidate.memory.title,
+          candidate.memory.content,
+          candidate.memory.scope.kind,
+          scopeId(candidate.memory, observation.context) ?? null,
+          clamp(candidate.confidence, 0.5),
+          JSON.stringify({
+            providerId: this.id,
+            memory: candidate.memory,
+            reasons: candidate.reasons,
+            observationIds: candidate.observationIds,
+          }),
+        ],
+      )
+      signal?.throwIfAborted()
+      await client.query("COMMIT")
+    } catch (error) {
+      await client.query("ROLLBACK")
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
+  async candidateStatus(context: MemoryContext): Promise<CandidateStatusSummary> {
+    const result = await this.pool.query<{ status: keyof CandidateStatusSummary; count: string }>(
+      `SELECT c.status, count(*)::text AS count
+       FROM remem.candidate_memories c
+       JOIN remem.session_events e ON e.id = c.session_event_id
+       WHERE c.metadata->>'providerId' = $1
+         AND e.project_id = $2
+         AND ($3::text IS NULL OR e.session_id = $3)
+       GROUP BY c.status`,
+      [this.id, context.projectId, context.sessionId ?? null],
+    )
+    const summary: CandidateStatusSummary = {
+      pending: 0,
+      approved: 0,
+      consolidating: 0,
+      rejected: 0,
+      promoted: 0,
+      expired: 0,
+    }
+    for (const row of result.rows) summary[row.status] = Number(row.count)
+    return summary
   }
 
   async health(): Promise<ProviderHealth> {
