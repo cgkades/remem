@@ -86,6 +86,7 @@
     "agent"
   ],
   "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "@opencode-ai/plugin": "0.0.0-beta-18743",
     "@types/node": "^22.20.1",
     "@types/pg": "^8.23.1",
