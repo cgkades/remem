@@ -155,6 +155,8 @@ The v1 compatibility contract is pinned to the official OpenCode `v1.18.26` rele
   `@opencode-ai/cli@0.0.0-beta-18743` runtime, and drives its HTTP API against a local deterministic
   OpenAI-compatible mock. It verifies plugin loading, dispatch injection, tool-loop continuity,
   transcript isolation, unrelated-prompt isolation, and fail-open behavior with an unavailable
-  PostgreSQL provider. Run it locally with `npm run test:opencode-v2`.
+  PostgreSQL provider. Run it locally with `npm run test:opencode-v2`, or in a Linux container
+  (native arm64 on Apple Silicon, no emulation needed — the beta runtime ships
+  `@opencode-ai/cli-linux-arm64`) with `npm run test:opencode-v2:docker`.
 - Hook mismatches fail open and surface a diagnostic without memory content.
 - No adapter automatically reads or writes historical sessions.

@@ -70,6 +70,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:opencode-v2": "node tests/opencode-v2.e2e.mjs",
+    "test:opencode-v2:docker": "docker build -f docker/opencode-v2-e2e.Dockerfile -t remem-opencode-v2-e2e . && docker run --rm remem-opencode-v2-e2e",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [

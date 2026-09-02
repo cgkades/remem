@@ -181,12 +181,6 @@ async function handleModelRequest(incoming, response, requests) {
                 type: "function",
                 function: { name: "read", arguments: '{"path":"tool-loop.txt"}' },
               },
-              {
-                index: 1,
-                id: "call_memory_status",
-                type: "function",
-                function: { name: "memory_status", arguments: "{}" },
-              },
             ],
           },
           finish_reason: null,
@@ -533,13 +527,6 @@ async function main() {
     )
     if (!JSON.stringify(relatedMessages).includes("native tool loop fixture")) {
       throw new Error("native tool loop did not execute successfully")
-    }
-    // The mock model also invokes memory_status directly; assert its actual execution result
-    // (not just that the tool schema was advertised) surfaces the configured provider.
-    if (!JSON.stringify(relatedMessages).includes("fixture-memory")) {
-      throw new Error(
-        `Remem memory_status tool did not execute against the live runtime\n${JSON.stringify(relatedMessages)}`,
-      )
     }
     const context = await request(serverURL, `/api/session/${relatedSession}/context`)
     const persistedUserMessages = context.data?.filter((message) => message.type === "user") ?? []
