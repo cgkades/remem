@@ -7,5 +7,6 @@ export default defineConfig({
       reporter: ["text", "json-summary"],
     },
     include: ["tests/**/*.test.ts"],
+    exclude: ["**/*.eval.test.ts"],
   },
 })
