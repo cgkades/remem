@@ -1,12 +1,16 @@
 import os from "node:os"
 import path from "node:path"
 import type { MemoryProviderConfig } from "../config.js"
-import type { MemoryProvider } from "../types.js"
+import type { EmbeddingModel, MemoryProvider } from "../types.js"
 import { MarkdownMemoryProvider } from "./markdown.js"
 import { PostgresMemoryProvider } from "./postgres.js"
 
 export interface ProviderFactoryLocation {
   worktree: string
+}
+
+export interface ProviderFactoryOptions {
+  embeddingModel?: EmbeddingModel
 }
 
 export interface ProviderFactoryResult {
@@ -23,6 +27,7 @@ export function resolveProviderPath(value: string, worktree: string): string {
 export function createProviders(
   configs: MemoryProviderConfig[],
   location: ProviderFactoryLocation,
+  options: ProviderFactoryOptions = {},
 ): ProviderFactoryResult {
   const providers: MemoryProvider[] = []
   const diagnostics: string[] = []
@@ -30,7 +35,12 @@ export function createProviders(
   for (const config of configs) {
     try {
       if (config.type === "postgres") {
-        providers.push(new PostgresMemoryProvider(config))
+        providers.push(
+          new PostgresMemoryProvider(
+            config,
+            options.embeddingModel ? { embeddingModel: options.embeddingModel } : {},
+          ),
+        )
       } else {
         providers.push(
           new MarkdownMemoryProvider(

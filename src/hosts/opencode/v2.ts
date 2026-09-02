@@ -5,6 +5,7 @@ import { parseConfig } from "../../config.js"
 import { RememOrchestrator } from "../../orchestrator.js"
 import { createProviders } from "../../providers/factory.js"
 import { loadInstalledPluginOptions } from "../../storage/config-file.js"
+import { createEmbeddingModel } from "../../storage/embedding-neural.js"
 import type { MemoryContext, MemoryProvider, RememLogger } from "../../types.js"
 import {
   TRUSTED_REMEM_INSTRUCTION,
@@ -142,12 +143,19 @@ export const RememPlugin = Plugin.define({
         safeLoggerCall(logger, diagnostic.level, "config.invalid", { message: diagnostic.message })
       }
       const location = hostLocation(context)
-      const created = createProviders(parsed.config.providers, { worktree: location.worktree })
+      const embeddingModel = await createEmbeddingModel(parsed.config.embedding)
+      const created = createProviders(
+        parsed.config.providers,
+        { worktree: location.worktree },
+        { embeddingModel },
+      )
       providers = created.providers
       for (const diagnostic of created.diagnostics) {
         safeLoggerCall(logger, "warn", "provider.initialization_failed", { message: diagnostic })
       }
-      const orchestrator = new RememOrchestrator(created.providers, parsed.config, logger)
+      const orchestrator = new RememOrchestrator(created.providers, parsed.config, logger, {
+        embeddingModel,
+      })
       capture = createCaptureCoordinator(created.providers, parsed.config, logger)
       const coordinator = capture
       if (coordinator) {

@@ -335,6 +335,63 @@ integration("PostgreSQL managed provider", () => {
     )
   })
 
+  it("rejects an embedding model with the wrong dimensions", () => {
+    const badModel: EmbeddingModel = {
+      id: "fake-768",
+      dimensions: 768,
+      embed: () => Promise.resolve(new Array<number>(768).fill(0)),
+    }
+    expect(
+      () =>
+        new PostgresMemoryProvider(
+          {
+            type: "postgres",
+            id: "x",
+            connectionString: databaseUrl ?? "",
+            primary: true,
+            maxConnections: 1,
+            catalogLimit: 10,
+          },
+          { embeddingModel: badModel },
+        ),
+    ).toThrow(/384-dimensional/)
+  })
+
+  it("records the configured embedding model in embedding_settings on construction", async () => {
+    const recordingModel: EmbeddingModel = {
+      id: "recorded-model-v1",
+      dimensions: 384,
+      embed: () => Promise.resolve(new Array<number>(384).fill(0)),
+    }
+    const provider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "remem-local",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 1,
+        catalogLimit: 10,
+      },
+      { pool, embeddingModel: recordingModel },
+    )
+    try {
+      let row: { model: string; dimensions: number } | undefined
+      for (let attempt = 0; attempt < 20 && !row; attempt++) {
+        const result = await pool.query<{ model: string; dimensions: number }>(
+          "SELECT model, dimensions FROM remem.embedding_settings WHERE id = true",
+        )
+        row = result.rows[0]
+        if (!row || row.model !== recordingModel.id) {
+          row = undefined
+          await new Promise((resolve) => setTimeout(resolve, 25))
+        }
+      }
+      expect(row).toEqual({ model: recordingModel.id, dimensions: recordingModel.dimensions })
+    } finally {
+      await provider.close()
+    }
+  })
+
   it("claims approved candidates, records the run, and safely skips a repeated run", async () => {
     const provider = new PostgresMemoryProvider(
       {
@@ -620,9 +677,7 @@ integration("PostgreSQL managed provider", () => {
       "SELECT column_name FROM information_schema.columns WHERE table_schema = 'remem' AND table_name = 'embedding_settings'",
     )
     const columns = result.rows.map((row: { column_name: string }) => row.column_name)
-    expect(columns).toEqual(
-      expect.arrayContaining(["id", "model", "dimensions", "updated_at"]),
-    )
+    expect(columns).toEqual(expect.arrayContaining(["id", "model", "dimensions", "updated_at"]))
   })
 })
 import { randomUUID } from "node:crypto"

@@ -3,7 +3,7 @@ import { access, readFile, stat } from "node:fs/promises"
 import { Pool } from "pg"
 import { createProviders } from "../providers/factory.js"
 import { PostgresMemoryProvider } from "../providers/postgres.js"
-import { LocalHashEmbeddingModel } from "../storage/embedding.js"
+import { createEmbeddingModel } from "../storage/embedding-neural.js"
 import { migrationStatus } from "../storage/migrations.js"
 import { openCodeConfigPath, type RememPaths } from "../storage/paths.js"
 import type { RememAppConfig } from "../storage/config-file.js"
@@ -166,12 +166,17 @@ export async function runDoctor(
   }
 
   try {
-    const model = new LocalHashEmbeddingModel()
+    const model = await createEmbeddingModel({
+      backend: config.embedding.provider === "neural" ? "neural" : "hash",
+    })
     const embedding = await model.embed("Remem doctor")
+    const fellBack = model.id !== config.embedding.model
     checks.push({
       name: "embedding configuration",
-      status: embedding.length === config.embedding.dimensions ? "ok" : "error",
-      detail: `${model.id}; ${embedding.length} dimensions`,
+      status: embedding.length !== config.embedding.dimensions ? "error" : fellBack ? "warn" : "ok",
+      detail: fellBack
+        ? `configured model ${config.embedding.model} unavailable; fell back to ${model.id}; ${embedding.length} dimensions`
+        : `${model.id}; ${embedding.length} dimensions`,
     })
   } catch {
     checks.push({ name: "embedding configuration", status: "error", detail: "embedding failed" })

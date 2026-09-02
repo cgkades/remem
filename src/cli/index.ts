@@ -282,6 +282,10 @@ function primaryPostgresProvider(config: RememAppConfig): PostgresMemoryProvider
       candidate.type === "postgres" && candidate.primary,
   )
   if (!provider) throw new Error("candidate management requires a primary PostgreSQL provider")
+  // Intentionally defaults to LocalHashEmbeddingModel: candidates/review/consolidate
+  // operate on text content, not semantic search, so they don't need the
+  // configured neural embedding backend. Do not "fix" this to thread the
+  // configured model through — it would add cost with no benefit here.
   return new PostgresMemoryProvider(provider)
 }
 
