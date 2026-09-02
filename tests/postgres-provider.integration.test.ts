@@ -779,4 +779,116 @@ integration("PostgreSQL managed provider", () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it("reports a re-embed backlog in doctor output", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remem-doctor-backlog-"))
+    const paths = rememPaths({
+      REMEM_CONFIG_DIR: path.join(root, "config"),
+      REMEM_DATA_DIR: path.join(root, "data"),
+    })
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: databaseUrl ?? "" },
+      providers: [],
+      embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
+    }
+    const original = (
+      await pool.query<{ memory_id: string; model: string }>(
+        "SELECT memory_id, model FROM remem.memory_embeddings",
+      )
+    ).rows
+    try {
+      await mkdir(paths.dataDir, { recursive: true, mode: 0o700 })
+      await writeAppConfig(config, paths)
+      await pool.query("UPDATE remem.memory_embeddings SET model = 'stale-model'")
+
+      const report = await runDoctor(config, paths, {
+        run: () => Promise.resolve({ stdout: "", stderr: "" }),
+      })
+      const check = report.checks.find((c) => c.name === "embedding backlog")
+      expect(check?.status).toBe("warn")
+      expect(check?.detail).toMatch(/\d+ memor(y|ies) pending re-embedding/)
+    } finally {
+      for (const row of original) {
+        await pool.query("UPDATE remem.memory_embeddings SET model = $2 WHERE memory_id = $1", [
+          row.memory_id,
+          row.model,
+        ])
+      }
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it("reports the embedding_settings record health in doctor output", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remem-doctor-settings-"))
+    const paths = rememPaths({
+      REMEM_CONFIG_DIR: path.join(root, "config"),
+      REMEM_DATA_DIR: path.join(root, "data"),
+    })
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: databaseUrl ?? "" },
+      providers: [],
+      embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
+    }
+    const original = (
+      await pool.query<{ model: string; dimensions: number; updated_at: string }>(
+        "SELECT model, dimensions, updated_at FROM remem.embedding_settings WHERE id = true",
+      )
+    ).rows[0]
+    try {
+      await mkdir(paths.dataDir, { recursive: true, mode: 0o700 })
+      await writeAppConfig(config, paths)
+
+      await pool.query(
+        `INSERT INTO remem.embedding_settings (id, model, dimensions)
+           VALUES (true, $1, $2)
+         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions`,
+        [config.embedding.model, config.embedding.dimensions],
+      )
+      const matching = await runDoctor(config, paths, {
+        run: () => Promise.resolve({ stdout: "", stderr: "" }),
+      })
+      expect(
+        matching.checks.find((c) => c.name === "embedding settings persistence"),
+      ).toMatchObject({
+        status: "ok",
+      })
+
+      await pool.query(
+        `INSERT INTO remem.embedding_settings (id, model, dimensions)
+           VALUES (true, $1, $2)
+         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions`,
+        ["stale-recorded-model", 384],
+      )
+      const mismatched = await runDoctor(config, paths, {
+        run: () => Promise.resolve({ stdout: "", stderr: "" }),
+      })
+      const mismatchCheck = mismatched.checks.find(
+        (c) => c.name === "embedding settings persistence",
+      )
+      expect(mismatchCheck?.status).toBe("warn")
+      expect(mismatchCheck?.detail).toContain("stale-recorded-model")
+      expect(mismatchCheck?.detail).toContain(config.embedding.model)
+
+      await pool.query("DELETE FROM remem.embedding_settings WHERE id = true")
+      const missing = await runDoctor(config, paths, {
+        run: () => Promise.resolve({ stdout: "", stderr: "" }),
+      })
+      expect(missing.checks.find((c) => c.name === "embedding settings persistence")).toMatchObject(
+        {
+          status: "warn",
+        },
+      )
+    } finally {
+      await pool.query("DELETE FROM remem.embedding_settings WHERE id = true")
+      if (original) {
+        await pool.query(
+          "INSERT INTO remem.embedding_settings (id, model, dimensions, updated_at) VALUES (true, $1, $2, $3)",
+          [original.model, original.dimensions, original.updated_at],
+        )
+      }
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })
