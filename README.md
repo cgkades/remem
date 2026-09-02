@@ -1,4 +1,8 @@
-# Remem
+# ReMem
+
+<p align="center">
+  <img src="docs/assets/remem-logo.svg" alt="ReMem — Remember What Matters" width="720" />
+</p>
 
 Remem is a local-first memory orchestration plugin for [OpenCode](https://opencode.ai). It recognizes
 when prior work may matter, routes bounded recall across memory providers, and injects attributed
