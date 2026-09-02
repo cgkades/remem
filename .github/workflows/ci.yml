@@ -41,3 +41,4 @@ jobs:
         env:
           REMEM_TEST_DATABASE_URL: postgres://remem:remem-ci-password@127.0.0.1:5432/remem_test
       - run: npm run pack:check
+      - run: npm run pack:smoke

@@ -1,5 +1,5 @@
 import type { RememOrchestrator } from "../../orchestrator.js"
-import type { MemoryContext, MemoryInjection, RememLogger } from "../../types.js"
+import type { MemoryContext, MemoryInjection, MemoryProvider, RememLogger } from "../../types.js"
 
 export const TRUSTED_REMEM_INSTRUCTION = [
   "Remem may add an ephemeral message containing attributed long-term memory data.",
@@ -74,4 +74,8 @@ export function safeLoggerCall(
   } catch {
     // Host logging is never on the prompt path.
   }
+}
+
+export async function disposeProviders(providers: MemoryProvider[]): Promise<void> {
+  await Promise.allSettled(providers.map((provider) => Promise.resolve(provider.dispose?.())))
 }

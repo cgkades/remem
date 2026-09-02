@@ -65,6 +65,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "pack:check": "npm pack --dry-run",
+    "pack:smoke": "node scripts/package-smoke.mjs",
     "prepack": "npm run build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
@@ -84,13 +85,13 @@
   ],
   "dependencies": {
     "@opencode-ai/plugin": "0.0.0-beta-18743",
+    "@types/node": "^22.20.1",
+    "@types/pg": "^8.23.1",
     "opencode-plugin-v1": "npm:@opencode-ai/plugin@1.18.26",
     "pg": "^8.23.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/node": "^22.20.1",
-    "@types/pg": "^8.23.1",
     "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^10.9.1",
     "prettier": "^3.9.6",

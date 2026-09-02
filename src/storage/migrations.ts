@@ -25,6 +25,30 @@ export class MigrationIntegrityError extends Error {
   override readonly name = "MigrationIntegrityError"
 }
 
+interface AppliedMigration {
+  version: number
+  name: string
+  checksum: string
+}
+
+function verifyAppliedMigrations(
+  migrations: Migration[],
+  appliedMigrations: AppliedMigration[],
+): void {
+  for (const [index, applied] of appliedMigrations.entries()) {
+    if (applied.version !== index + 1) {
+      throw new MigrationIntegrityError("applied migrations do not form a contiguous prefix")
+    }
+    const expected = migrations.find((migration) => migration.version === applied.version)
+    if (!expected) {
+      throw new MigrationIntegrityError(`database has unknown migration ${applied.version}`)
+    }
+    if (expected.name !== applied.name || expected.checksum !== applied.checksum) {
+      throw new MigrationIntegrityError(`migration ${applied.version} checksum mismatch`)
+    }
+  }
+}
+
 function defaultMigrationDirectory(): string {
   return fileURLToPath(new URL("../../migrations/", import.meta.url))
 }
@@ -79,24 +103,10 @@ export async function runMigrations(
   try {
     await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK])
     await bootstrap(client)
-    const result = await client.query<{
-      version: number
-      name: string
-      checksum: string
-    }>("SELECT version, name, checksum FROM remem.schema_migrations ORDER BY version")
-
-    for (const [index, applied] of result.rows.entries()) {
-      if (applied.version !== index + 1) {
-        throw new MigrationIntegrityError("applied migrations do not form a contiguous prefix")
-      }
-      const expected = migrations.find((migration) => migration.version === applied.version)
-      if (!expected) {
-        throw new MigrationIntegrityError(`database has unknown migration ${applied.version}`)
-      }
-      if (expected.name !== applied.name || expected.checksum !== applied.checksum) {
-        throw new MigrationIntegrityError(`migration ${applied.version} checksum mismatch`)
-      }
-    }
+    const result = await client.query<AppliedMigration>(
+      "SELECT version, name, checksum FROM remem.schema_migrations ORDER BY version",
+    )
+    verifyAppliedMigrations(migrations, result.rows)
 
     for (const migration of migrations.slice(result.rows.length)) {
       await client.query("BEGIN")
@@ -130,9 +140,10 @@ export async function migrationStatus(
   directory = defaultMigrationDirectory(),
 ): Promise<{ currentVersion: number; latestVersion: number; pending: number[] }> {
   const migrations = await loadMigrations(directory)
-  const result = await pool.query<{ version: number }>(
-    "SELECT version FROM remem.schema_migrations ORDER BY version",
+  const result = await pool.query<AppliedMigration>(
+    "SELECT version, name, checksum FROM remem.schema_migrations ORDER BY version",
   )
+  verifyAppliedMigrations(migrations, result.rows)
   const applied = new Set(result.rows.map((row) => row.version))
   return {
     currentVersion: result.rows.at(-1)?.version ?? 0,

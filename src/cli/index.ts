@@ -13,6 +13,7 @@ import {
 import { runMigrations } from "../storage/migrations.js"
 import { openCodeConfigPath, rememPaths, type RememPaths } from "../storage/paths.js"
 import { runDoctor } from "./doctor.js"
+import { withInstallLock } from "./lock.js"
 import { composeArguments, managedCommand, writeManagedFiles } from "./managed.js"
 import { NodeProcessRunner, type ProcessRunner } from "./process.js"
 
@@ -21,6 +22,7 @@ export interface CliDependencies {
   runner?: ProcessRunner
   stdout?: (line: string) => void
   stderr?: (line: string) => void
+  operationLockHeld?: boolean
 }
 
 interface ParsedArguments {
@@ -28,6 +30,16 @@ interface ParsedArguments {
   positionals: string[]
   flags: Map<string, string | true>
 }
+
+export const BACKUP_FLAGS = ["--format=custom", "--no-owner", "--schema=remem"] as const
+export const RESTORE_FLAGS = [
+  "--clean",
+  "--if-exists",
+  "--no-owner",
+  "--schema=remem",
+  "--single-transaction",
+  "--exit-on-error",
+] as const
 
 function parseArguments(args: string[]): ParsedArguments {
   const [command = "help", ...rest] = args
@@ -259,15 +271,15 @@ async function backup(
         config.storage.user,
         "-d",
         config.storage.database,
-        "--format=custom",
-        "--no-owner",
+        ...BACKUP_FLAGS,
       ]),
       { outputFile },
     )
   } else {
     const environment = postgresEnvironment(config.storage.connectionString)
-    await runner.run("pg_dump", ["--format=custom", "--no-owner", `--file=${outputFile}`], {
+    await runner.run("pg_dump", [...BACKUP_FLAGS], {
       env: environment,
+      outputFile,
       redact: [environment.PGPASSWORD ?? ""],
     })
   }
@@ -281,33 +293,40 @@ async function restore(
   source: string,
 ): Promise<void> {
   await access(source, constants.R_OK)
-  if (config.storage.mode === "managed") {
-    await runner.run(
-      "docker",
-      composeArguments(config.storage, [
-        "exec",
-        "-T",
-        "postgres",
-        "pg_restore",
-        "-U",
-        config.storage.user,
-        "-d",
-        config.storage.database,
-        "--clean",
-        "--if-exists",
-        "--no-owner",
-      ]),
-      { inputFile: source },
-    )
-  } else {
-    const environment = postgresEnvironment(config.storage.connectionString)
-    await runner.run(
-      "pg_restore",
-      ["--clean", "--if-exists", "--no-owner", `--dbname=${environment.PGDATABASE}`],
-      { env: environment, inputFile: source, redact: [environment.PGPASSWORD ?? ""] },
-    )
+  const pool = new Pool({ connectionString: config.storage.connectionString, max: 1 })
+  const client = await pool.connect()
+  try {
+    await client.query("SELECT pg_advisory_lock($1)", [7_263_663_296])
+    if (config.storage.mode === "managed") {
+      await runner.run(
+        "docker",
+        composeArguments(config.storage, [
+          "exec",
+          "-T",
+          "postgres",
+          "pg_restore",
+          "-U",
+          config.storage.user,
+          "-d",
+          config.storage.database,
+          ...RESTORE_FLAGS,
+        ]),
+        { inputFile: source },
+      )
+    } else {
+      const environment = postgresEnvironment(config.storage.connectionString)
+      await runner.run("pg_restore", [...RESTORE_FLAGS, `--dbname=${environment.PGDATABASE}`], {
+        env: environment,
+        inputFile: source,
+        redact: [environment.PGPASSWORD ?? ""],
+      })
+    }
+    await migrate(config)
+  } finally {
+    await client.query("SELECT pg_advisory_unlock($1)", [7_263_663_296]).catch(() => undefined)
+    client.release()
+    await pool.end()
   }
-  await migrate(config)
 }
 
 function usage(): string {
@@ -332,6 +351,23 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
     if (parsed.command === "help" || hasFlag(parsed, "help")) {
       output(usage())
       return 0
+    }
+    if (
+      !dependencies.operationLockHeld &&
+      new Set(["init", "start", "stop", "migrate", "backup", "restore", "reset"]).has(
+        parsed.command,
+      )
+    ) {
+      return await withInstallLock(paths, () =>
+        runCli(args, {
+          ...dependencies,
+          paths,
+          runner,
+          stdout: output,
+          stderr: errorOutput,
+          operationLockHeld: true,
+        }),
+      )
     }
     if (parsed.command === "init") {
       const config = await initialize(parsed, paths, runner, output)

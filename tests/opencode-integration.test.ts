@@ -70,4 +70,39 @@ describe("OpenCode prompt injection", () => {
     expect(event.messages).toHaveLength(2)
     expect(event.messages.at(-1)?.content[0]?.text).toContain("use logical replication")
   })
+
+  it("reuses the latest canonical user prompt during a v2 tool-loop dispatch", async () => {
+    const provider = new MarkdownMemoryProvider(
+      {
+        type: "markdown",
+        id: "fixtures",
+        paths: [fixtureDirectory],
+        exclude: [],
+        scope: "workspace",
+        maxFileBytes: 256 * 1024,
+        maxFiles: 100,
+      },
+      [fixtureDirectory],
+    )
+    const event = {
+      sessionID: "tool-loop",
+      system: [] as unknown[],
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Continue the Phoenix database migration." }],
+        },
+        { role: "assistant", content: [{ type: "tool-call", name: "read", id: "1", input: {} }] },
+        { role: "tool", content: [{ type: "tool-result", name: "read", id: "1", result: {} }] },
+      ] as unknown[],
+    }
+
+    await injectV2DispatchMemory(
+      new RememOrchestrator([provider], testConfig()),
+      event,
+      memoryContext,
+    )
+
+    expect(JSON.stringify(event.messages.at(-1))).toContain("use logical replication")
+  })
 })

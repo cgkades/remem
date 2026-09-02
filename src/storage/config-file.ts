@@ -68,7 +68,7 @@ export async function readAppConfig(paths: RememPaths = rememPaths()): Promise<R
   const value: unknown = JSON.parse(await readFile(paths.configFile, "utf8"))
   validateAppConfig(value)
   const override = process.env.REMEM_DATABASE_URL
-  if (!override) return value
+  if (!override || value.storage.mode === "managed") return value
   return {
     ...value,
     storage: { ...value.storage, connectionString: override },
@@ -97,7 +97,8 @@ export async function loadInstalledPluginOptions(options: unknown): Promise<unkn
   if (isRecord(options) && Object.hasOwn(options, "providers")) return options
   try {
     return await readAppConfig()
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
     return options
   }
 }

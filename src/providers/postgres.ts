@@ -181,6 +181,9 @@ export class PostgresMemoryProvider implements MemoryProvider {
   ) {
     this.id = config.id
     this.embeddingModel = options.embeddingModel ?? new LocalHashEmbeddingModel()
+    if (this.embeddingModel.dimensions !== 384) {
+      throw new TypeError("PostgreSQL storage currently requires 384-dimensional embeddings")
+    }
     this.ownsPool = !options.pool
     this.pool =
       options.pool ??
@@ -228,9 +231,10 @@ export class PostgresMemoryProvider implements MemoryProvider {
     signal.throwIfAborted()
     const result = await this.pool.query<CatalogRow>(
       `
-        SELECT ce.*, me.embedding::text AS embedding
+        SELECT ce.*,
+          CASE WHEN ce.embedding_model = $6 AND ce.embedding_dimensions = $7
+            THEN ce.embedding::text ELSE NULL END AS embedding
         FROM remem.catalog_entries ce
-        LEFT JOIN remem.memory_embeddings me ON me.memory_id = ce.memory_id
         WHERE ce.provider_id = $1 AND (
           ce.scope_kind = 'global' OR
           (ce.scope_kind = 'workspace' AND ce.scope_id = $2) OR
@@ -246,6 +250,8 @@ export class PostgresMemoryProvider implements MemoryProvider {
         context.projectId,
         context.sessionId ?? null,
         this.config.catalogLimit,
+        this.embeddingModel.id,
+        this.embeddingModel.dimensions,
       ],
     )
     signal.throwIfAborted()
@@ -273,33 +279,20 @@ export class PostgresMemoryProvider implements MemoryProvider {
     } catch {
       request.signal.throwIfAborted()
     }
+    const perResultCharacters = Math.max(
+      128,
+      Math.floor(request.maxTokens / Math.max(1, request.limit)),
+    )
     const result = await this.pool.query<MemoryRow>(
       `
-        WITH query AS (SELECT plainto_tsquery('simple', $5) AS terms)
-        SELECT records.*,
-          ts_rank_cd(records.search_vector, query.terms) AS lexical_score,
-          CASE WHEN $6::vector IS NULL OR records.embedding IS NULL THEN 0
-               ELSE 1 - (records.embedding <=> $6::vector) END AS semantic_score
-        FROM (
-          SELECT m.*, COALESCE(s.uri, s.external_id) AS source,
-            COALESCE((SELECT array_agg(a.alias ORDER BY a.alias) FROM remem.memory_aliases a WHERE a.memory_id = m.id), '{}') AS aliases,
-            COALESCE((SELECT array_agg(t.tag ORDER BY t.tag) FROM remem.memory_tags t WHERE t.memory_id = m.id), '{}') AS tags,
-            COALESCE((
-              SELECT jsonb_agg(jsonb_build_object(
-                'source', jsonb_build_object(
-                  'id', ps.id, 'kind', ps.kind, 'uri', ps.uri, 'providerId', ps.provider_id,
-                  'externalId', ps.external_id, 'observedAt', ps.observed_at, 'metadata', ps.metadata
-                ),
-                'capturedAt', mp.captured_at, 'original', mp.original, 'note', mp.note
-              ) ORDER BY mp.captured_at)
-              FROM remem.memory_provenance mp
-              JOIN remem.sources ps ON ps.id = mp.source_id
-              WHERE mp.memory_id = m.id
-            ), '[]'::jsonb) AS provenance,
-            me.embedding
-          FROM remem.memories m
-          LEFT JOIN remem.sources s ON s.id = m.source_id
-          LEFT JOIN remem.memory_embeddings me ON me.memory_id = m.id
+        WITH settings AS MATERIALIZED (
+          SELECT set_config('hnsw.iterative_scan', 'strict_order', true)
+        ),
+        query AS (SELECT plainto_tsquery('simple', $5) AS terms),
+        lexical_candidates AS (
+          SELECT m.id, ts_rank_cd(m.search_vector, query.terms) AS lexical_score,
+            0::double precision AS semantic_score
+          FROM remem.memories m, query
           WHERE m.provider_id = $1 AND (
             m.scope_kind = 'global' OR
             (m.scope_kind = 'workspace' AND m.scope_id = $2) OR
@@ -308,14 +301,63 @@ export class PostgresMemoryProvider implements MemoryProvider {
           )
           AND ($8::text[] IS NULL OR m.type = ANY($8::text[]))
           AND ($9::text[] IS NULL OR m.scope_kind = ANY($9::text[]))
-        ) records, query
-        WHERE records.search_vector @@ query.terms
-           OR ($6::vector IS NOT NULL AND records.embedding IS NOT NULL AND 1 - (records.embedding <=> $6::vector) >= 0.34)
-        ORDER BY GREATEST(
-          ts_rank_cd(records.search_vector, query.terms),
-          CASE WHEN $6::vector IS NULL OR records.embedding IS NULL THEN 0
-               ELSE 1 - (records.embedding <=> $6::vector) END
-        ) DESC, records.updated_at DESC
+          AND m.search_vector @@ query.terms
+          ORDER BY lexical_score DESC
+          LIMIT $7
+        ),
+        semantic_candidates AS (
+          SELECT m.id, 0::double precision AS lexical_score,
+            1 - (me.embedding <=> $6::vector) AS semantic_score
+          FROM remem.memory_embeddings me
+          JOIN remem.memories m ON m.id = me.memory_id
+          CROSS JOIN settings
+          WHERE $6::vector IS NOT NULL
+          AND me.model = $10 AND me.dimensions = $11
+          AND m.provider_id = $1 AND (
+            m.scope_kind = 'global' OR
+            (m.scope_kind = 'workspace' AND m.scope_id = $2) OR
+            (m.scope_kind = 'project' AND m.scope_id = $3) OR
+            (m.scope_kind = 'session' AND m.scope_id = $4)
+          )
+          AND ($8::text[] IS NULL OR m.type = ANY($8::text[]))
+          AND ($9::text[] IS NULL OR m.scope_kind = ANY($9::text[]))
+          ORDER BY me.embedding <=> $6::vector
+          LIMIT $13
+        ),
+        candidates AS (
+          SELECT id, max(lexical_score) AS lexical_score, max(semantic_score) AS semantic_score
+          FROM (
+            SELECT * FROM lexical_candidates
+            UNION ALL
+            SELECT * FROM semantic_candidates
+          ) combined
+          GROUP BY id
+          HAVING max(lexical_score) > 0 OR max(semantic_score) >= 0.34
+        )
+        SELECT m.id, m.provider_id, m.title, left(m.content, $12) AS content, m.summary,
+          COALESCE(s.uri, s.external_id) AS source,
+          m.scope_kind, m.scope_id, m.type, m.freshness, m.created_at, m.updated_at,
+          m.observed_at, m.confidence, m.importance, m.unresolved, m.metadata,
+          COALESCE((SELECT array_agg(a.alias ORDER BY a.alias) FROM remem.memory_aliases a WHERE a.memory_id = m.id), '{}') AS aliases,
+          COALESCE((SELECT array_agg(t.tag ORDER BY t.tag) FROM remem.memory_tags t WHERE t.memory_id = m.id), '{}') AS tags,
+          COALESCE((
+            SELECT jsonb_agg(jsonb_build_object(
+              'source', jsonb_build_object(
+                'id', ps.id, 'kind', ps.kind, 'uri', ps.uri, 'providerId', ps.provider_id,
+                'externalId', ps.external_id, 'observedAt', ps.observed_at, 'metadata', ps.metadata
+              ),
+              'capturedAt', mp.captured_at, 'original', mp.original, 'note', mp.note
+            ) ORDER BY mp.captured_at)
+            FROM remem.memory_provenance mp
+            JOIN remem.sources ps ON ps.id = mp.source_id
+            WHERE mp.memory_id = m.id
+          ), '[]'::jsonb) AS provenance,
+          candidates.lexical_score, candidates.semantic_score
+        FROM candidates
+        JOIN remem.memories m ON m.id = candidates.id
+        LEFT JOIN remem.sources s ON s.id = m.source_id
+        ORDER BY GREATEST(candidates.lexical_score, candidates.semantic_score) DESC,
+          m.updated_at DESC
         LIMIT $7
       `,
       [
@@ -328,6 +370,10 @@ export class PostgresMemoryProvider implements MemoryProvider {
         request.limit,
         request.types ?? null,
         request.scopes ?? null,
+        this.embeddingModel.id,
+        this.embeddingModel.dimensions,
+        perResultCharacters,
+        Math.max(32, request.limit * 4),
       ],
     )
     request.signal.throwIfAborted()
@@ -384,19 +430,97 @@ export class PostgresMemoryProvider implements MemoryProvider {
     const client = await this.pool.connect()
     try {
       await client.query("BEGIN")
-      const existing = await client.query<{ created_at: Date }>(
-        "SELECT created_at FROM remem.memories WHERE id = $1 AND provider_id = $2 FOR UPDATE",
+      const existing = await client.query<{ created_at: Date; freshness: string }>(
+        "SELECT created_at, freshness FROM remem.memories WHERE id = $1 AND provider_id = $2 FOR UPDATE",
         [id, this.id],
       )
       if (!existing.rows[0]) throw new Error("memory not found")
-      await client.query("DELETE FROM remem.memories WHERE id = $1", [id])
-      const record = await this.writeWithClient(client, { ...memory, id }, options)
-      await client.query("UPDATE remem.memories SET created_at = $2 WHERE id = $1", [
+      if (existing.rows[0].freshness === "superseded") {
+        throw new Error("superseded memories cannot be updated; update their successor")
+      }
+      const temporaryId = randomUUID()
+      const record = await this.writeWithClient(client, { ...memory, id: temporaryId }, options)
+      await client.query(
+        `UPDATE remem.memories original SET
+           source_id = replacement.source_id,
+           type = replacement.type,
+           title = replacement.title,
+           content = replacement.content,
+           summary = replacement.summary,
+           scope_kind = replacement.scope_kind,
+           scope_id = replacement.scope_id,
+           freshness = replacement.freshness,
+           confidence = replacement.confidence,
+           importance = replacement.importance,
+           unresolved = replacement.unresolved,
+           superseded_by = replacement.superseded_by,
+           observed_at = replacement.observed_at,
+           updated_at = now(),
+           metadata = replacement.metadata
+         FROM remem.memories replacement
+         WHERE original.id = $1 AND replacement.id = $2`,
+        [id, temporaryId],
+      )
+      await client.query("DELETE FROM remem.memory_aliases WHERE memory_id = $1", [id])
+      await client.query("UPDATE remem.memory_aliases SET memory_id = $1 WHERE memory_id = $2", [
         id,
-        existing.rows[0].created_at,
+        temporaryId,
       ])
+      await client.query("DELETE FROM remem.memory_tags WHERE memory_id = $1", [id])
+      await client.query("UPDATE remem.memory_tags SET memory_id = $1 WHERE memory_id = $2", [
+        id,
+        temporaryId,
+      ])
+      await client.query("DELETE FROM remem.memory_provenance WHERE memory_id = $1", [id])
+      await client.query("UPDATE remem.memory_provenance SET memory_id = $1 WHERE memory_id = $2", [
+        id,
+        temporaryId,
+      ])
+      await client.query("DELETE FROM remem.memory_entities WHERE memory_id = $1", [id])
+      await client.query("UPDATE remem.memory_entities SET memory_id = $1 WHERE memory_id = $2", [
+        id,
+        temporaryId,
+      ])
+      await client.query("DELETE FROM remem.relationships WHERE source_memory_id = $1", [id])
+      await client.query(
+        "UPDATE remem.relationships SET source_memory_id = $1 WHERE source_memory_id = $2",
+        [id, temporaryId],
+      )
+      await client.query("DELETE FROM remem.memory_embeddings WHERE memory_id = $1", [id])
+      await client.query("UPDATE remem.memory_embeddings SET memory_id = $1 WHERE memory_id = $2", [
+        id,
+        temporaryId,
+      ])
+      const temporarySource = `remem://${this.id}/${temporaryId}`
+      const canonicalSource = `remem://${this.id}/${id}`
+      await client.query(
+        `UPDATE remem.catalog_entries original SET
+           title = replacement.title,
+           summary = replacement.summary,
+           aliases = replacement.aliases,
+           tags = replacement.tags,
+           scope_kind = replacement.scope_kind,
+           scope_id = replacement.scope_id,
+           importance = replacement.importance,
+           unresolved = replacement.unresolved,
+           source = CASE WHEN replacement.source = $3 THEN $4 ELSE replacement.source END,
+           embedding_model = replacement.embedding_model,
+           embedding_dimensions = replacement.embedding_dimensions,
+           embedding = replacement.embedding,
+           updated_at = now()
+         FROM remem.catalog_entries replacement
+         WHERE original.memory_id = $1 AND replacement.memory_id = $2`,
+        [id, temporaryId, temporarySource, canonicalSource],
+      )
+      await client.query("DELETE FROM remem.catalog_entries WHERE memory_id = $1", [temporaryId])
+      await client.query("DELETE FROM remem.memories WHERE id = $1", [temporaryId])
       await client.query("COMMIT")
-      return { ...record, createdAt: existing.rows[0].created_at.toISOString() }
+      return {
+        ...record,
+        id,
+        source: record.source === temporarySource ? canonicalSource : record.source,
+        createdAt: existing.rows[0].created_at.toISOString(),
+      }
     } catch (error) {
       await client.query("ROLLBACK")
       throw error
@@ -414,15 +538,18 @@ export class PostgresMemoryProvider implements MemoryProvider {
     const client = await this.pool.connect()
     try {
       await client.query("BEGIN")
-      const existing = await client.query(
-        "SELECT id FROM remem.memories WHERE id = $1 FOR UPDATE",
-        [id],
+      const existing = await client.query<{ freshness: string; superseded_by: string | null }>(
+        "SELECT freshness, superseded_by FROM remem.memories WHERE id = $1 AND provider_id = $2 FOR UPDATE",
+        [id, this.id],
       )
       if (!existing.rows[0]) throw new Error("memory not found")
+      if (existing.rows[0].freshness === "superseded" || existing.rows[0].superseded_by) {
+        throw new Error("memory is already superseded")
+      }
       const record = await this.writeWithClient(client, replacement, options)
       await client.query(
-        "UPDATE remem.memories SET freshness = 'superseded', superseded_by = $2, updated_at = now() WHERE id = $1",
-        [id, record.id],
+        "UPDATE remem.memories SET freshness = 'superseded', superseded_by = $3, updated_at = now() WHERE id = $1 AND provider_id = $2",
+        [id, this.id, record.id],
       )
       await client.query("COMMIT")
       return record
@@ -473,6 +600,10 @@ export class PostgresMemoryProvider implements MemoryProvider {
 
   async close(): Promise<void> {
     if (this.ownsPool) await this.pool.end()
+  }
+
+  dispose(): Promise<void> {
+    return this.close()
   }
 
   private async writeWithClient(
@@ -578,10 +709,13 @@ export class PostgresMemoryProvider implements MemoryProvider {
     await this.insertEntitiesAndRelationships(
       client,
       id,
+      memory.scope,
+      resolvedScopeId,
       memory.entities ?? [],
       memory.relationships ?? [],
     )
 
+    let catalogEmbedding: number[] | undefined
     try {
       const embedding =
         memory.embedding ??
@@ -596,6 +730,12 @@ export class PostgresMemoryProvider implements MemoryProvider {
          VALUES ($1, $2, $3, $4::vector)`,
         [id, this.embeddingModel.id, this.embeddingModel.dimensions, vectorLiteral(embedding)],
       )
+      catalogEmbedding = await this.embeddingModel.embed(
+        [memory.title, memory.summary, aliases.join(" "), tags.join(" ")]
+          .filter(Boolean)
+          .join("\n"),
+        options.signal,
+      )
     } catch {
       options.signal?.throwIfAborted()
     }
@@ -603,8 +743,8 @@ export class PostgresMemoryProvider implements MemoryProvider {
     await client.query(
       `INSERT INTO remem.catalog_entries (
          id, provider_id, memory_id, title, summary, aliases, tags, scope_kind, scope_id,
-         importance, unresolved, source
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+         importance, unresolved, source, embedding_model, embedding_dimensions, embedding
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::vector)`,
       [
         randomUUID(),
         this.id,
@@ -618,6 +758,9 @@ export class PostgresMemoryProvider implements MemoryProvider {
         clamp(memory.importance, 0.5),
         memory.unresolved ?? false,
         source,
+        catalogEmbedding ? this.embeddingModel.id : null,
+        catalogEmbedding ? this.embeddingModel.dimensions : null,
+        catalogEmbedding ? vectorLiteral(catalogEmbedding) : null,
       ],
     )
     options.signal?.throwIfAborted()
@@ -660,21 +803,27 @@ export class PostgresMemoryProvider implements MemoryProvider {
   private async insertEntitiesAndRelationships(
     client: PoolClient,
     memoryId: string,
+    scope: MemoryScope,
+    resolvedScopeId: string | undefined,
     entities: MemoryEntity[],
     relationships: MemoryRelationship[],
   ): Promise<void> {
     const entityIds = new Map<string, string>()
     for (const entity of entities) {
       const result = await client.query<{ id: string }>(
-        `INSERT INTO remem.entities (id, name, type, aliases, metadata)
-         VALUES ($1,$2,$3,$4,$5::jsonb)
-         ON CONFLICT (name, type) DO UPDATE SET
+        `INSERT INTO remem.entities
+           (id, provider_id, scope_kind, scope_id, name, type, aliases, metadata)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
+         ON CONFLICT (provider_id, scope_kind, scope_id, name, type) DO UPDATE SET
            aliases = ARRAY(SELECT DISTINCT unnest(remem.entities.aliases || EXCLUDED.aliases)),
            metadata = remem.entities.metadata || EXCLUDED.metadata,
            updated_at = now()
          RETURNING id`,
         [
           entity.id && UUID_PATTERN.test(entity.id) ? entity.id : randomUUID(),
+          this.id,
+          scope.kind,
+          resolvedScopeId ?? "",
           entity.name,
           entity.type ?? "other",
           uniqueStrings(entity.aliases),

@@ -5,7 +5,11 @@ import type { RankedMemory, SynthesisResult } from "./types.js"
 
 export interface SynthesisStrategy {
   readonly id: string
-  synthesize(topics: string[], memories: RankedMemory[]): SynthesisResult
+  synthesize(
+    topics: string[],
+    memories: RankedMemory[],
+    signal?: AbortSignal,
+  ): SynthesisResult | Promise<SynthesisResult>
 }
 
 function escapeXml(value: string): string {
@@ -30,7 +34,8 @@ export class DeterministicSynthesizer implements SynthesisStrategy {
 
   constructor(private readonly budgets: TokenBudgets) {}
 
-  synthesize(topics: string[], memories: RankedMemory[]): SynthesisResult {
+  synthesize(topics: string[], memories: RankedMemory[], signal?: AbortSignal): SynthesisResult {
+    signal?.throwIfAborted()
     if (memories.length === 0) {
       return { text: "", estimatedTokens: 0, selectedCount: 0, omittedCount: 0 }
     }

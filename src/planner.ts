@@ -121,6 +121,9 @@ export class DeterministicRetrievalPlanner {
         query,
         reason: reasons.join("; "),
         limit: 8,
+        topics: selected
+          .filter((match) => match.entry.providerIds.includes(providerId))
+          .map((match) => match.entry.title),
       }),
     )
 

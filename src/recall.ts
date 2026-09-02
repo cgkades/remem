@@ -211,7 +211,7 @@ export class RecallEngine {
             (signal) =>
               provider.search({
                 query: request.query,
-                topics: plan.topics,
+                topics: request.topics ?? plan.topics,
                 context,
                 limit: Math.min(request.limit, this.config.maxResults),
                 maxTokens: this.config.budgets.perProviderTokens,

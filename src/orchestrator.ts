@@ -6,6 +6,7 @@ import { SemanticCatalogRecognizer, type SemanticRecognitionResult } from "./pla
 import { RecallEngine } from "./recall.js"
 import { LocalHashEmbeddingModel } from "./storage/embedding.js"
 import { DeterministicSynthesizer, type SynthesisStrategy } from "./synthesizer.js"
+import { estimateTokens } from "./token-budget.js"
 import { withTimeout } from "./timeout.js"
 import type {
   MemoryContext,
@@ -76,6 +77,9 @@ function semanticPlan(
       query,
       reason: reasons.join("; "),
       limit: maxResults,
+      topics: selected
+        .filter((match) => match.entry.providerIds.includes(providerId))
+        .map((match) => match.entry.title),
     })),
     matches: selected,
     signals: [selected.length > 0 ? "semantic catalog match" : "semantic provider awareness"],
@@ -111,6 +115,7 @@ export class RememOrchestrator {
   private readonly semantic: SemanticCatalogRecognizer
   private readonly recall: RecallEngine
   private readonly synthesizer: SynthesisStrategy
+  private readonly fallbackSynthesizer: DeterministicSynthesizer
   private readonly diagnostics = new MemoryDiagnostics()
   private readonly providerIds: string[]
   private readonly providers: MemoryProvider[]
@@ -142,7 +147,8 @@ export class RememOrchestrator {
       dependencies.embeddingModel ?? new LocalHashEmbeddingModel(),
     )
     this.recall = new RecallEngine(this.providers, config)
-    this.synthesizer = dependencies.synthesizer ?? new DeterministicSynthesizer(config.budgets)
+    this.fallbackSynthesizer = new DeterministicSynthesizer(config.budgets)
+    this.synthesizer = dependencies.synthesizer ?? this.fallbackSynthesizer
     this.providerIds = this.providers.map((provider) => provider.id)
   }
 
@@ -202,7 +208,7 @@ export class RememOrchestrator {
       const recall = await this.recall.execute(plan, context)
       recallMs = performance.now() - recallStarted
       const synthesisStarted = performance.now()
-      const synthesis = this.synthesizer.synthesize(plan.topics, recall.memories)
+      const synthesis = await this.synthesize(plan.topics, recall.memories, stageDiagnostics)
       synthesisMs = performance.now() - synthesisStarted
       const diagnostics = [
         ...catalog.diagnostics,
@@ -315,12 +321,13 @@ export class RememOrchestrator {
         query,
         reason: "explicit memory_search tool request",
         limit: this.config.maxResults,
+        topics: [query],
       })),
       matches: [],
       signals: ["explicit tool request"],
     }
     const recall = await this.recall.execute(plan, context, signal)
-    const synthesis = this.synthesizer.synthesize(plan.topics, recall.memories)
+    const synthesis = await this.synthesize(plan.topics, recall.memories, [])
     const trace: MemoryTrace = {
       sessionId: context.sessionId ?? "unknown",
       timestamp: new Date().toISOString(),
@@ -408,6 +415,28 @@ export class RememOrchestrator {
 
   explain(sessionId?: string): MemoryTrace | { status: "no-trace" } {
     return this.diagnostics.latest(sessionId) ?? { status: "no-trace" }
+  }
+
+  private async synthesize(
+    topics: string[],
+    memories: Parameters<SynthesisStrategy["synthesize"]>[1],
+    diagnostics: string[],
+  ) {
+    try {
+      const result = await withTimeout(this.config.providerTimeoutMs, (signal) =>
+        Promise.resolve(this.synthesizer.synthesize(topics, memories, signal)),
+      )
+      if (estimateTokens(result.text) > this.config.budgets.recallTokens) {
+        throw new Error("synthesis exceeded recall budget")
+      }
+      return result
+    } catch (error) {
+      if (this.synthesizer === this.fallbackSynthesizer) throw error
+      diagnostics.push(
+        `synthesis strategy failed: ${error instanceof Error ? error.name : "unknown error"}`,
+      )
+      return this.fallbackSynthesizer.synthesize(topics, memories)
+    }
   }
 
   private logTrace(trace: MemoryTrace): void {

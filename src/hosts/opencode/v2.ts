@@ -4,9 +4,10 @@ import { parseConfig } from "../../config.js"
 import { RememOrchestrator } from "../../orchestrator.js"
 import { createProviders } from "../../providers/factory.js"
 import { loadInstalledPluginOptions } from "../../storage/config-file.js"
-import type { MemoryContext, RememLogger } from "../../types.js"
+import type { MemoryContext, MemoryProvider, RememLogger } from "../../types.js"
 import {
   TRUSTED_REMEM_INSTRUCTION,
+  disposeProviders,
   latestUserPrompt,
   memoryContext,
   recallForDispatch,
@@ -130,6 +131,8 @@ export const RememPlugin = Plugin.define({
   id: "opencode-remem",
   async setup(context) {
     const logger = consoleLogger()
+    let providers: MemoryProvider[] = []
+    let contextRegistration: { dispose(): Promise<void> } | undefined
     try {
       const parsed = parseConfig(await loadInstalledPluginOptions(context.options))
       for (const diagnostic of parsed.diagnostics) {
@@ -137,11 +140,12 @@ export const RememPlugin = Plugin.define({
       }
       const location = hostLocation(context)
       const created = createProviders(parsed.config.providers, { worktree: location.worktree })
+      providers = created.providers
       for (const diagnostic of created.diagnostics) {
         safeLoggerCall(logger, "warn", "provider.initialization_failed", { message: diagnostic })
       }
       const orchestrator = new RememOrchestrator(created.providers, parsed.config, logger)
-      const contextRegistration = await context.session.hook("context", async (event) => {
+      contextRegistration = await context.session.hook("context", async (event) => {
         try {
           await injectV2DispatchMemory(
             orchestrator,
@@ -156,9 +160,14 @@ export const RememPlugin = Plugin.define({
       })
       const toolRegistration = await registerTools(context, orchestrator, location)
       return async () => {
-        await Promise.allSettled([contextRegistration.dispose(), toolRegistration.dispose()])
+        await Promise.allSettled([
+          contextRegistration?.dispose(),
+          toolRegistration.dispose(),
+          disposeProviders(providers),
+        ])
       }
     } catch (error) {
+      await Promise.allSettled([contextRegistration?.dispose(), disposeProviders(providers)])
       safeLoggerCall(logger, "error", "plugin.initialization_failed", {
         error: error instanceof Error ? error.name : "unknown error",
       })

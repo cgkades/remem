@@ -183,6 +183,7 @@ export interface MemoryProvider {
   delete?(id: string, context: MemoryContext, options?: MemoryMutationOptions): Promise<void>
   health?(): Promise<ProviderHealth>
   refresh?(): void | Promise<void>
+  dispose?(): void | Promise<void>
 }
 
 export interface EmbeddingModel {
@@ -202,6 +203,7 @@ export interface ProviderRetrievalRequest {
   query: string
   reason: string
   limit: number
+  topics?: string[]
 }
 
 export interface RetrievalPlan {

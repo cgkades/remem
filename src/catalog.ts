@@ -164,7 +164,7 @@ export class MemoryCatalog {
       )
       if (!providerFailure) {
         this.snapshots.set(key, { value: snapshot, expiresAt: Date.now() + this.cacheTtlMs })
-        while (this.snapshots.size > 100) {
+        while (this.snapshots.size > 10) {
           const oldest = this.snapshots.keys().next().value
           if (!oldest) break
           this.snapshots.delete(oldest)

@@ -73,4 +73,62 @@ describe("Remem orchestration behavior", () => {
     expect(injection.trace.catalogTokens).toBeLessThanOrEqual(600)
     expect(injection.trace.recallTokens).toBeLessThanOrEqual(120)
   })
+
+  it("falls back to deterministic synthesis when an optional strategy fails", async () => {
+    const config = testConfig()
+    const provider = new MarkdownMemoryProvider(
+      {
+        type: "markdown",
+        id: "fixtures",
+        paths: [fixtureDirectory],
+        exclude: [],
+        scope: "workspace",
+        maxFileBytes: 256 * 1024,
+        maxFiles: 100,
+      },
+      [fixtureDirectory],
+    )
+    const injection = await new RememOrchestrator([provider], config, undefined, {
+      synthesizer: {
+        id: "unavailable-model",
+        synthesize: () => Promise.reject(new Error("model unavailable")),
+      },
+    }).processPrompt("Continue the Phoenix database migration", memoryContext)
+
+    expect(injection.memoryText).toContain("use logical replication")
+    expect(injection.trace.diagnostics).toContain("synthesis strategy failed: Error")
+  })
+
+  it("bounds a synthesis strategy that never completes", async () => {
+    const provider = new MarkdownMemoryProvider(
+      {
+        type: "markdown",
+        id: "fixtures",
+        paths: [fixtureDirectory],
+        exclude: [],
+        scope: "workspace",
+        maxFileBytes: 256 * 1024,
+        maxFiles: 100,
+      },
+      [fixtureDirectory],
+    )
+    const started = performance.now()
+    const injection = await new RememOrchestrator(
+      [provider],
+      testConfig({ providerTimeoutMs: 50 }),
+      undefined,
+      {
+        synthesizer: {
+          id: "hung-model",
+          synthesize: () => new Promise(() => undefined),
+        },
+      },
+    ).processPrompt("Continue the Phoenix database migration", memoryContext)
+
+    expect(performance.now() - started).toBeLessThan(500)
+    expect(injection.memoryText).toContain("use logical replication")
+    expect(injection.trace.diagnostics).toContain(
+      "synthesis strategy failed: OperationTimeoutError",
+    )
+  })
 })

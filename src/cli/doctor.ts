@@ -21,6 +21,11 @@ export interface DoctorReport {
   checks: DoctorCheck[]
 }
 
+function supportedVectorVersion(version: string): boolean {
+  const [major = 0, minor = 0] = version.split(".").map(Number)
+  return major > 0 || minor >= 8
+}
+
 async function checkPermissions(file: string, name: string): Promise<DoctorCheck> {
   try {
     const mode = (await stat(file)).mode & 0o777
@@ -124,20 +129,30 @@ export async function runDoctor(
       result.rows[0]?.vector_version
         ? {
             name: "pgvector",
-            status: "ok",
-            detail: `extension ${result.rows[0].vector_version}`,
+            status: supportedVectorVersion(result.rows[0].vector_version) ? "ok" : "error",
+            detail: supportedVectorVersion(result.rows[0].vector_version)
+              ? `extension ${result.rows[0].vector_version}`
+              : `extension ${result.rows[0].vector_version}; version 0.8 or newer is required`,
           }
         : { name: "pgvector", status: "error", detail: "CREATE EXTENSION vector is required" },
     )
-    const status = await migrationStatus(pool)
-    checks.push({
-      name: "schema migrations",
-      status: status.pending.length === 0 ? "ok" : "error",
-      detail:
-        status.pending.length === 0
-          ? `schema version ${status.currentVersion}`
-          : `pending migrations: ${status.pending.join(", ")}; run remem migrate`,
-    })
+    try {
+      const status = await migrationStatus(pool)
+      checks.push({
+        name: "schema migrations",
+        status: status.pending.length === 0 ? "ok" : "error",
+        detail:
+          status.pending.length === 0
+            ? `schema version ${status.currentVersion}`
+            : `pending migrations: ${status.pending.join(", ")}; run remem migrate`,
+      })
+    } catch (error) {
+      checks.push({
+        name: "schema migrations",
+        status: "error",
+        detail: error instanceof Error ? error.message : "migration integrity check failed",
+      })
+    }
     await pool.query("CREATE TEMP TABLE remem_write_check (id integer) ON COMMIT DROP")
     checks.push({ name: "database writes", status: "ok", detail: "database is writable" })
   } catch (error) {

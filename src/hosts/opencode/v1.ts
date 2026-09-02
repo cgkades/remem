@@ -5,6 +5,7 @@ import { createProviders } from "../../providers/factory.js"
 import { loadInstalledPluginOptions } from "../../storage/config-file.js"
 import type { MemoryContext, RememLogger } from "../../types.js"
 import {
+  disposeProviders,
   memoryContext,
   recallForDispatch,
   safeLoggerCall,
@@ -165,7 +166,9 @@ export const RememV1Plugin = (async (input, options) => {
       safeLoggerCall(logger, "warn", "provider.initialization_failed", { message: diagnostic })
     }
     const orchestrator = new RememOrchestrator(created.providers, parsed.config, logger)
-    return createOpenCodeV1Hooks(input, orchestrator, parsed.config, logger)
+    const hooks = createOpenCodeV1Hooks(input, orchestrator, parsed.config, logger)
+    hooks.dispose = () => disposeProviders(created.providers)
+    return hooks
   } catch (error) {
     safeLoggerCall(logger, "error", "plugin.initialization_failed", {
       error: error instanceof Error ? error.name : "unknown error",

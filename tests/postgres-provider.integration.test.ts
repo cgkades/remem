@@ -52,11 +52,55 @@ integration("PostgreSQL managed provider", () => {
       const initial = await runMigrations(pool, directory)
       expect(initial).toMatchObject({ applied: [1], currentVersion: 1 })
 
+      const firstMemory = randomUUID()
+      const secondMemory = randomUUID()
+      const sharedEntity = randomUUID()
+      await pool.query(
+        "INSERT INTO remem.providers (id, kind, name) VALUES ('upgrade-provider', 'postgres', 'Upgrade fixture')",
+      )
+      await pool.query(
+        `INSERT INTO remem.memories
+          (id, provider_id, type, title, content, scope_kind, scope_id)
+         VALUES
+          ($1, 'upgrade-provider', 'semantic', 'First', 'First body', 'project', 'first-project'),
+          ($2, 'upgrade-provider', 'semantic', 'Second', 'Second body', 'project', 'second-project')`,
+        [firstMemory, secondMemory],
+      )
+      await pool.query(
+        "INSERT INTO remem.entities (id, name, type, metadata) VALUES ($1, 'Shared name', 'service', '{\"legacy\":true}')",
+        [sharedEntity],
+      )
+      await pool.query(
+        "INSERT INTO remem.memory_entities (memory_id, entity_id) VALUES ($1,$3),($2,$3)",
+        [firstMemory, secondMemory, sharedEntity],
+      )
+      await pool.query(
+        `INSERT INTO remem.catalog_entries
+          (id, provider_id, memory_id, title, scope_kind, scope_id)
+         VALUES ($1, 'upgrade-provider', $2, 'First', 'project', 'first-project')`,
+        [randomUUID(), firstMemory],
+      )
+
       const upgraded = await runMigrations(pool)
-      expect(upgraded).toMatchObject({ applied: [2], currentVersion: 2 })
+      expect(upgraded).toMatchObject({ applied: [2, 3], currentVersion: 3 })
+      expect(
+        (
+          await pool.query<{ count: string }>(
+            "SELECT count(*) FROM remem.entities WHERE name = 'Shared name'",
+          )
+        ).rows[0]?.count,
+      ).toBe("2")
+      expect(
+        (
+          await pool.query<{ embedding_dimensions: number | null }>(
+            "SELECT embedding_dimensions FROM remem.catalog_entries WHERE memory_id = $1",
+            [firstMemory],
+          )
+        ).rows[0]?.embedding_dimensions,
+      ).toBeNull()
 
       const repeated = await runMigrations(pool)
-      expect(repeated).toMatchObject({ applied: [], currentVersion: 2 })
+      expect(repeated).toMatchObject({ applied: [], currentVersion: 3 })
 
       await copyFile(
         path.join(process.cwd(), "migrations/0002_consolidation_observation.sql"),
@@ -95,7 +139,14 @@ integration("PostgreSQL managed provider", () => {
         importance: 0.9,
         aliases: ["AWS auth thing"],
         tags: ["bedrock", "authentication"],
-        entities: [{ name: "Amazon Bedrock", type: "service", aliases: ["Bedrock"] }],
+        entities: [
+          {
+            name: "Amazon Bedrock",
+            type: "service",
+            aliases: ["Bedrock"],
+            metadata: { visibility: "phoenix" },
+          },
+        ],
         provenance: [
           {
             source: { kind: "session", uri: "session://phoenix/decision" },
@@ -118,6 +169,13 @@ integration("PostgreSQL managed provider", () => {
       title: "Foreign project secret",
       content: "This must not cross project scope.",
       scope: { kind: "project", id: "other-project" },
+      entities: [
+        {
+          name: "Amazon Bedrock",
+          type: "service",
+          metadata: { visibility: "other-project-secret" },
+        },
+      ],
     })
 
     const lexical = await provider.search(request("credential passthrough"))
@@ -134,6 +192,21 @@ integration("PostgreSQL managed provider", () => {
     const retrieved = await provider.get(memory.id, context)
     expect(retrieved?.provenance?.[0]?.source.uri).toBe("session://phoenix/decision")
     expect(retrieved?.entities?.[0]?.name).toBe("Amazon Bedrock")
+    expect(retrieved?.entities?.[0]?.metadata).toEqual({ visibility: "phoenix" })
+
+    const catalogRow = await pool.query<{ id: string }>(
+      "SELECT id FROM remem.catalog_entries WHERE memory_id = $1",
+      [memory.id],
+    )
+    const catalogId = catalogRow.rows[0]?.id
+    expect(catalogId).toBeDefined()
+    const childCatalogId = randomUUID()
+    await pool.query(
+      `INSERT INTO remem.catalog_entries
+        (id, provider_id, parent_id, title, scope_kind, scope_id)
+       VALUES ($1, 'remem-local', $2, 'Child topic', 'project', 'phoenix')`,
+      [childCatalogId, catalogId],
+    )
 
     const updated = await provider.update(memory.id, {
       type: "decision",
@@ -153,6 +226,14 @@ integration("PostgreSQL managed provider", () => {
     })
     expect(updated.id).toBe(memory.id)
     expect(updated.createdAt).toBe(memory.createdAt)
+    expect(
+      (
+        await pool.query<{ parent_id: string }>(
+          "SELECT parent_id FROM remem.catalog_entries WHERE id = $1",
+          [childCatalogId],
+        )
+      ).rows[0]?.parent_id,
+    ).toBe(catalogId)
 
     const replacement = await provider.supersede(memory.id, {
       type: "decision",
@@ -168,6 +249,40 @@ integration("PostgreSQL managed provider", () => {
       ],
     })
     expect((await provider.get(memory.id, context))?.freshness).toBe("superseded")
+    await expect(
+      provider.update(memory.id, {
+        type: "decision",
+        title: "Invalid historical edit",
+        content: "Superseded history must remain immutable.",
+        scope: { kind: "project", id: "phoenix" },
+      }),
+    ).rejects.toThrow("superseded memories cannot be updated")
+
+    const otherProvider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "other-provider",
+        connectionString: databaseUrl ?? "",
+        primary: false,
+        maxConnections: 2,
+        catalogLimit: 100,
+      },
+      { pool },
+    )
+    const otherMemory = await otherProvider.write({
+      type: "decision",
+      title: "Other provider decision",
+      content: "This record belongs to another provider.",
+      scope: { kind: "project", id: "phoenix" },
+    })
+    await expect(
+      provider.supersede(otherMemory.id, {
+        type: "decision",
+        title: "Invalid cross-provider replacement",
+        content: "Must not be written.",
+        scope: { kind: "project", id: "phoenix" },
+      }),
+    ).rejects.toThrow("memory not found")
 
     await provider.delete(replacement.id, context)
     expect(await provider.get(replacement.id, context)).toBeUndefined()
@@ -239,8 +354,28 @@ integration("PostgreSQL managed provider", () => {
           expect.objectContaining({ name: "embedding configuration", status: "ok" }),
         ]),
       )
+      const migration = await pool.query<{ checksum: string }>(
+        "SELECT checksum FROM remem.schema_migrations WHERE version = 1",
+      )
+      const checksum = migration.rows[0]?.checksum
+      if (!checksum) throw new Error("missing migration checksum")
+      await pool.query("UPDATE remem.schema_migrations SET checksum = 'drifted' WHERE version = 1")
+      try {
+        const drifted = await runDoctor(config, paths, {
+          run: () => Promise.resolve({ stdout: "", stderr: "" }),
+        })
+        expect(drifted.healthy).toBe(false)
+        expect(drifted.checks).toContainEqual(
+          expect.objectContaining({ name: "schema migrations", status: "error" }),
+        )
+      } finally {
+        await pool.query("UPDATE remem.schema_migrations SET checksum = $1 WHERE version = 1", [
+          checksum,
+        ])
+      }
     } finally {
       await rm(root, { recursive: true, force: true })
     }
   })
 })
+import { randomUUID } from "node:crypto"

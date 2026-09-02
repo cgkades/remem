@@ -1,5 +1,7 @@
 import { createReadStream, createWriteStream } from "node:fs"
 import { spawn } from "node:child_process"
+import { unlink } from "node:fs/promises"
+import { pipeline } from "node:stream/promises"
 
 export interface CommandOptions {
   cwd?: string
@@ -41,37 +43,58 @@ export class NodeProcessRunner implements ProcessRunner {
         stdio: "pipe",
         shell: false,
       })
-      const stdout: Buffer[] = []
-      const stderr: Buffer[] = []
-      if (options.inputFile) createReadStream(options.inputFile).pipe(child.stdin)
-      else child.stdin.end()
+      let stdoutText = ""
+      let stderrText = ""
+      let streamError: Error | undefined
+      let settled = false
+      const capture = (current: string, chunk: Buffer) =>
+        `${current}${chunk.toString("utf8")}`.slice(-64 * 1024)
+      const inputFinished = options.inputFile
+        ? pipeline(createReadStream(options.inputFile), child.stdin).catch((error: unknown) => {
+            streamError = error instanceof Error ? error : new Error("failed to read process input")
+            child.kill()
+          })
+        : (child.stdin.end(), Promise.resolve())
       const output = options.outputFile
         ? createWriteStream(options.outputFile, { mode: 0o600, flags: "wx" })
         : undefined
+      let outputCreated = false
+      output?.once("open", () => (outputCreated = true))
       const outputFinished = output
-        ? new Promise<void>((resolveOutput, rejectOutput) => {
-            output.once("finish", resolveOutput)
-            output.once("error", rejectOutput)
+        ? pipeline(child.stdout, output).catch((error: unknown) => {
+            streamError =
+              error instanceof Error ? error : new Error("failed to write process output")
+            child.kill()
           })
         : Promise.resolve()
-      if (output) child.stdout.pipe(output)
-      else child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk))
-      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk))
-      child.once("error", reject)
+      if (!output)
+        child.stdout.on("data", (chunk: Buffer) => (stdoutText = capture(stdoutText, chunk)))
+      child.stderr.on("data", (chunk: Buffer) => (stderrText = capture(stderrText, chunk)))
+      child.once("error", (error) => {
+        if (settled) return
+        settled = true
+        void (options.outputFile && outputCreated
+          ? unlink(options.outputFile).catch(() => undefined)
+          : undefined)
+        reject(error)
+      })
       const complete = async (code: number | null) => {
-        output?.end()
-        try {
-          await outputFinished
-        } catch (error) {
-          reject(error instanceof Error ? error : new Error("failed to write process output"))
+        if (settled) return
+        await Promise.all([inputFinished, outputFinished])
+        if (streamError) {
+          settled = true
+          if (options.outputFile && outputCreated)
+            await unlink(options.outputFile).catch(() => undefined)
+          reject(streamError)
           return
         }
-        const stdoutText = Buffer.concat(stdout).toString("utf8")
-        const stderrText = Buffer.concat(stderr).toString("utf8")
+        settled = true
         if (code === 0) {
           resolve({ stdout: stdoutText, stderr: stderrText })
           return
         }
+        if (options.outputFile && outputCreated)
+          await unlink(options.outputFile).catch(() => undefined)
         reject(new ProcessExecutionError(command, code, redacted(stderrText, options.redact ?? [])))
       }
       child.once("close", (code) => void complete(code))

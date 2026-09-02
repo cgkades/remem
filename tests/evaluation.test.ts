@@ -140,7 +140,13 @@ describe("recognition evaluation", () => {
       deduplicated += result.trace.rawResults - result.trace.deduplicatedResults
       if (evaluationCase.expected) {
         relevant++
-        if (result.plan.matches.some(({ entry }) => entry.id === evaluationCase.expected))
+        const expected = fixture.entries.find(({ id }) => id === evaluationCase.expected)
+        if (
+          result.plan.shouldRetrieve &&
+          result.trace.selectedResults > 0 &&
+          expected &&
+          result.memoryText.includes(expected.content)
+        )
           recalled++
         else missed++
       } else if (result.trace.selectedResults > 0) irrelevant++
