@@ -94,7 +94,8 @@
     "@types/node": "^22.20.1",
     "@types/pg": "^8.23.1",
     "opencode-plugin-v1": "npm:@opencode-ai/plugin@1.18.26",
-    "pg": "^8.23.0"
+    "pg": "^8.23.0",
+    "undici": "^7.29.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
