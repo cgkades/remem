@@ -1,78 +1,131 @@
 # Remem
 
-Remem is a memory orchestration plugin for [OpenCode](https://opencode.ai). It helps an agent
-recognize when prior knowledge is relevant, route recall across memory providers, and inject a
-small, attributed working set instead of dumping a database search into the context window.
+Remem is a local-first memory orchestration plugin for [OpenCode](https://opencode.ai). It recognizes
+when prior work may matter, routes bounded recall across memory providers, and injects attributed
+working context instead of dumping an entire search result into the model prompt.
 
-Remem is not intended to replace Mem0, Cognee, Obsidian, Markdown notes, session history, MCP
-servers, or other memory stores. It is the control plane that teaches OpenCode what can be
-remembered and when to look.
+Remem does not replace Markdown, Obsidian, Mem0, Cognee, MCP servers, or other systems of record. It
+provides a control plane over those stores and uses a managed PostgreSQL provider as the default for
+Remem-native memory.
 
-This project is not affiliated with the existing Rust project
-[`majiayu000/remem`](https://github.com/majiayu000/remem), which targets Claude Code and Codex. The
-distinct npm package name for this OpenCode plugin is `opencode-remem`.
+This project is not affiliated with the unrelated Rust project
+[`majiayu000/remem`](https://github.com/majiayu000/remem). The npm package identity for this OpenCode
+plugin is `opencode-remem`.
 
 ```text
 recognition -> retrieval planning -> recall -> synthesis -> context injection
 ```
 
-## MVP
+## Status
 
-The current MVP provides:
+Remem is pre-1.0 and has **not been published to npm yet**. Install it from source. The primary host
+adapter targets the current OpenCode v2 beta API, pinned and tested at
+`@opencode-ai/plugin@0.0.0-beta-18743`. OpenCode `1.18.26` remains available through a separate,
+weaker compatibility entry.
 
-- an OpenCode plugin entry point;
-- a dependency-free Markdown provider that can index local directories and Obsidian-style notes;
-- a compact, token-budgeted memory catalog;
-- deterministic prompt recognition and staged retrieval planning;
-- failure-isolated provider queries, deduplication, ranking, and attributed synthesis;
-- per-turn context injection through OpenCode's non-experimental `chat.message` hook;
-- compact catalog preservation through OpenCode's currently experimental compaction hook;
-- `memory_search` and `memory_status` tools;
-- structured, content-safe debug traces; and
-- behavioral tests for relevant recall, irrelevant prompts, budgets, and failure fallback.
+What works now:
 
-The MVP does not yet include embeddings, an LLM planner/synthesizer, automatic durable writes,
-session consolidation, or Mem0/Cognee/MCP adapters. See [`docs/mvp.md`](docs/mvp.md) and
-[`docs/future-roadmap.md`](docs/future-roadmap.md).
+- managed Docker storage using `pgvector/pgvector:0.8.1-pg16`, exposed on loopback only;
+- operator-managed external PostgreSQL with pgvector;
+- checksum-verified, ordered migrations through database schema version 3;
+- PostgreSQL full-text and 384-dimensional pgvector retrieval;
+- local semantic Stage 1 recognition, deterministic routing, provider/topic awareness, ranking,
+  deduplication, token budgets, and attributed synthesis;
+- a read-only Markdown/Obsidian-style provider;
+- managed CRUD and supersession through `PostgresMemoryProvider` and `MemoryManager`;
+- OpenCode tools `memory_search`, `memory_status`, and `memory_explain`;
+- logical backup and guarded restore/reset commands; and
+- an executable evaluation corpus plus PostgreSQL integration tests in CI on Node.js 22 and 24.
+
+Remem does **not** automatically write sessions or model output to durable memory. The observation
+and candidate types and schema are foundations only; applications must make explicit, authorized
+mutation calls.
 
 ## Install from Source
 
-Remem has not been published to npm yet.
+Requirements are Node.js 22 or newer and, for managed mode, Docker with Compose.
 
 ```sh
-npm install
+npm ci
 npm run build
+npm link
+remem init --mode managed
+remem doctor
 ```
 
-Reference the built plugin from `opencode.json`:
+`npm link` only makes the local CLI available. You can use `node ./dist/cli.js` instead of `remem`
+for every command. See [Installation](docs/installation.md) for external PostgreSQL and platform
+details.
+
+## OpenCode v2
+
+Because the package is not published, point OpenCode at the built v2 package-root entry:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": [
-    [
-      "file:///absolute/path/to/remem/dist/server.js",
-      {
-        "providers": [
-          {
-            "type": "markdown",
-            "id": "project-notes",
-            "paths": [".remem/memory"],
-            "scope": "workspace"
-          }
-        ],
-        "debug": false
-      }
-    ]
+  "plugins": [
+    {
+      "package": "file:///absolute/path/to/remem/dist/index.js"
+    }
   ]
 }
 ```
 
-Paths are resolved from OpenCode's worktree. If no provider is configured, Remem looks in
-`.remem/memory`. When that directory does not exist, Remem injects only the bounded memory-awareness
-instructions and retrieves no notes.
+With no inline provider options, the plugin reads the configuration created by `remem init`. Restart
+OpenCode after changing plugin configuration. Do not use the bare `opencode-remem` package name until
+the package is resolvable in your OpenCode installation.
 
-Restart OpenCode after changing plugin configuration.
+The package root and `./opencode/v2` are v2 entries. OpenCode `1.18.26` compatibility is isolated at
+`./server` or `./opencode/v1`; it uses the older `chat.message` boundary. See
+[OpenCode integration](docs/opencode-integration.md) and [the examples](examples/).
+
+## Storage Modes
+
+Managed mode creates protected configuration, starts a dedicated Docker volume, and applies schema
+migrations:
+
+```sh
+remem init --mode managed
+remem status
+```
+
+External mode never starts, stops, or resets the database server:
+
+```sh
+REMEM_DATABASE_URL='postgresql://user:password@db.example/remem?sslmode=require' \
+  remem init --mode external
+remem doctor
+```
+
+The external role must be able to create the `vector` extension and the `remem` schema during first
+installation. See [Storage architecture](docs/storage-architecture.md) and
+[Configuration](docs/configuration.md).
+
+## CLI
+
+```text
+remem init [--mode managed|external] [--database-url URL] [--opencode]
+remem start
+remem stop
+remem status
+remem doctor
+remem migrate
+remem backup [--output FILE]
+remem restore FILE --confirm
+remem reset --confirm
+```
+
+`restore` replaces objects in the Remem schema of the configured database. `reset --confirm` is destructive and is
+available only in managed mode. Read [Backup and restore](docs/backup-restore.md) first.
+
+## Semantic Recognition
+
+The default `remem-local-hash-v1` model is a deterministic 384-dimensional feature hash over words,
+character trigrams, adjacent word pairs, and a small set of hand-written concept groups. It is local
+and dependency-free, but it is **not a general neural embedding model**. It improves a bounded set of
+paraphrases while remaining lexical in character. `EmbeddingModel` is extensible so applications can
+provide a stronger local or remote model explicitly.
 
 ## Memory Notes
 
@@ -92,26 +145,29 @@ importance: 0.9
 Database migration is PostgreSQL 14 to PostgreSQL 17.
 
 Decision: use logical replication.
-
-Previous blocker: extension compatibility.
 ```
 
-`workspace` notes are visible when their configured root is inside the current worktree. `project`
-and `session` notes require a matching `scope-id` frontmatter value. Use `global` only for content
-that may be recalled in every workspace using that provider.
+Relative provider paths resolve from the OpenCode worktree. `project` and `session` notes require a
+matching `scope-id`; an external `workspace` root does too. Use `global` only for content intended to
+be visible in every context that configures the provider.
 
-See [`examples/`](examples/) for a complete setup.
+## Documentation
 
-## Design
-
-- [Architecture](docs/architecture.md)
+- [Architecture and diagrams](docs/architecture.md)
+- [Storage architecture](docs/storage-architecture.md)
+- [Installation](docs/installation.md)
+- [Configuration](docs/configuration.md)
+- [Backup and restore](docs/backup-restore.md)
 - [Memory model](docs/memory-model.md)
 - [Retrieval pipeline](docs/retrieval-pipeline.md)
 - [Provider interface](docs/provider-interface.md)
 - [OpenCode integration](docs/opencode-integration.md)
 - [Security model](docs/security-model.md)
+- [Evaluation](docs/evaluation.md)
+- [MVP boundary](docs/mvp.md)
+- [Roadmap](docs/future-roadmap.md)
 - [Prior art](docs/prior-art.md)
-- [ADRs](docs/adr/)
+- [Architecture decisions](docs/adr/)
 
 ## Development
 
@@ -119,6 +175,8 @@ See [`examples/`](examples/) for a complete setup.
 npm ci
 npm run check
 ```
+
+CI runs the full check against `pgvector/pgvector:0.8.1-pg16` on Node.js 22 and 24.
 
 ## License
 

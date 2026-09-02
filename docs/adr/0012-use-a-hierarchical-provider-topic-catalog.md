@@ -16,6 +16,10 @@ carry stable identity, parent, aliases, scope, compact summary, retrieval hints,
 provider locations. Render only relevant branches and a small set of roots; fetch detailed records
 from providers after planning.
 
+Implementation status: provider descriptors and topic entries provide the first two levels. Catalog
+entries can retain parent identity and the managed schema has topic relationships, but managed writes
+do not yet populate arbitrary subtopic branches and the renderer does not traverse them.
+
 ## Alternatives
 
 - Keep a flat list: simple, but expensive and ambiguous as providers and topics grow.

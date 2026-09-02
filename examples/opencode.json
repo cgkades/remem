@@ -1,9 +1,9 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": [
-    [
-      "../dist/server.js",
-      {
+  "plugins": [
+    {
+      "package": "file:///absolute/path/to/remem/dist/index.js",
+      "options": {
         "providers": [
           {
             "type": "markdown",
@@ -17,8 +17,15 @@
           "recallTokens": 1400,
           "perProviderTokens": 900
         },
-        "debug": true
+        "planner": {
+          "minimumConfidence": 0.42,
+          "maxTopics": 3,
+          "semantic": true,
+          "semanticMinimumSimilarity": 0.55,
+          "deterministicHighConfidence": 0.82
+        },
+        "debug": false
       }
-    ]
+    }
   ]
 }

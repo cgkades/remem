@@ -12,20 +12,29 @@ The core contract is conceptually:
 interface MemoryProvider {
   readonly id: string
   capabilities(): MemoryCapabilities
-  catalog(context: MemoryContext): Promise<CatalogEntry[]>
+  descriptor?(): ProviderDescriptor | Promise<ProviderDescriptor>
+  catalog(context: MemoryContext, signal: AbortSignal): Promise<CatalogEntry[]>
   search(request: MemorySearchRequest): Promise<MemoryResult[]>
   get?(id: string, context: MemoryContext): Promise<MemoryRecord | undefined>
-  write?(memory: MemoryWrite): Promise<MemoryRecord>
-  update?(id: string, memory: MemoryWrite): Promise<MemoryRecord>
-  delete?(id: string, context: MemoryContext): Promise<void>
+  write?(memory: MemoryWrite, options?: MemoryMutationOptions): Promise<MemoryRecord>
+  update?(id: string, memory: MemoryWrite, options?: MemoryMutationOptions): Promise<MemoryRecord>
+  supersede?(
+    id: string,
+    replacement: MemoryWrite,
+    options?: MemoryMutationOptions,
+  ): Promise<MemoryRecord>
+  delete?(id: string, context: MemoryContext, options?: MemoryMutationOptions): Promise<void>
   health?(): Promise<ProviderHealth>
+  refresh?(): void | Promise<void>
+  dispose?(): void | Promise<void>
 }
 ```
 
 The implemented TypeScript declaration in `src/types.ts` is authoritative.
 
-`RememOrchestrator` accepts the backend-neutral `OrchestratorConfig`. Markdown provider options and
-OpenCode compaction options live only in the plugin-level `RememConfig` and composition adapter.
+`RememOrchestrator` accepts the backend-neutral `OrchestratorConfig`. Provider construction and
+OpenCode options live in the composition layer. The contract follows
+[ADR 0002](adr/0002-use-provider-adapters.md).
 
 ## Capabilities
 
@@ -40,8 +49,12 @@ Capabilities are explicit booleans for:
 - structured entities; and
 - filesystem documents.
 
-The planner may request only advertised operations. A write-capable provider is not automatically
-authorized for automatic capture.
+The planner requests only advertised search operations. A write-capable provider is not
+automatically authorized for capture, and the OpenCode adapters expose no mutation tool.
+
+`descriptor()` supplies provider-level awareness for catalogs with few or no topic entries. It
+contains a bounded name, summary, categories, aliases, supported scope kinds, and optional
+embedding. It is recognition metadata, not a record body.
 
 ## Search Contract
 
@@ -68,8 +81,24 @@ does not disable direct tool search.
 
 Providers may implement `refresh()` to invalidate local indexes. The core keeps context-keyed
 catalog snapshots for a short TTL and does not cache snapshots produced with provider failures.
+Resource-owning providers implement `dispose()`; host adapters call it during unload and partial
+setup failure.
 
 Providers with no cheap enumeration can return an empty catalog and still support explicit search.
+
+## Mutation Contract
+
+`MemoryMutationOptions` carries optional context, abort signal, actor, and reason. Context can resolve
+a missing owner for a non-global scope. Providers must reject non-global writes that still have no
+scope owner.
+
+`MemoryManager` is the managed orchestration API for `create`, `get`, `update`, `supersede`, and
+`delete`. It chooses an explicit or primary provider, verifies the method is present, and refreshes
+the provider after mutation. It does not infer authorization, automatically derive memories, or
+write session activity.
+
+`PostgresMemoryProvider.supersede()` creates the replacement and marks the original as superseded in
+one database transaction. Generated synthesis is never passed to this method automatically.
 
 ## Health and Failure
 
@@ -86,9 +115,24 @@ The reference adapter recursively indexes configured Markdown directories, parse
 frontmatter subset, applies path exclusions, and performs local lexical search. It does not require
 Obsidian or a database.
 
-The OpenCode composition root currently constructs only this adapter from plugin configuration.
-Other providers are roadmap integrations; the orchestration core already accepts arbitrary
-`MemoryProvider` instances without importing their SDK types.
+The OpenCode composition root constructs this adapter and the PostgreSQL adapter from plugin or
+installed application configuration.
+
+### PostgreSQL
+
+`PostgresMemoryProvider` is implemented for both managed and external connections. It advertises
+lexical search, semantic search, metadata filters, catalog, point reads, CRUD, episodic history, and
+structured entities. It stores provenance, aliases, tags, entities, relationships, catalog entries,
+and 384-dimensional embeddings under the `remem` schema.
+
+Search combines PostgreSQL full-text ranking and pgvector cosine similarity while enforcing scope
+in SQL. Embedding failure during a write omits the vector but preserves the canonical record and
+full-text search. Health reports PostgreSQL, pgvector, and schema versions without returning the
+connection string.
+
+Managed and external modes differ only in lifecycle and operational ownership; they use this same
+adapter and schema. See [Storage architecture](storage-architecture.md) and
+[ADR 0010](adr/0010-separate-managed-and-external-database-provisioning.md).
 
 ### Obsidian
 
@@ -117,6 +161,12 @@ before normalization.
 A session provider can use the OpenCode SDK to search prior messages if a stable and efficient
 history path is available. It should remain outside the OpenCode hook adapter to avoid coupling the
 entire core to SDK message types.
+
+## Deferred Adapters
+
+Mem0, Cognee, MCP, OpenCode sessions, and an Obsidian-specific graph/index adapter are not
+implemented. The existing core can accept them only after an adapter satisfies the contract and
+security boundaries above.
 
 ## Provider Conformance
 

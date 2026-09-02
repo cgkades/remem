@@ -10,13 +10,15 @@ continuity. Sending every ambiguous prompt to a model planner adds latency, cost
 
 ## Decision
 
-Keep deterministic recognition at Stage 0. At Stage 1, combine lexical evidence with local pgvector
-similarity over bounded catalog titles, aliases, summaries, and retrieval hints. Use the result to
-select candidate topics and providers, not detailed memory or factual truth. Reserve Stage 2 for an
-optional model planner when configured and still ambiguous.
+Keep deterministic recognition at Stage 0. At Stage 1, combine lexical evidence with local vector
+similarity over bounded catalog titles, aliases, summaries, tags, and provider descriptors. Use the
+result to select candidate topics and providers, not detailed memory or factual truth. PostgreSQL
+catalog entries can load persisted vectors from pgvector; similarity comparison for recognition runs
+in process. Reserve Stage 2 for a future optional model planner when still ambiguous.
 
-The implemented MVP's lexical-only Stage 1 remains the fallback and becomes one signal in the
-accepted hybrid stage.
+Implementation status: Stage 1 uses `remem-local-hash-v1`, a deterministic 384-dimensional feature
+hash with character/token features and small concept groups. It is not a general neural embedding
+model. Deterministic and lexical recognition remain the fallback.
 
 ## Alternatives
 

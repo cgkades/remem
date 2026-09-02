@@ -19,6 +19,12 @@ Support two explicit modes using the same PostgreSQL provider schema and runtime
   TLS policy, privileges, and migration state, but never starts, stops, upgrades, or backs up the
   server.
 
+Implementation status: both modes use the same provider and schema. Managed Docker lifecycle and
+loopback binding are implemented. External `doctor` currently checks connectivity, pgvector,
+migration state, and a database write; explicit supported-version, TLS-policy, and privilege-range
+validation remains deferred. External backup/restore is an explicit CLI request, never an automatic
+server lifecycle action.
+
 ## Alternatives
 
 - Auto-detect and reuse any local PostgreSQL: rejected because ownership and safe mutation are
@@ -32,5 +38,5 @@ Support two explicit modes using the same PostgreSQL provider schema and runtime
 - Secrets need restrictive storage and redaction in both modes.
 - Provisioning is idempotent and never exposes the managed database beyond loopback by default.
 - External operators own availability, TLS, backup scheduling, retention, and server upgrades.
-- Failed validation leaves the provider disabled and the host usable; it never weakens security or
-  mutates an unverified server to make startup succeed.
+- Failed CLI validation returns an error. At prompt time, an unavailable provider is isolated and the
+  host remains usable; fail-open behavior never weakens scope or migration checks.

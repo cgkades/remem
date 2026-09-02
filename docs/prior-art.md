@@ -1,7 +1,8 @@
 # Prior Art
 
 Research snapshot: 2026-09-01. Remem studies architectural ideas and public interfaces; it does not
-copy implementation code.
+copy implementation code. Implementation status is documented in [MVP](mvp.md); accepted direction
+is documented in the [ADRs](adr/).
 
 ## Letta and Letta Code
 
@@ -30,8 +31,9 @@ retrieval, project/session/global scopes, compaction capture, and consolidation 
 service.
 
 This is the nearest direct lifecycle integration, but it orchestrates one memory platform. Remem
-keeps capture, planning, retrieval, synthesis, and storage replaceable across providers. Mem0's
-open-source repository is Apache-2.0; hosted service terms are separate.
+keeps capture, planning, retrieval, synthesis, and storage replaceable across providers while now
+offering PostgreSQL as its managed default. Mem0's open-source repository is Apache-2.0; hosted
+service terms are separate.
 
 ## Cognee
 
@@ -69,7 +71,9 @@ before integration.
   compaction call to extract durable workspace memory without an extra model request. MIT.
 
 These projects show valuable retrieval, storage, and lifecycle patterns. Remem's distinction is
-that providers remain adapters and the main product is recognition and routing policy.
+that providers remain adapters and the main product is recognition and routing policy. Its managed
+PostgreSQL provider is one peer behind that contract, not a requirement that external systems copy
+their records into Remem.
 
 ## Same-Name Project
 
@@ -102,4 +106,6 @@ human readability are relevant, but its AGPL-3.0 license requires care around de
 - Make provenance, scope, temporal validity, supersession, and deletion first-class.
 - Keep consolidation asynchronous, reviewable, idempotent, and reversible.
 - Support lexical retrieval as a reliable local baseline.
+- Treat local feature hashing as a bounded fallback, not as a general neural embedding model.
 - Bound injected context independently from retained provider data.
+- Keep durable writes explicit and authorized; no retrieved text may authorize its own persistence.

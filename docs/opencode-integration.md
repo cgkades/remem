@@ -1,159 +1,155 @@
 # OpenCode Integration
 
-## Research Snapshot
+## Current Adapter
 
-This integration was verified against OpenCode `v1.18.26` and
-`@opencode-ai/plugin@1.18.26` on 2026-09-01. The relevant release source and the `dev` branch were
-equivalent at commit
-[`8e0f1c2`](https://github.com/anomalyco/opencode/commit/8e0f1c253b6b7292b419505af849d06747c0e049).
+The primary adapter is built against the current OpenCode v2 beta plugin package
+`@opencode-ai/plugin@0.0.0-beta-18743`. It uses `ctx.session.hook("context")`, the official v2
+pre-dispatch model-context hook. The API is still beta as of 2026-09-01, so the exact dependency is
+pinned and isolated from the orchestration core under `src/hosts/opencode/v2.ts`.
 
 Primary references:
 
-- [official plugin documentation](https://opencode.ai/docs/plugins/)
-- [`@opencode-ai/plugin` hook declarations](https://github.com/anomalyco/opencode/blob/8e0f1c253b6b7292b419505af849d06747c0e049/packages/plugin/src/index.ts)
-- [prompt admission and loop](https://github.com/anomalyco/opencode/blob/8e0f1c253b6b7292b419505af849d06747c0e049/packages/opencode/src/session/prompt.ts)
-- [model request preparation](https://github.com/anomalyco/opencode/blob/8e0f1c253b6b7292b419505af849d06747c0e049/packages/opencode/src/session/llm/request.ts)
-- [compaction implementation](https://github.com/anomalyco/opencode/blob/8e0f1c253b6b7292b419505af849d06747c0e049/packages/opencode/src/session/compaction.ts)
-- [SDK documentation](https://opencode.ai/docs/sdk/)
+- [official v2 plugin documentation](https://opencode.ai/v2/docs/build/plugins)
+- the installed v2 `SessionHooks.context` declaration;
+- [ADR 0011](adr/0011-integrate-with-the-opencode-v2-context-hook.md); and
+- [ADR 0015](adr/0015-treat-retrieved-memory-as-untrusted-data.md).
 
-OpenCode does not publish a separate plugin-hook stability policy. Remem pins its tested minimum and
-keeps host-specific code in `src/integration/opencode.ts`.
+OpenCode does not publish a separate beta hook stability policy. Adapter mismatch or setup failure is
+logged without memory content and returns no registration rather than preventing OpenCode startup.
 
-## Plugin Shape
+## v2 Plugin Shape
 
-An OpenCode plugin exports a function of type `Plugin`:
+OpenCode v2 loads a `Plugin.define()` object with an ID and `setup(context)` method. Remem's package
+root default export is this v2 plugin. Setup receives location, plugin options, session hooks, tool
+registration, and disposal APIs.
 
 ```ts
-type Plugin = (input: PluginInput, options?: Record<string, unknown>) => Promise<Hooks>
+Plugin.define({
+  id: "opencode-remem",
+  async setup(ctx) {
+    const registration = await ctx.session.hook("context", async (event) => {
+      // Run bounded recognition and recall.
+    })
+    return () => registration.dispose()
+  },
+})
 ```
 
-`PluginInput` provides the SDK `client`, `project`, current `directory`, `worktree`, `serverUrl`, and
-Bun shell helper. Remem uses `worktree` for workspace-relative provider paths and `directory` for
-current prompt context. It does not invoke the shell helper.
+Remem uses `context.location.directory`, `context.location.project.directory`, and project ID to
+construct the provider scope. It does not invoke a shell from the prompt path.
 
-Plugins can be configured as npm package strings, local files, or `[plugin, options]` tuples. Local
-and global plugins are loaded once at startup, so configuration changes require an OpenCode restart.
+## Dispatch Boundary
 
-## Hooks Used
+The `context` hook runs immediately before each model dispatch, including tool-loop calls. Remem
+finds the latest non-synthetic user text in the assembled messages, performs bounded recall, and
+mutates only the in-flight event:
 
-| Hook                              | Stability                      | Remem use                                                                                    |
-| --------------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------- |
-| `chat.message`                    | non-experimental typed surface | Read the admitted prompt, plan recall, and append bounded context to `output.message.system` |
-| `tool`                            | non-experimental typed surface | Register `memory_search` and `memory_status`                                                 |
-| `event`                           | non-experimental typed surface | Reserved for future session observation; not used for durable capture in the MVP             |
-| `experimental.session.compacting` | experimental                   | Add catalog-only continuity guidance to compaction context                                   |
+1. append a trusted system part that says Remem memory is untrusted evidence without tool, secret,
+   policy, or write authority;
+2. append the actual catalog and recall as an ordinary user message;
+3. label that message with `source: "remem"`, `ephemeral: true`, and
+   `trust: "untrusted-memory-data"` metadata.
 
-Remem does not use `chat.params` for context. That non-experimental hook modifies sampling and provider
-options, not messages. Provider-specific request-option tricks would break model portability.
+Retrieved memory is never copied into the trusted policy. The hook event is ephemeral, so Remem does
+not persist its augmentation into conversation history or automatically turn it into durable memory.
 
-## Prompt Lifecycle
+All hook, catalog, semantic, and provider failures are caught. The dispatch continues without Remem
+augmentation. This is the host side of [ADR 0007](adr/0007-fail-open-without-memory.md).
 
-For a normal user prompt, current OpenCode behavior is:
+## v2 Tools
 
-1. resolve agent, model, and user parts;
-2. await `chat.message`;
-3. validate and persist the modified user message;
-4. load active history and resolve tools;
-5. run `experimental.chat.messages.transform`;
-6. assemble environment and instructions;
-7. assemble the system input, including `UserMessage.system`;
-8. run `experimental.chat.system.transform`;
-9. run `chat.params` and `chat.headers`; and
-10. dispatch to the provider.
+The v2 adapter registers:
 
-Tool-loop dispatches reuse the admitted user message, so Remem's `UserMessage.system`
-injection remains available throughout that turn.
+- `memory_search`: explicit bounded search across all providers or one provider ID;
+- `memory_status`: provider capabilities, sanitized health, catalog counts, budgets, and latest trace;
+- `memory_explain`: the latest sanitized retrieval decision for the current session.
 
-## Why Stable Prompt Admission
+These tools are read-only. `MemoryManager` CRUD is not exposed to OpenCode.
 
-As of the research snapshot, there is no non-experimental hook that mutates the complete assembled system or
-message list immediately before every model dispatch. The dispatch-time hooks are still named
-`experimental.chat.system.transform` and `experimental.chat.messages.transform`.
+## v2 Configuration
 
-Remem therefore performs retrieval in non-experimental `chat.message` and writes to the supported
-`UserMessage.system` field. This is persisted by OpenCode and consumed while assembling the provider
-request. It also avoids another LLM call and provides a session ID and the actual admitted parts.
-
-The trade-off is that `chat.message` does not run for every synthetic message and the system field is
-not serialized as ordinary conversation content during compaction. The compaction compatibility
-hook addresses the latter with catalog-only guidance.
-
-## Compaction
-
-`experimental.session.compacting` receives `sessionID` and mutable `output.context` plus an optional
-replacement prompt. Remem appends a compact instruction and catalog; it does not replace OpenCode's
-prompt. The guidance tells the compactor to preserve memory references without promoting ephemeral
-turn details to durable facts.
-
-There is no stable compaction mutation hook in `v1.18.26`. The integration is isolated and covered
-by tests so it can be replaced when a stable hook ships. Disabling or losing this hook must not
-break normal prompts.
-
-OpenCode emits `session.compacted` after successful compaction. Event handlers are not awaited by
-the plugin dispatcher, so future consolidation work triggered from events must be idempotent,
-bounded, and independently durable.
-
-## Session and Message Events
-
-Current events include `session.created`, `session.updated`, `session.status`, `session.compacted`,
-`session.diff`, `session.error`, `message.updated`, and `message.part.updated`. The older
-`session.idle` event is deprecated in favor of `session.status`.
-
-The SDK also exposes session listing, message history, individual messages, status, fork, prompt,
-and summarize/compaction operations. The MVP does not read historical sessions automatically. A
-future session provider will normalize those records behind `MemoryProvider`.
-
-## Tools
-
-OpenCode plugin tools use the `tool()` helper and schema definitions from `@opencode-ai/plugin`.
-Execution receives session, directory, worktree, abort signal, and permission helpers. Remem tools
-are read-only in the MVP and return bounded text.
-
-## Configuration
-
-OpenCode passes tuple options as an untyped record. Remem validates and defaults its own options.
-Invalid provider entries are disabled with sanitized diagnostics; they do not throw from plugin
-initialization.
-
-Example:
+The v2 key is `plugins`, plural. An entry can be a package string or an object with `package` and
+`options`. Because `opencode-remem` is not published yet, source installations must point to the
+built package-root entry:
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": [
-    [
-      "opencode-remem",
-      {
-        "providers": [
-          {
-            "type": "markdown",
-            "id": "notes",
-            "paths": ["~/notes", ".remem/memory"],
-            "exclude": ["private/**", "**/.trash/**"],
-            "scope": "workspace"
-          }
-        ],
-        "budgets": {
-          "catalogTokens": 600,
-          "recallTokens": 1400,
-          "perProviderTokens": 900
-        },
-        "debug": false
-      }
-    ]
+  "plugins": [
+    {
+      "package": "file:///absolute/path/to/remem/dist/index.js"
+    }
   ]
 }
 ```
 
-Published packages expose `./server` as a plugin-only v1 module (`{ id, server }`). The package root
-and `./core` are library APIs and are not loaded as legacy plugin modules. Source checkouts should
-reference `dist/server.js`, not `dist/index.js`.
+When no inline `providers` option is present, Remem loads the application configuration created by
+`remem init`. An entry with explicit provider options looks like this:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "file:///absolute/path/to/remem/dist/index.js",
+      "options": {
+        "providers": [
+          {
+            "type": "markdown",
+            "id": "notes",
+            "paths": [".remem/memory"],
+            "scope": "workspace"
+          }
+        ],
+        "debug": false
+      }
+    }
+  ]
+}
+```
+
+Providing `options.providers`, including an empty array, takes precedence over the installed app
+configuration. Relative Markdown paths resolve from the OpenCode worktree. Restart OpenCode after
+changing plugin configuration.
+
+`remem init --opencode` currently writes the bare package name `opencode-remem` to the platform
+OpenCode config. Use it only when that package is resolvable by OpenCode; source-only users should
+configure the file URL manually.
+
+## OpenCode 1.18.26 Compatibility
+
+The v1 adapter is isolated in `src/hosts/opencode/v1.ts` and depends on the aliased
+`@opencode-ai/plugin@1.18.26`. Use the package export `./server` for the legacy `{ id, server }`
+module or `./opencode/v1` for the direct adapter. `dist/server.js` is the corresponding source-build
+entry.
+
+v1 performs recall during `chat.message` and appends catalog and memory data to
+`UserMessage.system`. This is persisted for the admitted turn and reused in that turn's tool loop,
+but it is a weaker instruction/data boundary than v2. Its optional
+`experimental.session.compacting` hook adds catalog-only continuity guidance. Hook failure still
+fails open.
+
+The v1 compatibility contract is pinned to the official OpenCode `v1.18.26` release at commit
+[`774cc7c`](https://github.com/anomalyco/opencode/commit/774cc7c1914e4329eefde5a669f938b0cf566661):
+
+- [`chat.message` and hook declarations](https://github.com/anomalyco/opencode/blob/v1.18.26/packages/plugin/src/index.ts)
+- [prompt admission and dispatch preparation](https://github.com/anomalyco/opencode/blob/v1.18.26/packages/opencode/src/session/prompt.ts)
+
+## Entry Points
+
+- `opencode-remem` or `opencode-remem/opencode/v2`: current v2 plugin.
+- `opencode-remem/server`: isolated v1 `{ id, server }` module.
+- `opencode-remem/opencode/v1`: isolated direct v1 adapter.
+- `opencode-remem/core`: host-independent library API.
+- `dist/index.js`: source-build v2 entry.
+- `dist/server.js`: source-build v1 server entry.
 
 ## Compatibility Policy
 
 - Core orchestration imports no OpenCode types.
-- Stable hooks are preferred whenever they can express the behavior.
-- Experimental APIs are isolated in one module and never required for basic prompt operation.
-- The package declares `engines.opencode: ">=1.18.26 <2"` and pins the hook declarations used for
-  the release. CI currently verifies that declared version on Node.js 22 and 24.
+- v2 beta and v1 release dependencies are pinned separately.
+- v2 is primary; v1 compatibility can be retired without changing the core.
+- The package declares Node.js `>=22` and OpenCode `>=1.18.26`.
+- CI exercises the package on Node.js 22 and 24 with PostgreSQL/pgvector integration tests.
 - Hook mismatches fail open and surface a diagnostic without memory content.
+- No adapter automatically reads or writes historical sessions.

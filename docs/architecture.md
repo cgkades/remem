@@ -23,11 +23,14 @@ It is deliberately not `prompt -> vector search -> nearest-neighbor dump`.
 
 ## Architecture Status
 
-The implemented MVP establishes the host-independent orchestration core, provider contracts,
-Markdown provider, deterministic and lexical recognition, bounded extractive synthesis, and the
-isolated OpenCode v1 adapter. The managed PostgreSQL provider, semantic recognition, hierarchical
-catalog persistence, learning pipeline, and OpenCode v2 adapter are accepted direction and are not
-all implemented yet.
+The implementation includes the host-independent core, Markdown and PostgreSQL providers, managed
+and external database modes, schema version 3, deterministic and local semantic recognition,
+provider/topic awareness, bounded extractive synthesis, explicit CRUD/supersession APIs, logical
+backup/restore commands, the primary OpenCode v2 adapter, and the isolated v1 adapter.
+
+Automatic session writing and consolidation are not implemented. Arbitrary-depth topic population
+and branch rendering, a general neural embedding model, model planning/synthesis, scheduled backup
+and retention, and non-Markdown/non-PostgreSQL adapters remain target architecture.
 
 OpenCode v2 is the current official API but is still beta as of 2026-09-01. Remem therefore treats
 its API as a versioned adapter boundary rather than as a stable core dependency.
@@ -91,21 +94,25 @@ and can be removed independently when v1 support ends.
 
 ## Recognition and Planning
 
-The catalog is a bounded hierarchy of provider roots, topics, and subtopics. Nodes contain aliases,
-scope, retrieval hints, provider locations, and compact summaries, not detailed memory bodies. A
-topic can point to more than one provider location, preserving cross-provider recall without
-pretending the underlying records share ownership or consistency.
+The catalog model allows a bounded hierarchy of provider roots, topics, and subtopics. Nodes contain
+aliases, scope, retrieval hints, provider locations, and compact summaries, not detailed memory
+bodies. The current renderer emits provider roots and topic entries; automatic subtopic population
+and traversal remain deferred. A topic can point to more than one provider location, preserving
+cross-provider recall without pretending the underlying records share ownership or consistency.
 
 Planning has three bounded stages:
 
 1. Stage 0 applies explicit continuity, identifiers, exact aliases, and other deterministic signals.
 2. Stage 1 combines lexical scoring with local semantic similarity over catalog entries. Embeddings
    recognize likely topics; they do not establish truth or bypass provider scope filters.
-3. Stage 2 optionally uses a configured model planner only when earlier stages are ambiguous.
+3. Stage 2 is reserved for an optional model planner when earlier stages are ambiguous; it is not
+   implemented.
 
-The implemented MVP calls its lexical-only pass Stage 1. The target keeps that lexical evidence and
-adds pgvector-backed semantic recognition at the same stage, with deterministic fallback when
-embedding generation or vector search is unavailable.
+The current Stage 1 uses a local 384-dimensional deterministic feature-hash model for topic and
+provider awareness. PostgreSQL persists those vectors in pgvector for record retrieval. The model
+has small concept groups and is not a general neural embedding model; `EmbeddingModel` permits an
+explicit replacement. Embedding generation or vector-search failure falls back to deterministic and
+lexical signals.
 
 ## Provider Orchestration
 
@@ -168,10 +175,11 @@ credential with restrictive filesystem permissions. It listens on loopback only 
 reconfigure, or expose an unrelated PostgreSQL installation. Exact packaging can vary by platform
 without changing the provider contract.
 
-External mode accepts an operator-supplied PostgreSQL connection and manages no server process. It
-validates connectivity, supported PostgreSQL and pgvector versions, schema privileges, and migration
-state before enabling the provider. TLS and credential handling follow the external operator's
-policy. Both modes use the same schema and adapter after connection establishment.
+External mode accepts an operator-supplied PostgreSQL connection and manages no server process.
+`doctor` validates connectivity, pgvector presence, migration state, and a database write. CI tests
+PostgreSQL 16 with pgvector 0.8.1; explicit supported-version and privilege-range validation remains
+deferred. TLS and credential handling follow the external operator's policy. Both modes use the same
+schema and adapter after connection establishment.
 
 ## Installation
 
@@ -185,11 +193,11 @@ flowchart TD
     C --> D[Provision dedicated local PostgreSQL]
     D --> E[Create restricted role, database, and pgvector]
     B -->|External| F[Read operator-supplied connection securely]
-    F --> G[Validate TLS policy, version, pgvector, and privileges]
+    F --> G[Connect without changing server lifecycle]
     E --> H[Acquire migration lock]
     G --> H
     H --> I[Verify ordered checksums and apply transactional migrations]
-    I --> J[Health and recovery-readiness checks]
+    I --> J[Provider, schema, embedding, and host checks]
     J --> K[Configure selected host adapter]
     K --> L[Ready]
     C -->|Failure| X[Report storage unavailable without altering unrelated services]
@@ -208,7 +216,8 @@ Recall combines provider results, removes content-equivalent duplicates, preserv
 reference, and ranks with bounded contributions from relevance, scope, importance, freshness, and
 provider confidence.
 
-Synthesis is selected behind one contract:
+Synthesis is selected behind one contract. Only deterministic extraction is included today; the
+other strategies are extension targets:
 
 - deterministic extractive synthesis is the default and fallback;
 - a local model strategy may summarize within explicit resource and token budgets; and
@@ -254,9 +263,11 @@ flowchart TD
     K --> L[Available to Future Recognition]
 ```
 
-Writes to the managed provider update records, catalog relationships, and index state transactionally
-or through an idempotent work queue. External writes use advertised provider capabilities and retain
-their provider's consistency semantics. Learning failures never interrupt the active host request.
+The target learning path updates records, catalog relationships, and index state transactionally or
+through an idempotent work queue. Current explicit managed writes create a record, catalog entry, and
+optional embedding, but do not populate arbitrary topic relationships. External writes use
+advertised provider capabilities and retain their provider's consistency semantics. Future learning
+failures must never interrupt the active host request.
 
 ## State and Concurrency
 
@@ -272,15 +283,15 @@ Managed writes and migrations use database transactions; lifecycle operations us
 
 Schema migrations are immutable, ordered files recorded with checksums in a migration ledger. One
 process acquires a database lock, verifies the complete applied prefix, and applies each pending
-migration transactionally. A gap, changed checksum, unsupported version, or failed migration
-disables the provider and requires operator action; Remem never guesses at schema repair or runs an
-automatic destructive downgrade.
+migration transactionally. A gap, changed checksum, unknown applied migration, or failed migration
+requires operator action; Remem never guesses at schema repair or runs an automatic destructive
+downgrade.
 
-Managed mode creates logical backups before risky upgrades and supports configurable scheduled
-logical backups. Recovery restores into a fresh compatible PostgreSQL instance with pgvector, then
-verifies migration checksums, constraints, record counts, and representative retrieval. Credentials
-and runtime secrets are not part of backups. External-mode backup scheduling and retention remain
-the database operator's responsibility, while Remem documents and verifies the logical restore path.
+The CLI creates custom-format logical backups on request and restores only with `--confirm`.
+Restore uses `pg_restore --clean --if-exists --schema=remem` against the configured database and then runs migration
+verification. It does not create a fresh database, automatic pre-operation backup, schedule,
+retention policy, encryption, record-count verification, or representative retrieval check.
+External-mode backup scheduling and retention remain the database operator's responsibility.
 
 ## Failure Boundaries
 
@@ -302,7 +313,7 @@ insecurely. Errors appear in diagnostics but are not inserted into model context
 ## Observability
 
 Each dispatch produces a structured trace containing recognition and planning decisions, provider
-timing and counts, isolated failures, deduplication, synthesis strategy, and estimated token use.
+timing and counts, isolated failures, deduplication, and estimated token use.
 Normal logs contain no raw memory, embeddings, credentials, or connection strings. Host tools expose
 bounded health and the latest sanitized trace when deeper diagnosis is requested.
 

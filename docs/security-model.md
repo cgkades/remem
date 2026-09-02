@@ -13,6 +13,9 @@ project names even when note bodies are not injected.
 - Provider content is untrusted data, including Markdown instructions and MCP tool output.
 - Remote model and memory services are external processors.
 - The primary model receives only context selected under configured budgets and exclusions.
+- Managed PostgreSQL is trusted for availability and storage integrity, but its memory content is
+  still untrusted model input.
+- The caller of `MemoryManager` or provider mutation APIs is responsible for authorization.
 
 ## Threats
 
@@ -28,15 +31,30 @@ or note and emitting a sanitized diagnostic. Defaults apply only when the settin
 
 ### Prompt Injection in Memory
 
-Stored Markdown can contain instructions intended to control the agent. Remem wraps retrieved text
-as attributed memory data and system guidance says to treat it as potentially stale source material,
-not higher-priority instructions. The MVP does not execute links, commands, or embedded code.
+Stored Markdown or PostgreSQL records can contain instructions intended to control the agent. The
+OpenCode v2 adapter puts the actual catalog and recalled content in an ephemeral ordinary user
+message and separately adds a trusted system policy defining it as untrusted evidence. Remem does
+not execute links, commands, or embedded code.
+
+Escaping, labels, and provenance reduce ambiguity but do not make hostile natural language safe.
+Current authorization and tool policy must ignore authority claimed inside memory. This implements
+[ADR 0015](adr/0015-treat-retrieved-memory-as-untrusted-data.md).
+
+### OpenCode v1 Boundary
+
+The isolated OpenCode `1.18.26` adapter appends memory through `chat.message` to
+`UserMessage.system`. This is a weaker trust boundary than v2 because memory data shares a privileged
+system field. The adapter is compatibility-only; use v2 where available.
 
 ### Secret Persistence
 
-Future capture must redact or reject secrets before writes. The MVP has no automatic writes. Users
-should exclude secret directories and avoid placing credentials in memory notes. Configuration
-should use environment-backed provider credentials rather than note frontmatter.
+Remem has no automatic writes, but explicit mutation APIs can persist any content a caller supplies.
+Callers must redact or reject secrets before writes. Users should exclude secret directories and
+avoid placing credentials in memory notes. Configuration should use environment-backed provider
+credentials rather than note frontmatter.
+
+Managed `config.json` and `.env` contain database credentials. Remem creates them with mode `0600`
+and their directories with mode `0700` on POSIX systems. Doctor reports unsafe group/other bits.
 
 ### Path Traversal and Symlinks
 
@@ -44,17 +62,24 @@ The Markdown adapter starts from explicitly configured roots, ignores non-Markdo
 relative path exclusions, and does not follow symbolic links during recursive discovery. Absolute
 roots are allowed because users may intentionally attach an Obsidian vault.
 
-### Remote Exfiltration
+### Database Exposure and Remote Exfiltration
 
-The Markdown MVP makes no network calls and has no telemetry. A future remote provider or
-model-backed planner/synthesizer must be explicitly enabled and document what data leaves the
-machine. Local retrieval must remain possible without those features.
+Managed Docker publishes PostgreSQL only on `127.0.0.1`; it is not a remote-service boundary. An
+external PostgreSQL URL may send memory and credentials across a network. TLS, certificates,
+firewalls, roles, logs, backups, and server retention remain the external operator's responsibility.
+
+The Markdown provider and default feature-hash embedding make no remote calls, and Remem has no
+telemetry. A future remote provider, neural embedding service, or model-backed planner/synthesizer
+must be explicitly enabled and document what data leaves the machine.
 
 ### Denial of Service
 
 Large trees, files, provider outputs, and slow backends can consume resources. Adapters enforce file
 and result limits, provider requests have timeouts, outputs are token-budgeted, and failures settle
 independently.
+
+Managed PostgreSQL pools connections and sets connection/query timeouts. Docker disk growth,
+external database resource limits, and backup storage still require operator monitoring.
 
 ### Poisoning and Stale Knowledge
 
@@ -69,6 +94,9 @@ and query terms; users should treat debug output as sensitive and disable it by 
 
 Provider errors are sanitized before logging. Health results must never include tokens or sample
 records.
+
+Subprocess error output is capped and configured database passwords are replaced with `[redacted]`.
+No redaction mechanism can protect a secret copied into an unrecognized field or memory body.
 
 ## Exclusions and Redaction
 
@@ -85,28 +113,34 @@ Redaction should occur before remote calls, not only before final context inject
 
 ## Data Retention and Deletion
 
-The MVP reads provider-owned Markdown and retains only an in-memory index and bounded diagnostics.
-It creates no hidden memory database. Index and catalog snapshots expire after 30 seconds; explicit
-refresh also invalidates them. Deleting a source file becomes visible after either event.
+Markdown remains provider-owned and is cached in memory for 30 seconds. Managed PostgreSQL is a
+durable system of record. `PostgresMemoryProvider.delete()` hard-deletes the selected memory and
+cascades its managed aliases, provenance links, embeddings, and catalog entry. The caller must
+authorize the ID and scope; there is no model-facing `memory_forget` tool.
 
-Future adapters must document deletion semantics, caches, backups, and whether provider deletion is
-hard, soft, or eventually consistent. `memory_forget` must show the target source and scope before a
-destructive operation.
+Logical backups retain deleted or superseded content until the operator removes the artifact. Remem
+does not currently implement backup retention, secure erasure, scheduled backups, or encryption.
 
 ## Safe Defaults
 
-- local worktree provider only;
+- managed database on loopback only;
 - no telemetry;
-- no network calls;
+- no default remote model call;
 - no automatic writes;
 - no full-content normal logs;
 - bounded files, results, and injected tokens;
-- provider failures do not block OpenCode; and
-- debug mode disabled.
+- provider failures do not block OpenCode;
+- debug mode disabled;
+- guarded restore and managed-only reset; and
+- provider failures do not bypass scope validation.
 
 ## Residual Risks
 
-System-context labeling and metadata escaping reduce but cannot eliminate prompt injection from
+Instruction/data separation and metadata escaping reduce but cannot eliminate prompt injection from
 recalled data. The UTF-8 byte budget deliberately underfills most model token budgets. A user who
-configures broad global paths grants Remem access
-to them. Experimental OpenCode compaction hooks may change before stabilization.
+configures broad global paths grants Remem access to them. The feature-hash model can produce false
+semantic matches. OpenCode v2 is beta, and the v1 compatibility boundary is weaker.
+
+Restore uses `--clean --if-exists` against the current database, reset deletes the managed volume,
+and neither operation creates a preflight backup. See [Backup and restore](backup-restore.md) and
+[ADR 0017](adr/0017-use-logical-backup-and-recovery.md).
