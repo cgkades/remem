@@ -29,7 +29,7 @@ provider/topic awareness, bounded extractive synthesis, explicit CRUD/supersessi
 backup/restore commands, the primary OpenCode v2 adapter, and the isolated v1 adapter.
 
 Opt-in capture observes only explicit user corrections, decisions, and preferences from the OpenCode
-adapters. It excludes sensitive, quoted, tool, and retrieved text; writes pending candidates; and
+adapters. It excludes sensitive, reported quoted speech, tool, and retrieved text; writes pending candidates; and
 requires explicit review before consolidation. Arbitrary-depth topic population and branch rendering,
 a general neural embedding model, model planning/synthesis, scheduled backup and retention, and
 non-Markdown/non-PostgreSQL adapters remain target architecture.

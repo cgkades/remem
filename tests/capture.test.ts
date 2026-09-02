@@ -113,6 +113,20 @@ describe("DeterministicCandidateExtractor", () => {
     ).resolves.toEqual([[], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []])
   })
 
+  it("does not attribute reported quoted speech to the user", async () => {
+    const extractor = new DeterministicCandidateExtractor(config)
+
+    await expect(
+      extractor.extract([observation('Alice said "we decided to use Kafka" yesterday.')]),
+    ).resolves.toEqual([])
+    await expect(
+      extractor.extract([observation("The runbook reported ‘we will use Kafka’.")]),
+    ).resolves.toEqual([])
+    await expect(
+      extractor.extract([observation('Decision: use the "Kafka" cluster.')]),
+    ).resolves.toHaveLength(1)
+  })
+
   it("detects and redacts reusable credential patterns", () => {
     const secret = "Authorization: Bearer AbCdEf0123456789ZYXWVUTSRQPO987654"
 

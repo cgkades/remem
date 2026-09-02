@@ -98,7 +98,7 @@ capture fields and retains the installed provider configuration when inline `pro
 ```
 
 Only explicit user corrections, decisions, and preferences qualify. Prompts containing reusable
-credentials, quoted/retrieved text, or tool output are excluded. Capture never reads model or tool
+credentials, reported quoted/retrieved text, or tool output are excluded. Capture never reads model or tool
 responses. It creates pending candidates only; inspect them with `remem candidates`, approve or
 reject each with `remem review <ID> --approve|--reject`, and promote approved candidates with
 `remem consolidate`.

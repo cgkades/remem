@@ -21,6 +21,8 @@ export interface UserPromptCapture {
 }
 
 const QUOTED_OR_SYNTHETIC_PATTERN = /(^\s*>|```|<memory-|tool[- ]output|source:\s*remem)/imu
+const REPORTED_QUOTE_PATTERN =
+  /\b(?:said|wrote|reported|mentioned|claimed|told|according to)\b[^"\n“‘]{0,80}(?:"[^"\n]{1,500}"|'[^'\n]{1,500}'|“[^”\n]{1,500}”|‘[^’\n]{1,500}’)/iu
 
 function classify(text: string): SessionEventKind | undefined {
   if (text.includes("?")) return undefined
@@ -54,7 +56,8 @@ function safeToCapture(text: string, config: CaptureConfig): boolean {
     text.length > 0 &&
     text.length <= config.maxInputCharacters &&
     !containsSensitiveCredential(text) &&
-    !QUOTED_OR_SYNTHETIC_PATTERN.test(text)
+    !QUOTED_OR_SYNTHETIC_PATTERN.test(text) &&
+    !REPORTED_QUOTE_PATTERN.test(text)
   )
 }
 
