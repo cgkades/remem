@@ -27,12 +27,14 @@ What works now:
 
 - managed Docker storage using `pgvector/pgvector:0.8.1-pg16`, exposed on loopback only;
 - operator-managed external PostgreSQL with pgvector;
-- checksum-verified, ordered migrations through database schema version 3;
+- checksum-verified, ordered migrations through database schema version 4;
 - PostgreSQL full-text and 384-dimensional pgvector retrieval;
 - local semantic Stage 1 recognition, deterministic routing, provider/topic awareness, ranking,
   deduplication, token budgets, and attributed synthesis;
 - a read-only Markdown/Obsidian-style provider;
 - managed CRUD and supersession through `PostgresMemoryProvider` and `MemoryManager`;
+- deterministic, bounded consolidation of approved candidates with duplicate merging, provenance,
+  conflict preservation, supersession, and restart-safe PostgreSQL run records;
 - OpenCode tools `memory_search`, `memory_status`, and `memory_explain`;
 - logical backup and guarded restore/reset commands; and
 - an executable evaluation corpus plus PostgreSQL integration tests in CI on Node.js 22 and 24.
