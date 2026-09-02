@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import type { CaptureConfig, RememConfig } from "./config.js"
 import type {
   CandidateExtractor,
@@ -7,6 +7,7 @@ import type {
   SessionEventKind,
   SessionObservation,
 } from "./observation.js"
+import { isObservationStore } from "./observation.js"
 import { containsSensitiveCredential } from "./sensitive-data.js"
 import { withTimeout } from "./timeout.js"
 import type { MemoryContext, MemoryProvider, RememLogger } from "./types.js"
@@ -28,7 +29,7 @@ function classify(text: string): SessionEventKind | undefined {
   }
   if (/\b(?:i prefer|my preference|always use|never use)\b/iu.test(text)) return "preference"
   if (
-    /\b(?:decision\s*:|we decided|we will use|let(?:'s| us) use|architecture decision)\b/iu.test(
+    /(?:\bdecision\s*:|\bwe decided\b|\bwe will use\b|\blet(?:'s| us) use\b|\barchitecture decision\b)/iu.test(
       text,
     )
   ) {
@@ -57,6 +58,11 @@ function safeToCapture(text: string, config: CaptureConfig): boolean {
   )
 }
 
+function stableId(...values: string[]): string {
+  const digest = createHash("sha256").update(values.join("\u0000")).digest("hex")
+  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`
+}
+
 export class DeterministicCandidateExtractor implements CandidateExtractor {
   constructor(private readonly config: CaptureConfig) {}
 
@@ -73,7 +79,7 @@ export class DeterministicCandidateExtractor implements CandidateExtractor {
     const content = text.slice(0, this.config.maxCandidateCharacters)
     return Promise.resolve([
       {
-        id: randomUUID(),
+        id: stableId("candidate", observation.id),
         observationIds: [observation.id],
         memory: {
           title: title(kind, content),
@@ -121,6 +127,7 @@ export class CaptureCoordinator {
   private readonly extractor: DeterministicCandidateExtractor
   private readonly queue: SessionObservation[] = []
   private drainPromise: Promise<void> | undefined
+  private readonly shutdown = new AbortController()
   private closed = false
 
   constructor(
@@ -140,7 +147,9 @@ export class CaptureCoordinator {
       logFailure(this.logger, "capture.dropped", { reason: "queue_full" })
       return
     }
-    const id = randomUUID()
+    const id = input.messageId
+      ? stableId("observation", input.host, input.sessionId, input.messageId)
+      : randomUUID()
     const source = `remem://${input.host}/sessions/${encodeURIComponent(input.sessionId)}/messages/${encodeURIComponent(input.messageId ?? id)}`
     this.queue.push({
       id,
@@ -163,8 +172,15 @@ export class CaptureCoordinator {
 
   async dispose(): Promise<void> {
     this.closed = true
-    this.queue.length = 0
-    await this.idle()
+    try {
+      await withTimeout(this.config.timeoutMs, () => this.idle())
+    } catch (error) {
+      this.shutdown.abort(error)
+      this.queue.length = 0
+      logFailure(this.logger, "capture.shutdown_timeout", {
+        error: error instanceof Error ? error.name : "unknown error",
+      })
+    }
   }
 
   private async drain(): Promise<void> {
@@ -173,12 +189,20 @@ export class CaptureCoordinator {
         const observation = this.queue.shift()
         if (!observation) continue
         try {
-          const candidates = await withTimeout(this.config.timeoutMs, (signal) =>
-            this.extractor.extract([observation], signal),
+          const candidates = await withTimeout(
+            this.config.timeoutMs,
+            (signal) => this.extractor.extract([observation], signal),
+            this.shutdown.signal,
           )
           for (const candidate of candidates) {
-            await withTimeout(this.config.timeoutMs, (signal) =>
-              this.store.persistCandidate(observation, candidate, signal),
+            await withTimeout(
+              this.config.timeoutMs,
+              (signal) =>
+                this.store.persistCandidate(observation, candidate, {
+                  timeoutMs: this.config.timeoutMs,
+                  signal,
+                }),
+              this.shutdown.signal,
             )
           }
         } catch (error) {
@@ -188,16 +212,11 @@ export class CaptureCoordinator {
         }
       }
     } finally {
+      if (this.shutdown.signal.aborted) this.queue.length = 0
       this.drainPromise = undefined
       if (!this.closed && this.queue.length > 0) this.drainPromise = this.drain()
     }
   }
-}
-
-function isObservationStore(
-  provider: MemoryProvider,
-): provider is MemoryProvider & ObservationStore {
-  return "persistCandidate" in provider && "candidateStatus" in provider
 }
 
 export function createCaptureCoordinator(

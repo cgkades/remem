@@ -497,6 +497,7 @@ integration("PostgreSQL managed provider", () => {
     }
 
     await provider.persistCandidate(observation, candidate)
+    await provider.persistCandidate(observation, candidate)
 
     expect(await provider.candidateStatus(context)).toMatchObject({ pending: 1 })
     const persisted = (
@@ -519,6 +520,39 @@ integration("PostgreSQL managed provider", () => {
     expect(
       (persisted?.metadata.memory as Record<string, unknown> | undefined)?.summary,
     ).toBeUndefined()
+    expect(
+      (
+        await pool.query<{ count: string }>(
+          "SELECT count(*) FROM remem.candidate_memories WHERE id = $1",
+          [candidate.id],
+        )
+      ).rows[0]?.count,
+    ).toBe("1")
+    expect(await provider.listCandidates("pending")).toContainEqual(
+      expect.objectContaining({
+        id: candidate.id,
+        title: candidate.memory.title,
+        content: candidate.memory.content,
+      }),
+    )
+    const otherProviderCandidate = randomUUID()
+    await pool.query(
+      `INSERT INTO remem.candidate_memories
+        (id, type, title, content, scope_kind, scope_id, confidence, status, metadata)
+       VALUES ($1, 'decision', 'Other provider decision', 'This must not be promoted here.', 'project', 'phoenix', 0.9, 'approved', $2::jsonb)`,
+      [otherProviderCandidate, JSON.stringify({ providerId: "other-provider" })],
+    )
+    await provider.reviewCandidate(candidate.id, "approved")
+    expect(await provider.candidateStatus(context)).toMatchObject({ approved: 1, pending: 0 })
+    expect(await provider.consolidateCandidates()).toMatchObject({ candidates: 1, promoted: 1 })
+    expect(
+      (
+        await pool.query<{ status: string }>(
+          "SELECT status FROM remem.candidate_memories WHERE id = $1",
+          [otherProviderCandidate],
+        )
+      ).rows[0]?.status,
+    ).toBe("approved")
   })
 
   it("reports database, migration, provider, filesystem, and embedding health", async () => {

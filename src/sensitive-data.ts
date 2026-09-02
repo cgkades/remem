@@ -1,10 +1,12 @@
 const CREDENTIAL_PATTERNS = [
-  /(?:api[_ -]?key|secret|password|private[_ -]?key|access[_ -]?token|bearer token)\s*[:=]\s*[^\s,;]+/iu,
+  /["']?(?:api[_ -]?(?:key|token)|secret|pass(?:word)?|pwd|private[_ -]?key|access[_ -]?token|bearer token)["']?\s*(?:[:=]|is)\s*["']?[^\s,;"'}]+/iu,
   /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/iu,
   /\b(?:AKIA|ASIA|A3T[A-Z0-9])[A-Z0-9]{16}\b/u,
   /\bBearer\s+[A-Za-z0-9._~+/-]{16,}\b/iu,
+  /\bAuthorization\s*:\s*(?:Basic|Bearer|Token)\s+[A-Za-z0-9._~+/-]{8,}={0,2}/iu,
   /\beyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}\b/u,
   /-----BEGIN [A-Z0-9 ]*(?:PRIVATE KEY|OPENSSH PRIVATE KEY)-----/iu,
+  /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s:/]+:[^\s@]+@[^\s]+/iu,
 ]
 
 const HIGH_ENTROPY_TOKEN = /[A-Za-z0-9_~+/-]{32,}/gu

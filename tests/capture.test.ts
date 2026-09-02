@@ -73,6 +73,9 @@ describe("DeterministicCandidateExtractor", () => {
     const decision = await extractor.extract([
       observation("We decided to use logical replication for Phoenix."),
     ])
+    const labelledDecision = await extractor.extract([
+      observation("Decision: use logical replication for Phoenix."),
+    ])
 
     expect(correction[0]).toMatchObject({ status: "pending", confidence: 0.95 })
     expect(correction[0]?.memory.provenance?.[0]?.source).toMatchObject({
@@ -80,6 +83,7 @@ describe("DeterministicCandidateExtractor", () => {
       externalId: "message",
     })
     expect(decision[0]).toMatchObject({ status: "pending", memory: { type: "decision" } })
+    expect(labelledDecision[0]).toMatchObject({ status: "pending", memory: { type: "decision" } })
   })
 
   it("rejects chitchat, quoted/tool data, secrets, and oversized input", async () => {
@@ -90,17 +94,23 @@ describe("DeterministicCandidateExtractor", () => {
       observation("What architecture should this service use?"),
       observation("> Decision: use logical replication."),
       observation("Decision: API_KEY=super-secret-value"),
+      observation('Decision: {"api_key":"abc123"}'),
+      observation("Decision: api token is abc123"),
+      observation("Decision: the password is hunter2"),
+      observation("Decision: pass=hunter2"),
       observation("Decision: use token ghp_abcdefghijklmnopqrstuvwxyz1234567890"),
       observation("Decision: use AKIAIOSFODNN7EXAMPLE for the deploy role."),
       observation("Decision: pass Bearer AbCdEf0123456789ZYXWVUTSRQPO987654."),
+      observation("Decision: Authorization: Basic YWxpY2U6cEBzc3cwcmQ="),
       observation("Decision: -----BEGIN OPENSSH PRIVATE KEY-----"),
       observation("Decision: use pV7mQ2xK9rT4nL8cF1wH6bC0eJ5sD3yZqA."),
+      observation("Decision: use postgres://admin:password@db.example/remem"),
       observation(`Decision: ${"x".repeat(250)}`),
     ]
 
     await expect(
       Promise.all(samples.map((sample) => extractor.extract([sample]))),
-    ).resolves.toEqual([[], [], [], [], [], [], [], [], [], [], []])
+    ).resolves.toEqual([[], [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []])
   })
 
   it("detects and redacts reusable credential patterns", () => {
@@ -108,6 +118,7 @@ describe("DeterministicCandidateExtractor", () => {
 
     expect(containsSensitiveCredential(secret)).toBe(true)
     expect(redactSensitiveText(secret)).toBe("Authorization: [redacted]")
+    expect(containsSensitiveCredential("Authorization: Basic YWxpY2U6cEBzc3cwcmQ=")).toBe(true)
     expect(containsSensitiveCredential("Use the standard credential provider chain.")).toBe(false)
   })
 })
@@ -148,5 +159,43 @@ describe("CaptureCoordinator", () => {
       coordinator.enqueue(input("Decision: use a fail-open capture path.")),
     ).not.toThrow()
     await expect(coordinator.idle()).resolves.toBeUndefined()
+  })
+
+  it("bounds a stalled persistence call and passes cancellation to the store", async () => {
+    let signal: AbortSignal | undefined
+    const stalled: ObservationStore = {
+      persistCandidate: (_observation, _candidate, options) => {
+        signal = options?.signal
+        return new Promise(() => undefined)
+      },
+      candidateStatus: () =>
+        Promise.resolve({
+          pending: 0,
+          approved: 0,
+          consolidating: 0,
+          rejected: 0,
+          promoted: 0,
+          expired: 0,
+        }),
+    }
+    const coordinator = new CaptureCoordinator(stalled, { ...config, timeoutMs: 10 }, logger)
+
+    coordinator.enqueue(input("Decision: bound stalled capture persistence."))
+    await expect(coordinator.idle()).resolves.toBeUndefined()
+    expect(signal?.aborted).toBe(true)
+  })
+
+  it("drains queued observations during disposal", async () => {
+    const store = new RecordingStore()
+    const coordinator = new CaptureCoordinator(store, config, logger)
+
+    coordinator.enqueue(input("Decision: preserve the first queued capture."))
+    coordinator.enqueue({
+      ...input("Decision: preserve the second queued capture."),
+      messageId: "message-2",
+    })
+    await coordinator.dispose()
+
+    expect(store.persisted).toHaveLength(2)
   })
 })

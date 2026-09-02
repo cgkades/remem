@@ -387,6 +387,7 @@ export class PostgresConsolidationRunner {
     private readonly pipeline: ConsolidationPipeline,
     private readonly batchSize = 50,
     private readonly recoveryAfterMs = 15 * 60_000,
+    private readonly providerId?: string,
   ) {}
 
   async run(signal?: AbortSignal): Promise<ConsolidationRun> {
@@ -450,25 +451,27 @@ export class PostgresConsolidationRunner {
       `
       UPDATE remem.candidate_memories
       SET status = 'approved'
-      WHERE status = 'consolidating'
-        AND id = ANY(
-          SELECT unnest(input_memory_ids)
-          FROM remem.consolidation_records
-          WHERE status = 'started'
-            AND started_at < now() - ($1 * interval '1 millisecond')
+       WHERE status = 'consolidating'
+         AND id = ANY(
+           SELECT unnest(input_memory_ids)
+           FROM remem.consolidation_records
+           WHERE status = 'started'
+             AND started_at < now() - ($1 * interval '1 millisecond')
+             AND ($2::text IS NULL OR metadata->>'providerId' = $2 OR metadata->>'providerId' IS NULL)
         )
     `,
-      [this.recoveryAfterMs],
+      [this.recoveryAfterMs, this.providerId ?? null],
     )
     await this.pool.query(
       `
       UPDATE remem.consolidation_records
-      SET status = 'failed', completed_at = now(),
-        metadata = metadata || '{"recovery":"interrupted run returned candidates to approved"}'::jsonb
-      WHERE status = 'started'
-        AND started_at < now() - ($1 * interval '1 millisecond')
+       SET status = 'failed', completed_at = now(),
+         metadata = metadata || '{"recovery":"interrupted run returned candidates to approved"}'::jsonb
+       WHERE status = 'started'
+         AND ($2::text IS NULL OR metadata->>'providerId' = $2 OR metadata->>'providerId' IS NULL)
+         AND started_at < now() - ($1 * interval '1 millisecond')
     `,
-      [this.recoveryAfterMs],
+      [this.recoveryAfterMs, this.providerId ?? null],
     )
   }
 
@@ -481,10 +484,11 @@ export class PostgresConsolidationRunner {
       const candidates = await client.query<CandidateRow>(
         `SELECT * FROM remem.candidate_memories
          WHERE status = 'approved'
+           AND ($2::text IS NULL OR metadata->>'providerId' = $2)
          ORDER BY created_at, id
          LIMIT $1
          FOR UPDATE SKIP LOCKED`,
-        [this.batchSize],
+        [this.batchSize, this.providerId ?? null],
       )
       if (candidates.rows.length === 0) {
         await client.query("COMMIT")
@@ -497,9 +501,9 @@ export class PostgresConsolidationRunner {
         [candidateIds],
       )
       await client.query(
-        `INSERT INTO remem.consolidation_records (id, kind, status, input_memory_ids)
-         VALUES ($1, 'candidate-consolidation', 'started', $2)`,
-        [id, candidateIds],
+        `INSERT INTO remem.consolidation_records (id, kind, status, input_memory_ids, metadata)
+         VALUES ($1, 'candidate-consolidation', 'started', $2, $3::jsonb)`,
+        [id, candidateIds, JSON.stringify(this.providerId ? { providerId: this.providerId } : {})],
       )
       await client.query("COMMIT")
       return { id, candidates: candidates.rows.map(candidateFromRow) }

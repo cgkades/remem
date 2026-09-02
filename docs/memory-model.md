@@ -148,14 +148,17 @@ operation and scope before invoking them. No OpenCode event automatically calls 
 
 ## Managed Schema
 
-The current database schema is version 3:
+The current database schema is version 4:
 
 - version 1 creates providers, sources, memories, provenance, tags, aliases, topics, entities,
   relationships, catalog entries, full-text indexes, and 384-dimensional pgvector embeddings;
-- version 2 adds session observations, candidate memories, and consolidation records.
+- version 2 adds session observations, candidate memories, and consolidation records;
+- version 3 scopes entities and adds catalog embeddings; and
+- version 4 adds the `consolidating` candidate status used for restart-safe review and consolidation.
 
-Version 2 tables do not imply an active learning pipeline. They provide durable shapes for future
-reviewable observation and consolidation. Migration mechanics are documented in
+Version 2 tables support an opt-in, reviewable observation pipeline. Automatic capture persists only
+eligible explicit user statements as pending candidates; it never captures model/tool output and strips
+raw candidate text from observation payloads. Migration mechanics are documented in
 [Storage architecture](storage-architecture.md) and
 [ADR 0016](adr/0016-use-ordered-transactional-checksum-migrations.md).
 
@@ -165,10 +168,10 @@ reviewable observation and consolidation. Migration mechanics are documented in
 provider record -> catalog recognition -> query result -> synthesized working memory -> expires
 ```
 
-Working memory is dispatch-scoped in OpenCode v2 and is not automatically persisted. The codebase
-defines observation, candidate, validation, and consolidation interfaces, but no host adapter writes
-session activity into those tables. Durable memory changes happen only through explicit managed API
-calls.
+Working memory is dispatch-scoped in OpenCode v2 and is not automatically persisted. With capture
+enabled, host adapters write eligible user statements as pending candidates. Operators review them with
+`remem candidates` and `remem review`, then run `remem consolidate`; durable promoted memory remains
+traceable to its source observation.
 
 ## Growth Control
 

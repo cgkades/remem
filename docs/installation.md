@@ -42,7 +42,7 @@ Initialization:
 3. selects an available port starting at `54329`;
 4. creates a generated database password and protected Compose files;
 5. starts `pgvector/pgvector:0.8.1-pg16` on `127.0.0.1` only;
-6. applies schema migrations through version 3; and
+6. applies schema migrations through version 4; and
 7. runs doctor checks.
 
 Choose a starting port explicitly when needed:

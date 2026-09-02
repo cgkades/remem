@@ -1,7 +1,7 @@
 import { MemoryCatalog, renderCatalog } from "./catalog.js"
 import type { OrchestratorConfig } from "./config.js"
 import { MemoryDiagnostics } from "./diagnostics.js"
-import type { ObservationStore } from "./observation.js"
+import { isObservationStore } from "./observation.js"
 import { DeterministicRetrievalPlanner } from "./planner.js"
 import { SemanticCatalogRecognizer, type SemanticRecognitionResult } from "./planning/semantic.js"
 import { RecallEngine } from "./recall.js"
@@ -403,10 +403,9 @@ export class RememOrchestrator {
     )
     const candidates = await Promise.all(
       this.providers.map(async (provider) => {
-        const store = provider as MemoryProvider & Partial<ObservationStore>
-        if (!store.candidateStatus) return undefined
+        if (!isObservationStore(provider)) return undefined
         try {
-          const candidateStatus = store.candidateStatus.bind(store)
+          const candidateStatus = provider.candidateStatus.bind(provider)
           return {
             providerId: provider.id,
             ...(await withTimeout(this.config.providerTimeoutMs, () => candidateStatus(context))),

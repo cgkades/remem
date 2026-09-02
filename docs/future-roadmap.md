@@ -1,6 +1,6 @@
 # Future Roadmap
 
-The items below are deferred. Managed PostgreSQL, schema version 3, semantic Stage 1, explicit CRUD,
+The items below are deferred. Managed PostgreSQL, schema version 4, semantic Stage 1, explicit CRUD,
 backup/restore commands, OpenCode v2 integration, and executable evaluation already exist and are not
 roadmap claims.
 

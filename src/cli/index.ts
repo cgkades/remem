@@ -4,6 +4,8 @@ import { access, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promi
 import net from "node:net"
 import path from "node:path"
 import { Pool } from "pg"
+import type { PostgresProviderConfig } from "../config.js"
+import type { CandidateMemory } from "../observation.js"
 import {
   readAppConfig,
   writeAppConfig,
@@ -13,6 +15,7 @@ import {
 import { runMigrations } from "../storage/migrations.js"
 import { openCodeConfigPath, rememPaths, type RememPaths } from "../storage/paths.js"
 import { runDoctor } from "./doctor.js"
+import { PostgresMemoryProvider } from "../providers/postgres.js"
 import { withInstallLock } from "./lock.js"
 import { composeArguments, managedCommand, writeManagedFiles } from "./managed.js"
 import { NodeProcessRunner, type ProcessRunner } from "./process.js"
@@ -71,6 +74,28 @@ function hasFlag(parsed: ParsedArguments, name: string): boolean {
   return parsed.flags.has(name)
 }
 
+const CANDIDATE_STATUSES = [
+  "pending",
+  "approved",
+  "consolidating",
+  "rejected",
+  "promoted",
+  "expired",
+] as const satisfies readonly CandidateMemory["status"][]
+
+function isCandidateStatus(value: string): value is CandidateMemory["status"] {
+  return (CANDIDATE_STATUSES as readonly string[]).includes(value)
+}
+
+function candidateStatusFlag(parsed: ParsedArguments): CandidateMemory["status"] | undefined {
+  const status = stringFlag(parsed, "status")
+  if (!status) return undefined
+  if (!isCandidateStatus(status)) {
+    throw new Error(`--status must be one of: ${CANDIDATE_STATUSES.join(", ")}`)
+  }
+  return status
+}
+
 async function portAvailable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const server = net.createServer()
@@ -123,6 +148,7 @@ async function configureOpenCode(configPath: string): Promise<void> {
 
 function appConfig(
   storage: RememAppConfig["storage"],
+  capture: boolean,
   opencode?: RememAppConfig["opencode"],
 ): RememAppConfig {
   return {
@@ -143,7 +169,7 @@ function appConfig(
       model: "remem-local-hash-v1",
       dimensions: 384,
     },
-    capture: { enabled: true },
+    capture: { enabled: capture },
     ...(opencode ? { opencode } : {}),
   }
 }
@@ -157,6 +183,10 @@ async function initialize(
   try {
     let existing = await readAppConfig(paths)
     output(`Remem is already initialized in ${paths.configDir}.`)
+    if (hasFlag(parsed, "capture") && existing.capture?.enabled !== true) {
+      existing = { ...existing, capture: { ...existing.capture, enabled: true } }
+      await writeAppConfig(existing, paths)
+    }
     if (hasFlag(parsed, "opencode") && !existing.opencode?.configured) {
       const configPath = openCodeConfigPath()
       await configureOpenCode(configPath)
@@ -185,6 +215,7 @@ async function initialize(
     }
     config = appConfig(
       { mode: "external", connectionString },
+      hasFlag(parsed, "capture"),
       configureHost ? { configured: true, configPath: opencodePath } : undefined,
     )
   } else if (mode === "managed") {
@@ -207,6 +238,7 @@ async function initialize(
     }
     config = appConfig(
       storage,
+      hasFlag(parsed, "capture"),
       configureHost ? { configured: true, configPath: opencodePath } : undefined,
     )
   } else {
@@ -233,6 +265,15 @@ async function stop(config: RememAppConfig, runner: ProcessRunner): Promise<void
   if (config.storage.mode === "managed") {
     await managedCommand(runner, config.storage, ["down"])
   }
+}
+
+function primaryPostgresProvider(config: RememAppConfig): PostgresMemoryProvider {
+  const provider = config.providers.find(
+    (candidate): candidate is PostgresProviderConfig =>
+      candidate.type === "postgres" && candidate.primary,
+  )
+  if (!provider) throw new Error("candidate management requires a primary PostgreSQL provider")
+  return new PostgresMemoryProvider(provider)
 }
 
 function postgresEnvironment(connectionString: string): NodeJS.ProcessEnv {
@@ -334,8 +375,11 @@ function usage(): string {
   return `Usage: remem <command> [options]
 
 Commands:
-  init [--mode managed|external] [--database-url URL] [--opencode]
+  init [--mode managed|external] [--database-url URL] [--opencode] [--capture]
   start | stop | status | doctor | migrate
+  candidates [--status STATUS]
+  review <CANDIDATE_ID> --approve|--reject
+  consolidate [--batch-size NUMBER]
   backup [--output FILE]
   restore <FILE> --confirm
   reset --confirm`
@@ -355,9 +399,17 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
     }
     if (
       !dependencies.operationLockHeld &&
-      new Set(["init", "start", "stop", "migrate", "backup", "restore", "reset"]).has(
-        parsed.command,
-      )
+      new Set([
+        "init",
+        "start",
+        "stop",
+        "migrate",
+        "backup",
+        "restore",
+        "reset",
+        "review",
+        "consolidate",
+      ]).has(parsed.command)
     ) {
       return await withInstallLock(paths, () =>
         runCli(args, {
@@ -381,6 +433,40 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
     }
 
     const config = await readAppConfig(paths)
+    if (
+      parsed.command === "candidates" ||
+      parsed.command === "review" ||
+      parsed.command === "consolidate"
+    ) {
+      const provider = primaryPostgresProvider(config)
+      try {
+        if (parsed.command === "candidates") {
+          output(
+            JSON.stringify(await provider.listCandidates(candidateStatusFlag(parsed)), null, 2),
+          )
+          return 0
+        }
+        if (parsed.command === "review") {
+          const id = parsed.positionals[0]
+          if (!id) throw new Error("review requires a candidate id")
+          const approve = hasFlag(parsed, "approve")
+          const reject = hasFlag(parsed, "reject")
+          if (approve === reject)
+            throw new Error("review requires exactly one of --approve or --reject")
+          await provider.reviewCandidate(id, approve ? "approved" : "rejected")
+          output(`Candidate ${id} ${approve ? "approved" : "rejected"}.`)
+          return 0
+        }
+        const batchSize = Number(stringFlag(parsed, "batch-size") ?? 50)
+        if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 1_000) {
+          throw new Error("--batch-size must be an integer from 1 to 1000")
+        }
+        output(JSON.stringify(await provider.consolidateCandidates(batchSize), null, 2))
+        return 0
+      } finally {
+        await provider.close()
+      }
+    }
     if (parsed.command === "start") {
       await start(config, runner)
       await migrate(config)
