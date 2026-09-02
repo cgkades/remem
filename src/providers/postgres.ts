@@ -235,12 +235,13 @@ export class PostgresMemoryProvider implements MemoryProvider {
           CASE WHEN ce.embedding_model = $6 AND ce.embedding_dimensions = $7
             THEN ce.embedding::text ELSE NULL END AS embedding
         FROM remem.catalog_entries ce
+        LEFT JOIN remem.memories m ON m.id = ce.memory_id
         WHERE ce.provider_id = $1 AND (
           ce.scope_kind = 'global' OR
           (ce.scope_kind = 'workspace' AND ce.scope_id = $2) OR
           (ce.scope_kind = 'project' AND ce.scope_id = $3) OR
           (ce.scope_kind = 'session' AND ce.scope_id = $4)
-        )
+        ) AND (m.id IS NULL OR m.freshness = 'current')
         ORDER BY ce.importance DESC, ce.updated_at DESC
         LIMIT $5
       `,

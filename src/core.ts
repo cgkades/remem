@@ -1,4 +1,5 @@
 export * from "./catalog.js"
+export * from "./consolidation.js"
 export * from "./config.js"
 export * from "./diagnostics.js"
 export * from "./memory-manager.js"

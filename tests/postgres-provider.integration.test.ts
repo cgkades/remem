@@ -3,6 +3,10 @@ import os from "node:os"
 import path from "node:path"
 import { Pool } from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import {
+  DeterministicConsolidationPipeline,
+  PostgresConsolidationRunner,
+} from "../src/consolidation.js"
 import { PostgresMemoryProvider } from "../src/providers/postgres.js"
 import { runDoctor } from "../src/cli/doctor.js"
 import { writeAppConfig, type RememAppConfig } from "../src/storage/config-file.js"
@@ -82,7 +86,7 @@ integration("PostgreSQL managed provider", () => {
       )
 
       const upgraded = await runMigrations(pool)
-      expect(upgraded).toMatchObject({ applied: [2, 3], currentVersion: 3 })
+      expect(upgraded).toMatchObject({ applied: [2, 3, 4], currentVersion: 4 })
       expect(
         (
           await pool.query<{ count: string }>(
@@ -100,7 +104,7 @@ integration("PostgreSQL managed provider", () => {
       ).toBeNull()
 
       const repeated = await runMigrations(pool)
-      expect(repeated).toMatchObject({ applied: [], currentVersion: 3 })
+      expect(repeated).toMatchObject({ applied: [], currentVersion: 4 })
 
       await copyFile(
         path.join(process.cwd(), "migrations/0002_consolidation_observation.sql"),
@@ -249,6 +253,12 @@ integration("PostgreSQL managed provider", () => {
       ],
     })
     expect((await provider.get(memory.id, context))?.freshness).toBe("superseded")
+    expect(
+      (await provider.catalog(context, new AbortController().signal)).map((entry) => entry.id),
+    ).not.toContain(memory.id)
+    expect(
+      (await provider.catalog(context, new AbortController().signal)).map((entry) => entry.id),
+    ).toContain(replacement.id)
     await expect(
       provider.update(memory.id, {
         type: "decision",
@@ -316,6 +326,57 @@ integration("PostgreSQL managed provider", () => {
     expect((await provider.search(request("rollback checklist")))[0]?.record.title).toBe(
       "Rollback checklist",
     )
+  })
+
+  it("claims approved candidates, records the run, and safely skips a repeated run", async () => {
+    const provider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "remem-local",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 100,
+      },
+      { pool },
+    )
+    const firstCandidate = randomUUID()
+    const secondCandidate = randomUUID()
+    await pool.query(
+      `INSERT INTO remem.candidate_memories
+        (id, type, title, content, scope_kind, scope_id, confidence, status, metadata)
+       VALUES
+        ($1, 'preference', 'Prefer concise release notes', 'Keep release notes concise and focused.', 'project', 'phoenix', 0.9, 'approved', '{}'::jsonb),
+        ($2, 'preference', 'Prefer concise release notes', 'Keep release notes concise and focused.', 'project', 'phoenix', 0.9, 'approved', '{}'::jsonb)`,
+      [firstCandidate, secondCandidate],
+    )
+    const runner = new PostgresConsolidationRunner(
+      pool,
+      new DeterministicConsolidationPipeline(provider),
+    )
+
+    const firstRun = await runner.run()
+    const repeatedRun = await runner.run()
+
+    expect(firstRun).toMatchObject({ status: "completed", candidates: 2, promoted: 2 })
+    expect(firstRun.outputMemoryIds).toHaveLength(1)
+    expect(repeatedRun).toMatchObject({ status: "completed", candidates: 0 })
+    expect(
+      (
+        await pool.query<{ count: string }>(
+          "SELECT count(*) FROM remem.candidate_memories WHERE id = ANY($1) AND status = 'promoted'",
+          [[firstCandidate, secondCandidate]],
+        )
+      ).rows[0]?.count,
+    ).toBe("2")
+    expect(
+      (
+        await pool.query<{ status: string; output_memory_ids: string[] }>(
+          "SELECT status, output_memory_ids FROM remem.consolidation_records WHERE id = $1",
+          [firstRun.id],
+        )
+      ).rows[0],
+    ).toMatchObject({ status: "completed", output_memory_ids: firstRun.outputMemoryIds })
   })
 
   it("reports database, migration, provider, filesystem, and embedding health", async () => {
