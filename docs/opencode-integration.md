@@ -77,7 +77,7 @@ built package-root entry:
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      "package": "file:///absolute/path/to/remem/dist/index.js"
+      "package": "file:///absolute/path/to/remem/dist"
     }
   ]
 }
@@ -91,7 +91,7 @@ When no inline `providers` option is present, Remem loads the application config
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
     {
-      "package": "file:///absolute/path/to/remem/dist/index.js",
+      "package": "file:///absolute/path/to/remem/dist",
       "options": {
         "providers": [
           {
@@ -141,7 +141,7 @@ The v1 compatibility contract is pinned to the official OpenCode `v1.18.26` rele
 - `opencode-remem/server`: isolated v1 `{ id, server }` module.
 - `opencode-remem/opencode/v1`: isolated direct v1 adapter.
 - `opencode-remem/core`: host-independent library API.
-- `dist/index.js`: source-build v2 entry.
+- `dist/`: source-build v2 plugin directory.
 - `dist/server.js`: source-build v1 server entry.
 
 ## Compatibility Policy
@@ -151,5 +151,12 @@ The v1 compatibility contract is pinned to the official OpenCode `v1.18.26` rele
 - v2 is primary; v1 compatibility can be retired without changing the core.
 - The package declares Node.js `>=22` and OpenCode `>=1.18.26`.
 - CI exercises the package on Node.js 22 and 24 with PostgreSQL/pgvector integration tests.
+- A Linux Node.js 22 E2E job packages Remem, installs the pinned
+  `@opencode-ai/cli@0.0.0-beta-18743` runtime, and drives its HTTP API against a local deterministic
+  OpenAI-compatible mock. It verifies plugin loading, dispatch injection, tool-loop continuity,
+  transcript isolation, unrelated-prompt isolation, and fail-open behavior with an unavailable
+  PostgreSQL provider. Run it locally with `npm run test:opencode-v2`, or in a Linux container
+  (native arm64 on Apple Silicon, no emulation needed — the beta runtime ships
+  `@opencode-ai/cli-linux-arm64`) with `npm run test:opencode-v2:docker`.
 - Hook mismatches fail open and surface a diagnostic without memory content.
 - No adapter automatically reads or writes historical sessions.
