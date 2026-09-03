@@ -5,6 +5,61 @@ export interface MemoryScope {
   id?: string
 }
 
+export interface InstitutionalReview {
+  reviewedAt: string
+  expiresAt: string | null
+}
+
+export type ApplicabilityCondition =
+  | {
+      id: string
+      kind: "context"
+      field: "directory" | "worktree" | "projectId" | "sessionId"
+      value: string
+    }
+  | {
+      id: string
+      kind: "topic"
+      value: string
+    }
+
+export interface InstitutionalApplicability {
+  match: "all" | "any"
+  conditions: ApplicabilityCondition[]
+}
+
+export interface InstitutionalPosition {
+  role: "position"
+  id: string
+  owner?: string
+  authority?: string
+  sourceRefs: string[]
+  boundaryConditions: string[]
+  applicability: InstitutionalApplicability
+  review: InstitutionalReview
+  dependsOnPositionIds?: string[]
+}
+
+export interface InstitutionalProcedureStep {
+  id: string
+  instruction: string
+}
+
+export interface InstitutionalProcedure {
+  role: "procedure"
+  id: string
+  steps: InstitutionalProcedureStep[]
+  positionIds: string[]
+  procedureIds?: string[]
+  requiredEvidence: string[]
+  completionCriteria: string[]
+  escalationConditions: string[]
+  applicability: InstitutionalApplicability
+  review: InstitutionalReview
+}
+
+export type InstitutionalMemory = InstitutionalPosition | InstitutionalProcedure
+
 export type MemoryType =
   "semantic" | "episodic" | "decision" | "preference" | "procedure" | "task" | "other"
 
@@ -110,6 +165,7 @@ export interface MemoryRecord {
   unresolved?: boolean
   provenance?: MemoryProvenance[]
   metadata?: Record<string, unknown>
+  institutional?: InstitutionalMemory
 }
 
 export interface MemoryResult {
@@ -151,6 +207,7 @@ export interface MemoryWrite {
   provenance?: MemoryProvenance[]
   embedding?: number[]
   metadata?: Record<string, unknown>
+  institutional?: InstitutionalMemory
 }
 
 export interface MemoryMutationOptions {
