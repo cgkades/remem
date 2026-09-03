@@ -891,7 +891,8 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
           ]
     const sourceIds: string[] = []
     for (const item of provenance) sourceIds.push(await this.insertSource(client, item.source))
-    const { institutional: _reservedInstitutional, ...genericMetadata } = memory.metadata ?? {}
+    const genericMetadata = { ...(memory.metadata ?? {}) }
+    delete genericMetadata.institutional
     const metadata = {
       ...genericMetadata,
       ...(memory.institutional ? { institutional: memory.institutional } : {}),
