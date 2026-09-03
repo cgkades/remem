@@ -74,6 +74,7 @@ interface CatalogRow extends QueryResultRow {
   unresolved: boolean
   source: string | null
   embedding: string | null
+  institutional?: MemoryRecord["institutional"]
 }
 
 export interface PostgresMemoryProviderOptions {
@@ -100,7 +101,43 @@ function parseVector(value: string): number[] {
   return value.slice(1, -1).split(",").map(Number)
 }
 
+function institutionalMetadata(
+  value: unknown,
+): NonNullable<MemoryRecord["institutional"]> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
+  const memory = value as Record<string, unknown>
+  if (
+    (memory.role !== "position" && memory.role !== "procedure") ||
+    typeof memory.id !== "string" ||
+    typeof memory.applicability !== "object" ||
+    memory.applicability === null ||
+    typeof memory.review !== "object" ||
+    memory.review === null
+  ) {
+    return undefined
+  }
+  const applicability = memory.applicability as Record<string, unknown>
+  const review = memory.review as Record<string, unknown>
+  if (
+    (applicability.match !== "all" && applicability.match !== "any") ||
+    !Array.isArray(applicability.conditions) ||
+    typeof review.reviewedAt !== "string" ||
+    !(typeof review.expiresAt === "string" || review.expiresAt === null)
+  ) {
+    return undefined
+  }
+  if (memory.role === "position") {
+    return Array.isArray(memory.sourceRefs) && Array.isArray(memory.boundaryConditions)
+      ? (memory as unknown as NonNullable<MemoryRecord["institutional"]>)
+      : undefined
+  }
+  return Array.isArray(memory.steps) && Array.isArray(memory.positionIds)
+    ? (memory as unknown as NonNullable<MemoryRecord["institutional"]>)
+    : undefined
+}
+
 function rowToRecord(row: MemoryRow): MemoryRecord {
+  const institutional = institutionalMetadata(row.metadata.institutional)
   return {
     providerId: row.provider_id,
     id: row.id,
@@ -123,6 +160,7 @@ function rowToRecord(row: MemoryRow): MemoryRecord {
     unresolved: row.unresolved,
     provenance: row.provenance ?? [],
     metadata: row.metadata ?? {},
+    ...(institutional ? { institutional } : {}),
   }
 }
 
@@ -260,6 +298,7 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
       `
         SELECT ce.id, ce.memory_id, ce.parent_id, ce.title, ce.summary, ce.aliases, ce.tags,
           ce.scope_kind, ce.scope_id, ce.unresolved, ce.source,
+          m.metadata->'institutional' AS institutional,
           CASE WHEN m.freshness = 'stale' THEN ce.importance * 0.5 ELSE ce.importance END AS importance,
           CASE WHEN ce.embedding_model = $6 AND ce.embedding_dimensions = $7
             THEN ce.embedding::text ELSE NULL END AS embedding
@@ -285,20 +324,24 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
       ],
     )
     signal.throwIfAborted()
-    return result.rows.map((row) => ({
-      id: row.memory_id ?? row.id,
-      title: row.title,
-      aliases: row.aliases ?? [],
-      summary: row.summary,
-      providerIds: [this.id],
-      scope: { kind: row.scope_kind, ...(row.scope_id ? { id: row.scope_id } : {}) },
-      tags: row.tags ?? [],
-      importance: row.importance,
-      unresolved: row.unresolved,
-      ...(row.source ? { source: row.source } : {}),
-      ...(row.parent_id ? { parentId: row.parent_id } : {}),
-      ...(row.embedding ? { embedding: parseVector(row.embedding) } : {}),
-    }))
+    return result.rows.map((row) => {
+      const institutional = institutionalMetadata(row.institutional)
+      return {
+        id: row.memory_id ?? row.id,
+        title: row.title,
+        aliases: row.aliases ?? [],
+        summary: row.summary,
+        providerIds: [this.id],
+        scope: { kind: row.scope_kind, ...(row.scope_id ? { id: row.scope_id } : {}) },
+        tags: row.tags ?? [],
+        importance: row.importance,
+        unresolved: row.unresolved,
+        ...(row.source ? { source: row.source } : {}),
+        ...(row.parent_id ? { parentId: row.parent_id } : {}),
+        ...(row.embedding ? { embedding: parseVector(row.embedding) } : {}),
+        ...(institutional ? { institutional } : {}),
+      }
+    })
   }
 
   async search(request: MemorySearchRequest): Promise<MemoryResult[]> {
@@ -848,8 +891,11 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
           ]
     const sourceIds: string[] = []
     for (const item of provenance) sourceIds.push(await this.insertSource(client, item.source))
+    const genericMetadata = { ...(memory.metadata ?? {}) }
+    delete genericMetadata.institutional
     const metadata = {
-      ...(memory.metadata ?? {}),
+      ...genericMetadata,
+      ...(memory.institutional ? { institutional: memory.institutional } : {}),
       ...(options.actor || options.reason
         ? {
             mutation: {

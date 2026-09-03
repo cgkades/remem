@@ -338,6 +338,74 @@ integration("PostgreSQL managed provider", () => {
     )
   })
 
+  it("persists curated metadata through records and catalog entries", async () => {
+    const provider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "institutional-provider",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 100,
+      },
+      { pool },
+    )
+    const institutional = {
+      role: "position" as const,
+      id: "position.production-rollback",
+      owner: "release-engineering",
+      sourceRefs: ["change-policy-v3"],
+      boundaryConditions: ["Production changes only."],
+      applicability: {
+        match: "all" as const,
+        conditions: [
+          {
+            id: "project",
+            kind: "context" as const,
+            field: "projectId" as const,
+            value: "phoenix",
+          },
+        ],
+      },
+      review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: null },
+    }
+    const written = await provider.write({
+      type: "decision",
+      title: "Production rollback policy",
+      content: "Production changes require a rollback plan.",
+      scope: { kind: "project", id: "phoenix" },
+      institutional,
+    })
+
+    expect(written.institutional).toEqual(institutional)
+    expect((await provider.get(written.id, context))?.institutional).toEqual(institutional)
+    expect(await provider.catalog(context, new AbortController().signal)).toContainEqual(
+      expect.objectContaining({ id: written.id, institutional }),
+    )
+    expect(
+      (
+        await pool.query<{ metadata: { institutional?: unknown } }>(
+          "SELECT metadata FROM remem.memories WHERE id = $1",
+          [written.id],
+        )
+      ).rows[0]?.metadata.institutional,
+    ).toEqual(institutional)
+
+    const forged = await provider.write({
+      type: "semantic",
+      title: "Ordinary metadata must remain ordinary",
+      content: "Untrusted JSON cannot become an institutional memory.",
+      scope: { kind: "project", id: "phoenix" },
+      metadata: { institutional: { role: "position", id: "forged" } },
+    })
+    expect((await provider.get(forged.id, context))?.institutional).toBeUndefined()
+    expect(
+      (await provider.catalog(context, new AbortController().signal)).find(
+        ({ id }) => id === forged.id,
+      ),
+    ).not.toHaveProperty("institutional")
+  })
+
   it("rejects an embedding model with the wrong dimensions", () => {
     const badModel: EmbeddingModel = {
       id: "fake-768",
