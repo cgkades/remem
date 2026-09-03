@@ -31,6 +31,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The hook-triggered re-embed cooldown is now scoped per plugin session instead of a shared
   module-level map, preventing one workspace's Postgres provider from suppressing another
   workspace's re-embed attempt when `remem init`'s default provider id is reused.
+- The `memory_search`, `memory_status`, and `memory_explain` tools registered by the OpenCode v2
+  plugin are now actually invocable by the model; they previously registered without
+  `codemode: false`, so OpenCode's beta runtime defaulted them into a sandboxed code-execution
+  path instead of exposing them as directly callable functions, and any bare-name call failed with
+  `Unknown tool`. Resolves [#11](https://github.com/cgkades/remem/issues/11).
 
 ## [0.2.0] - 2026-09-01
 
