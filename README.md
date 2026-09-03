@@ -186,6 +186,16 @@ npm run check
 
 CI runs the full check against `pgvector/pgvector:0.8.1-pg16` on Node.js 22 and 24.
 
+Run the PostgreSQL integration suite locally with Docker:
+
+```sh
+npm run test:postgres:up
+npm run test:postgres
+npm run test:postgres:down
+```
+
+The test database is bound only to `127.0.0.1:54330`; the teardown command removes its volume.
+
 ## License
 
 Apache License 2.0. See [`LICENSE`](LICENSE).
