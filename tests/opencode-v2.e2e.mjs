@@ -14,6 +14,18 @@ const SENTINEL = "REMEM_E2E_PHOENIX_SENTINEL"
 const RELATED_PROMPT = "Let's continue the Phoenix database work."
 const UNRELATED_PROMPT = "Summarize this unrelated weather report."
 const OUTAGE_PROMPT = "Continue even if long-term memory is unavailable."
+// Issue #11 regression coverage: after the native "read" tool loop completes,
+// call the Remem-registered memory_status tool by its bare name to verify it
+// is actually invocable (not just present in the advertised tool schema) now
+// that it registers with codemode: false. (memory_search is deliberately not
+// exercised here: its result legitimately surfaces memory content, which
+// would trip the unrelated "ephemeral injection is not persisted" assertion
+// below — that assertion checks the prompt-injection message specifically,
+// not tool call results.)
+const TOOL_CALL_STEPS = [
+  { id: "call_read", name: "read", arguments: '{"path":"tool-loop.txt"}' },
+  { id: "call_memory_status", name: "memory_status", arguments: "{}" },
+]
 const SERVER_PASSWORD = "remem-e2e"
 const SERVER_AUTHORIZATION = `Basic ${Buffer.from(`opencode:${SERVER_PASSWORD}`).toString("base64")}`
 const repository = fileURLToPath(new URL("..", import.meta.url))
@@ -116,6 +128,15 @@ async function waitForHealth(url, processHandle) {
   throw new Error(`opencode2 did not become ready\n${processHandle.output()}`)
 }
 
+function toolCall(messagesResponse, callId) {
+  for (const message of messagesResponse.data ?? []) {
+    for (const part of message.content ?? []) {
+      if (part.type === "tool" && part.id === callId) return part
+    }
+  }
+  return undefined
+}
+
 async function request(url, pathname, options = {}) {
   const response = await globalThis.fetch(`${url}${pathname}`, {
     ...options,
@@ -153,18 +174,17 @@ async function handleModelRequest(incoming, response, requests) {
   const body = JSON.parse(Buffer.concat(chunks).toString("utf8"))
   requests.push(body)
   const messages = JSON.stringify(body.messages)
-  const isToolContinuation = body.messages.some((message) => message.role === "tool")
-  const toolResults = body.messages.filter((message) => message.role === "tool")
-  const hasReadResult = toolResults.some((result) => result.tool_call_id === "call_read")
-  const hasMemoryStatusResult = toolResults.some(
-    (result) => result.tool_call_id === "call_memory_status",
-  )
   const isRelated = messages.includes(RELATED_PROMPT)
-  const shouldCallTool = isRelated && !isToolContinuation
-  // After the native "read" tool loop completes, call the Remem-registered
-  // memory_status tool by its bare name to verify it is actually invocable
-  // (not just present in the advertised tool schema) — see issue #11.
-  const shouldCallMemoryStatus = isRelated && hasReadResult && !hasMemoryStatusResult
+  const resultIds = new Set(
+    body.messages.filter((message) => message.role === "tool").map((message) => message.tool_call_id),
+  )
+  const nextStep = isRelated
+    ? TOOL_CALL_STEPS.find(
+        (step, index) =>
+          !resultIds.has(step.id) &&
+          TOOL_CALL_STEPS.slice(0, index).every((prior) => resultIds.has(prior.id)),
+      )
+    : undefined
   response.writeHead(200, {
     "cache-control": "no-cache",
     connection: "keep-alive",
@@ -176,7 +196,7 @@ async function handleModelRequest(incoming, response, requests) {
     created: 0,
     model: "mock-1",
   }
-  if (shouldCallTool) {
+  if (nextStep) {
     sse(response, {
       ...base,
       choices: [
@@ -187,31 +207,9 @@ async function handleModelRequest(incoming, response, requests) {
             tool_calls: [
               {
                 index: 0,
-                id: "call_read",
+                id: nextStep.id,
                 type: "function",
-                function: { name: "read", arguments: '{"path":"tool-loop.txt"}' },
-              },
-            ],
-          },
-          finish_reason: null,
-        },
-      ],
-    })
-    sse(response, { ...base, choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })
-  } else if (shouldCallMemoryStatus) {
-    sse(response, {
-      ...base,
-      choices: [
-        {
-          index: 0,
-          delta: {
-            role: "assistant",
-            tool_calls: [
-              {
-                index: 0,
-                id: "call_memory_status",
-                type: "function",
-                function: { name: "memory_status", arguments: "{}" },
+                function: { name: nextStep.name, arguments: nextStep.arguments },
               },
             ],
           },
@@ -561,10 +559,16 @@ async function main() {
         `related model dispatch did not receive injected Remem memory\n${JSON.stringify(relatedRequests)}\n${opencode.output()}`,
       )
     }
-    if (!relatedRequests.some((body) => (body.tools ?? []).some((tool) => tool.function?.name === "memory_status"))) {
-      throw new Error(
-        `Remem memory_status tool was not advertised in the live runtime's tool schema\n${JSON.stringify(relatedRequests.map((body) => body.tools))}`,
-      )
+    for (const step of TOOL_CALL_STEPS) {
+      if (
+        !relatedRequests.some((body) =>
+          (body.tools ?? []).some((tool) => tool.function?.name === step.name),
+        )
+      ) {
+        throw new Error(
+          `Remem ${step.name} tool was not advertised in the live runtime's tool schema\n${JSON.stringify(relatedRequests.map((body) => body.tools))}`,
+        )
+      }
     }
     const relatedMessages = await request(
       serverURL,
@@ -573,14 +577,18 @@ async function main() {
     if (!JSON.stringify(relatedMessages).includes("native tool loop fixture")) {
       throw new Error("native tool loop did not execute successfully")
     }
-    const relatedMessagesText = JSON.stringify(relatedMessages)
-    if (relatedMessagesText.includes("Unknown tool: memory_status")) {
-      throw new Error(
-        `Remem memory_status tool was registered but not invocable by bare name (issue #11 regression)\n${relatedMessagesText}`,
-      )
-    }
-    if (!relatedMessagesText.includes("call_memory_status")) {
-      throw new Error(`expected the mock model to call memory_status by bare name\n${relatedMessagesText}`)
+    for (const step of TOOL_CALL_STEPS.slice(1)) {
+      const call = toolCall(relatedMessages, step.id)
+      if (!call) {
+        throw new Error(
+          `expected the mock model to call ${step.name} by bare name\n${JSON.stringify(relatedMessages)}`,
+        )
+      }
+      if (call.state?.status !== "completed") {
+        throw new Error(
+          `Remem ${step.name} tool was registered but not invocable by bare name (issue #11 regression): ${JSON.stringify(call)}`,
+        )
+      }
     }
     const context = await request(serverURL, `/api/session/${relatedSession}/context`)
     const persistedUserMessages = context.data?.filter((message) => message.type === "user") ?? []

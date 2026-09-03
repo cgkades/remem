@@ -59,6 +59,12 @@ function consoleLogger(): RememLogger {
   }
 }
 
+// Plugin-registered tools default to codemode: true, which routes them into
+// OpenCode's sandboxed code-execution path instead of exposing them as
+// directly callable functions, making them unreachable by bare name (see
+// https://github.com/cgkades/remem/issues/11). Applied to every tool below.
+const BARE_CALLABLE_TOOL_OPTIONS = { codemode: false }
+
 async function registerTools(
   context: Context,
   orchestrator: RememOrchestrator,
@@ -68,11 +74,7 @@ async function registerTools(
     draft.add({
       name: "memory_search",
       description: "Search configured long-term memory providers explicitly.",
-      // Plugin-registered tools default to codemode: true, which routes them
-      // into OpenCode's sandboxed code-execution path instead of exposing
-      // them as directly callable functions, making them unreachable by bare
-      // name (see https://github.com/cgkades/remem/issues/11).
-      options: { codemode: false },
+      options: BARE_CALLABLE_TOOL_OPTIONS,
       input: {
         type: "object",
         properties: {
@@ -106,7 +108,7 @@ async function registerTools(
     draft.add({
       name: "memory_status",
       description: "Show memory health and bounded diagnostics without memory bodies.",
-      options: { codemode: false },
+      options: BARE_CALLABLE_TOOL_OPTIONS,
       input: { type: "object", properties: {}, additionalProperties: false },
       async execute(_input, toolContext) {
         try {
@@ -127,7 +129,7 @@ async function registerTools(
     draft.add({
       name: "memory_explain",
       description: "Explain the latest retrieval decision without exposing memory bodies.",
-      options: { codemode: false },
+      options: BARE_CALLABLE_TOOL_OPTIONS,
       input: { type: "object", properties: {}, additionalProperties: false },
       execute(_input, toolContext) {
         return Promise.resolve({
