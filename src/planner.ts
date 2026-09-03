@@ -94,26 +94,25 @@ export class DeterministicRetrievalPlanner {
     const applicability = entries.flatMap((entry) => {
       const institutional = entry.institutional
       if (!institutional || !context) return []
-      const failed = institutional.applicability.conditions.find((condition) => {
+      const conditionResults = institutional.applicability.conditions.map((condition) => {
         if (condition.kind === "topic")
           return !tokenize(prompt).includes(condition.value.toLowerCase())
         return context[condition.field] !== condition.value
       })
+      const failed = institutional.applicability.conditions.find(
+        (_, index) => conditionResults[index],
+      )
       const applicable =
         institutional.applicability.match === "all"
-          ? !failed
-          : institutional.applicability.conditions.some((condition) =>
-              condition.kind === "topic"
-                ? tokenize(prompt).includes(condition.value.toLowerCase())
-                : context[condition.field] === condition.value,
-            )
+          ? !conditionResults.some(Boolean)
+          : conditionResults.some((matched) => !matched)
       return [
         {
           catalogEntryId: entry.id,
           institutionalId: institutional.id,
           applicable,
           reason: applicable
-            ? "all deterministic applicability conditions passed"
+            ? "deterministic applicability conditions passed"
             : `failed deterministic gate ${failed?.id ?? "none"}`,
         } satisfies ApplicabilityDecision,
       ]

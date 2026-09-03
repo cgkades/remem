@@ -40,6 +40,7 @@ function semanticPlan(
   minimumSimilarity: number,
   maxTopics: number,
   maxResults: number,
+  applicability: NonNullable<RetrievalPlan["applicability"]>,
 ): RetrievalPlan | undefined {
   const selected = result.matches
     .filter((match) => match.score >= minimumSimilarity)
@@ -85,6 +86,7 @@ function semanticPlan(
     })),
     matches: selected,
     signals: [selected.length > 0 ? "semantic catalog match" : "semantic provider awareness"],
+    applicability,
   }
 }
 
@@ -200,6 +202,7 @@ export class RememOrchestrator {
             semanticConfig.minimumSimilarity,
             this.config.planner.maxTopics,
             this.config.maxResults,
+            plan.applicability ?? [],
           )
           if (candidate && (!plan.shouldRetrieve || candidate.confidence > plan.confidence)) {
             plan = candidate

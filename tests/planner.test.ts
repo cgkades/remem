@@ -82,4 +82,32 @@ describe("DeterministicRetrievalPlanner", () => {
       }),
     ])
   })
+
+  it("records an applicable any-gate without claiming every condition passed", () => {
+    const gated: CatalogEntry = {
+      ...phoenix,
+      institutional: {
+        role: "position",
+        id: "position.production",
+        owner: "release-engineering",
+        sourceRefs: ["policy"],
+        boundaryConditions: ["Production only."],
+        applicability: {
+          match: "any",
+          conditions: [
+            { id: "other-project", kind: "context", field: "projectId", value: "other" },
+            { id: "this-project", kind: "context", field: "projectId", value: "project-test" },
+          ],
+        },
+        review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: null },
+      },
+    }
+    const [decision] =
+      planner.plan("Phoenix", [gated], ["notes"], memoryContext).applicability ?? []
+
+    expect(decision).toMatchObject({
+      applicable: true,
+      reason: "deterministic applicability conditions passed",
+    })
+  })
 })
