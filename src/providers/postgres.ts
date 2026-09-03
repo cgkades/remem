@@ -74,6 +74,7 @@ interface CatalogRow extends QueryResultRow {
   unresolved: boolean
   source: string | null
   embedding: string | null
+  institutional?: MemoryRecord["institutional"]
 }
 
 export interface PostgresMemoryProviderOptions {
@@ -123,6 +124,9 @@ function rowToRecord(row: MemoryRow): MemoryRecord {
     unresolved: row.unresolved,
     provenance: row.provenance ?? [],
     metadata: row.metadata ?? {},
+    ...(row.metadata.institutional
+      ? { institutional: row.metadata.institutional as NonNullable<MemoryRecord["institutional"]> }
+      : {}),
   }
 }
 
@@ -260,6 +264,7 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
       `
         SELECT ce.id, ce.memory_id, ce.parent_id, ce.title, ce.summary, ce.aliases, ce.tags,
           ce.scope_kind, ce.scope_id, ce.unresolved, ce.source,
+          m.metadata->'institutional' AS institutional,
           CASE WHEN m.freshness = 'stale' THEN ce.importance * 0.5 ELSE ce.importance END AS importance,
           CASE WHEN ce.embedding_model = $6 AND ce.embedding_dimensions = $7
             THEN ce.embedding::text ELSE NULL END AS embedding
@@ -298,6 +303,7 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
       ...(row.source ? { source: row.source } : {}),
       ...(row.parent_id ? { parentId: row.parent_id } : {}),
       ...(row.embedding ? { embedding: parseVector(row.embedding) } : {}),
+      ...(row.institutional ? { institutional: row.institutional } : {}),
     }))
   }
 
@@ -850,6 +856,7 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
     for (const item of provenance) sourceIds.push(await this.insertSource(client, item.source))
     const metadata = {
       ...(memory.metadata ?? {}),
+      ...(memory.institutional ? { institutional: memory.institutional } : {}),
       ...(options.actor || options.reason
         ? {
             mutation: {
