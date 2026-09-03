@@ -89,7 +89,7 @@ integration("PostgreSQL managed provider", () => {
       )
 
       const upgraded = await runMigrations(pool)
-      expect(upgraded).toMatchObject({ applied: [2, 3, 4, 5], currentVersion: 5 })
+      expect(upgraded).toMatchObject({ applied: [2, 3, 4, 5, 6], currentVersion: 6 })
       expect(
         (
           await pool.query<{ count: string }>(
@@ -107,7 +107,7 @@ integration("PostgreSQL managed provider", () => {
       ).toBeNull()
 
       const repeated = await runMigrations(pool)
-      expect(repeated).toMatchObject({ applied: [], currentVersion: 5 })
+      expect(repeated).toMatchObject({ applied: [], currentVersion: 6 })
 
       await copyFile(
         path.join(process.cwd(), "migrations/0002_consolidation_observation.sql"),
@@ -680,6 +680,14 @@ integration("PostgreSQL managed provider", () => {
     )
     const columns = result.rows.map((row: { column_name: string }) => row.column_name)
     expect(columns).toEqual(expect.arrayContaining(["id", "model", "dimensions", "updated_at"]))
+  })
+
+  it("creates durable re-embedding claim columns", async () => {
+    const result = await pool.query(
+      "SELECT column_name FROM information_schema.columns WHERE table_schema = 'remem' AND table_name = 'memory_embeddings'",
+    )
+    const columns = result.rows.map((row: { column_name: string }) => row.column_name)
+    expect(columns).toContain("reembed_claim_id")
   })
 
   it("reembeds a memory stored under a different model id", async () => {

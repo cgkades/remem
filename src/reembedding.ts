@@ -67,18 +67,20 @@ export class PostgresReembedRunner {
       try {
         signal?.throwIfAborted()
         const embedding = await this.embed(target.text, signal)
-        await this.pool.query(
+        const updated = await this.pool.query(
           `UPDATE remem.memory_embeddings
-             SET model = $2, dimensions = $3, embedding = $4::vector, updated_at = now()
-           WHERE memory_id = $1`,
+             SET model = $2, dimensions = $3, embedding = $4::vector, updated_at = now(),
+                 reembed_claim_id = NULL
+           WHERE memory_id = $1 AND reembed_claim_id = $5`,
           [
             target.memoryId,
             this.options.modelId,
             this.options.dimensions,
             `[${embedding.join(",")}]`,
+            claim.id,
           ],
         )
-        reembedded++
+        if (updated.rowCount !== null && updated.rowCount > 0) reembedded++
       } catch (error) {
         errors.push(error instanceof Error ? error.name : "unknown error")
       }
@@ -99,6 +101,18 @@ export class PostgresReembedRunner {
 
   private async recoverInterruptedRuns(): Promise<void> {
     await this.pool.query(
+      `UPDATE remem.memory_embeddings
+         SET reembed_claim_id = NULL
+       WHERE reembed_claim_id IN (
+         SELECT id
+           FROM remem.consolidation_records
+          WHERE kind = 'embedding-reembed'
+            AND status = 'started'
+            AND started_at < now() - ($1 * interval '1 millisecond')
+       )`,
+      [this.recoveryAfterMs],
+    )
+    await this.pool.query(
       `UPDATE remem.consolidation_records
          SET status = 'failed', completed_at = now(),
            metadata = metadata || '{"recovery":"interrupted reembed run"}'::jsonb
@@ -117,7 +131,8 @@ export class PostgresReembedRunner {
         `SELECT me.memory_id, m.content
            FROM remem.memory_embeddings me
            JOIN remem.memories m ON m.id = me.memory_id
-          WHERE me.model <> $1 OR me.dimensions <> $2
+           WHERE (me.model <> $1 OR me.dimensions <> $2)
+             AND me.reembed_claim_id IS NULL
           ORDER BY me.updated_at
           LIMIT $3
           FOR UPDATE OF me SKIP LOCKED`,
@@ -128,10 +143,17 @@ export class PostgresReembedRunner {
         return undefined
       }
       const id = randomUUID()
+      const memoryIds = rows.rows.map((row) => row.memory_id)
+      await client.query(
+        `UPDATE remem.memory_embeddings
+            SET reembed_claim_id = $1
+          WHERE memory_id = ANY($2)`,
+        [id, memoryIds],
+      )
       await client.query(
         `INSERT INTO remem.consolidation_records (id, kind, status, input_memory_ids, metadata)
          VALUES ($1, 'embedding-reembed', 'started', $2, '{}'::jsonb)`,
-        [id, rows.rows.map((row) => row.memory_id)],
+        [id, memoryIds],
       )
       await client.query("COMMIT")
       return {
@@ -147,6 +169,7 @@ export class PostgresReembedRunner {
   }
 
   private async complete(runId: string, reembedded: number, errors: string[]): Promise<void> {
+    await this.releaseClaim(runId)
     await this.pool.query(
       `UPDATE remem.consolidation_records
          SET status = 'completed', completed_at = now(),
@@ -158,12 +181,22 @@ export class PostgresReembedRunner {
   }
 
   private async fail(runId: string, errors: string[]): Promise<void> {
+    await this.releaseClaim(runId)
     await this.pool.query(
       `UPDATE remem.consolidation_records
          SET status = 'failed', completed_at = now(),
            metadata = metadata || $2::jsonb
        WHERE id = $1`,
       [runId, JSON.stringify({ errors })],
+    )
+  }
+
+  private async releaseClaim(runId: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE remem.memory_embeddings
+          SET reembed_claim_id = NULL
+        WHERE reembed_claim_id = $1`,
+      [runId],
     )
   }
 }
