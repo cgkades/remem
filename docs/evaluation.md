@@ -30,6 +30,45 @@ The test runs the normal `RememOrchestrator` with provider/topic catalog constru
 and local semantic recognition, provider execution, normalization, deduplication, synthesis, and
 token accounting.
 
+## Curated Guidance Replays
+
+`tests/fixtures/replay/curated-guidance.v1.json` is a versioned behavioral replay fixture for
+curated positions and procedures. Each case supplies its prompt, context, fixture-backed records, and
+deterministic assertions for route, selected position/procedure IDs, citations, evidence, forbidden
+conclusions, outcome (`answer`, `no-answer`, or `escalation`), token budget, latency, and provider
+failures.
+
+Run it with:
+
+```sh
+npm run test:replay
+```
+
+The command executes `RememOrchestrator.processPrompt`, not a test-only retrieval shortcut. It writes
+machine-readable per-case checks and the production `MemoryTrace` to
+`artifacts/curated-replay-results.json`. Set `REMEM_REPLAY_RESULTS_PATH` to redirect the output for a
+CI artifact or another local consumer.
+
+The deterministic baseline covers applicable, semantically similar but inapplicable, conflicting,
+stale, expired, ambiguous, and provider-failure cases. The inapplicable case supplies an exact
+semantic vector match while its deterministic project gate rejects the record; it must produce no
+retrieval or injection.
+
+### Add An Expert Correction
+
+1. Add the approved position/procedure and its attributable source in the versioned replay fixture.
+2. Add a focused case with the original prompt and memory context. State the route, citations,
+   evidence, prohibited conclusion, and expected outcome before changing implementation.
+3. If the correction applies only in a boundary, include an inapplicable companion case for that
+   boundary. Use an embedding vector only when proving the deterministic gate rejects semantic
+   similarity.
+4. Run `npm run test:replay` and inspect the result artifact. Commit the fixture and deterministic
+   assertions with the correction; do not accept a model judge as the only regression signal.
+
+An optional judge can receive the prompt, injected memory, and an explicit fixture-derived rubric. Its
+input and output are retained in the machine-readable result, but the runner's pass/fail result always
+comes from deterministic assertions.
+
 ## Required Thresholds
 
 The test asserts:

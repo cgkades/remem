@@ -11,12 +11,14 @@ import {
 import { PostgresMemoryProvider } from "../src/providers/postgres.js"
 import { runCli } from "../src/cli/index.js"
 import { runDoctor } from "../src/cli/doctor.js"
+import { RememOrchestrator } from "../src/orchestrator.js"
 import type { CandidateMemory, SessionObservation } from "../src/observation.js"
 import { LocalHashEmbeddingModel } from "../src/storage/embedding.js"
 import { writeAppConfig, type RememAppConfig } from "../src/storage/config-file.js"
 import { MigrationIntegrityError, runMigrations } from "../src/storage/migrations.js"
 import { rememPaths } from "../src/storage/paths.js"
 import type { EmbeddingModel, MemoryContext, MemorySearchRequest } from "../src/types.js"
+import { testConfig } from "./helpers.js"
 
 const databaseUrl = process.env.REMEM_TEST_DATABASE_URL
 const integration = databaseUrl ? describe.sequential : describe.skip
@@ -404,6 +406,83 @@ integration("PostgreSQL managed provider", () => {
         ({ id }) => id === forged.id,
       ),
     ).not.toHaveProperty("institutional")
+  })
+
+  it("routes persisted curated entries through production catalog, retrieval, and trace paths", async () => {
+    const provider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "institutional-replay-provider",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 100,
+      },
+      { pool },
+    )
+    const position = await provider.write({
+      type: "decision",
+      title: "Release rollback position",
+      aliases: ["release rollback guidance"],
+      content: "A production release requires rollback evidence.",
+      source: "policy://release/rollback-position",
+      scope: { kind: "project", id: "phoenix" },
+      institutional: {
+        role: "position",
+        id: "position.release-rollback",
+        owner: "release-engineering",
+        sourceRefs: ["policy://release/rollback-position"],
+        boundaryConditions: ["Production release only."],
+        applicability: { match: "all", conditions: [] },
+        review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: null },
+      },
+    })
+    const procedure = await provider.write({
+      type: "procedure",
+      title: "Release rollback procedure",
+      aliases: ["release rollback guidance"],
+      content: "1. Confirm rollback evidence. 2. Escalate when evidence is missing.",
+      source: "policy://release/rollback-procedure",
+      scope: { kind: "project", id: "phoenix" },
+      institutional: {
+        role: "procedure",
+        id: "procedure.release-rollback",
+        steps: [
+          { id: "confirm", instruction: "Confirm rollback evidence." },
+          { id: "escalate", instruction: "Escalate when evidence is missing." },
+        ],
+        positionIds: ["position.release-rollback"],
+        requiredEvidence: ["rollback evidence"],
+        completionCriteria: ["evidence confirmed"],
+        escalationConditions: ["evidence missing"],
+        applicability: { match: "all", conditions: [] },
+        review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: null },
+      },
+    })
+
+    const injection = await new RememOrchestrator(
+      [provider],
+      testConfig({
+        semantic: { enabled: false, minimumSimilarity: 0.55, deterministicHighConfidence: 0.82 },
+      }),
+    ).processPrompt("What is the release rollback guidance?", context)
+
+    expect(injection.memoryText).toContain(position.content)
+    expect(injection.memoryText).toContain(procedure.content)
+    expect(injection.memoryText).toContain("policy://release/rollback-position")
+    expect(injection.memoryText).toContain("policy://release/rollback-procedure")
+    expect(injection.trace.applicability).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ institutionalId: "position.release-rollback", applicable: true }),
+        expect.objectContaining({
+          institutionalId: "procedure.release-rollback",
+          applicable: true,
+        }),
+      ]),
+    )
+    expect(injection.trace.providers).toEqual([
+      expect.objectContaining({ providerId: "institutional-replay-provider", status: "ok" }),
+    ])
   })
 
   it("rejects an embedding model with the wrong dimensions", () => {

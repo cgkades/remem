@@ -94,6 +94,17 @@ export class DeterministicRetrievalPlanner {
     const applicability = entries.flatMap((entry) => {
       const institutional = entry.institutional
       if (!institutional || !context) return []
+      const expiresAt = institutional.review.expiresAt
+      if (expiresAt !== null && Date.parse(expiresAt) < Date.now()) {
+        return [
+          {
+            catalogEntryId: entry.id,
+            institutionalId: institutional.id,
+            applicable: false,
+            reason: "institutional review expired",
+          } satisfies ApplicabilityDecision,
+        ]
+      }
       const conditionResults = institutional.applicability.conditions.map((condition) => {
         if (condition.kind === "topic")
           return !tokenize(prompt).includes(condition.value.toLowerCase())
