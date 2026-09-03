@@ -2,8 +2,10 @@ import type {
   InstitutionalMemory,
   InstitutionalPosition,
   InstitutionalProcedure,
+  MemoryContext,
   MemoryWrite,
 } from "./types.js"
+import { tokenize } from "./text.js"
 
 export type InstitutionalValidationCode =
   | "duplicate_id"
@@ -53,7 +55,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string")
+  return Array.isArray(value) && value.length > 0 && value.every(hasText)
 }
 
 export function isInstitutionalMemory(value: unknown): value is InstitutionalMemory {
@@ -63,6 +65,19 @@ export function isInstitutionalMemory(value: unknown): value is InstitutionalMem
     !isRecord(value.applicability) ||
     (value.applicability.match !== "all" && value.applicability.match !== "any") ||
     !Array.isArray(value.applicability.conditions) ||
+    value.applicability.conditions.length === 0 ||
+    !value.applicability.conditions.every(
+      (condition) =>
+        isRecord(condition) &&
+        typeof condition.id === "string" &&
+        typeof condition.value === "string" &&
+        (condition.kind === "topic" ||
+          (condition.kind === "context" &&
+            (condition.field === "directory" ||
+              condition.field === "worktree" ||
+              condition.field === "projectId" ||
+              condition.field === "sessionId"))),
+    ) ||
     !isRecord(value.review) ||
     typeof value.review.reviewedAt !== "string" ||
     !(typeof value.review.expiresAt === "string" || value.review.expiresAt === null)
@@ -70,15 +85,23 @@ export function isInstitutionalMemory(value: unknown): value is InstitutionalMem
     return false
   }
   if (value.role === "position") {
-    return isStringArray(value.sourceRefs) && isStringArray(value.boundaryConditions)
+    return (
+      (hasText(value.owner) || hasText(value.authority)) &&
+      isStringArray(value.sourceRefs) &&
+      isStringArray(value.boundaryConditions)
+    )
   }
   return (
     Array.isArray(value.steps) &&
+    value.steps.length > 0 &&
     value.steps.every(
       (step) =>
         isRecord(step) && typeof step.id === "string" && typeof step.instruction === "string",
     ) &&
-    isStringArray(value.positionIds)
+    isStringArray(value.positionIds) &&
+    isStringArray(value.requiredEvidence) &&
+    isStringArray(value.completionCriteria) &&
+    isStringArray(value.escalationConditions)
   )
 }
 
@@ -90,12 +113,30 @@ export function institutionalReviewStatus(
   const review = (institutional as { review?: unknown }).review
   if (typeof review !== "object" || review === null) return "invalid"
   const { reviewedAt, expiresAt } = review as { reviewedAt?: unknown; expiresAt?: unknown }
-  if (typeof reviewedAt !== "string" || !Number.isFinite(Date.parse(reviewedAt))) return "invalid"
+  const reviewedTimestamp = typeof reviewedAt === "string" ? Date.parse(reviewedAt) : Number.NaN
+  if (!Number.isFinite(reviewedTimestamp) || reviewedTimestamp > asOf) return "invalid"
   if (expiresAt === null) return "current"
   if (typeof expiresAt !== "string") return "invalid"
   const timestamp = Date.parse(expiresAt)
   if (!Number.isFinite(timestamp)) return "invalid"
   return timestamp <= asOf ? "expired" : "current"
+}
+
+export function institutionalApplies(
+  institutional: unknown,
+  context: MemoryContext,
+  prompt?: string,
+): boolean {
+  if (!isInstitutionalMemory(institutional)) return false
+  const matches = institutional.applicability.conditions.map((condition) => {
+    if (condition.kind === "topic") {
+      return prompt !== undefined && tokenize(prompt).includes(condition.value.toLowerCase())
+    }
+    return context[condition.field] === condition.value
+  })
+  return institutional.applicability.match === "all"
+    ? matches.every(Boolean)
+    : matches.some(Boolean)
 }
 
 function nonEmptyStrings(values: unknown): values is string[] {

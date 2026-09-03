@@ -1,7 +1,7 @@
 import { MemoryCatalog, renderCatalog, type CatalogSnapshot } from "./catalog.js"
 import type { OrchestratorConfig } from "./config.js"
 import { MemoryDiagnostics } from "./diagnostics.js"
-import { institutionalReviewStatus } from "./institutional.js"
+import { institutionalApplies, institutionalReviewStatus } from "./institutional.js"
 import { isObservationStore } from "./observation.js"
 import { DeterministicRetrievalPlanner } from "./planner.js"
 import { SemanticCatalogRecognizer, type SemanticRecognitionResult } from "./planning/semantic.js"
@@ -159,13 +159,17 @@ export class RememOrchestrator {
 
   private renderActiveCatalog(
     catalog: CatalogSnapshot,
+    context: MemoryContext,
+    prompt?: string,
     blockedCatalogIds: ReadonlySet<string> = new Set(),
   ): CatalogSnapshot {
     const rendered = renderCatalog(
       catalog.entries.filter(
         (entry) =>
           !blockedCatalogIds.has(entry.id) &&
-          (!entry.institutional || institutionalReviewStatus(entry.institutional) === "current"),
+          (!entry.institutional ||
+            (institutionalReviewStatus(entry.institutional) === "current" &&
+              institutionalApplies(entry.institutional, context, prompt))),
       ),
       this.config.budgets.catalogTokens,
       catalog.providers,
@@ -232,6 +236,8 @@ export class RememOrchestrator {
       }
       catalog = this.renderActiveCatalog(
         loadedCatalog,
+        context,
+        prompt,
         new Set(
           (plan.applicability ?? [])
             .filter(({ applicable }) => !applicable)
@@ -393,7 +399,7 @@ export class RememOrchestrator {
   }
 
   async compactionContext(context: MemoryContext): Promise<string> {
-    const catalog = this.renderActiveCatalog(await this.catalog.get(context))
+    const catalog = this.renderActiveCatalog(await this.catalog.get(context), context)
     return [
       "## Remem continuity",
       "Preserve references to relevant external memory and unresolved work in the continuation summary.",

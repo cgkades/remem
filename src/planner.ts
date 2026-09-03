@@ -1,5 +1,5 @@
 import type { PlannerConfig } from "./config.js"
-import { institutionalReviewStatus } from "./institutional.js"
+import { institutionalApplies, institutionalReviewStatus } from "./institutional.js"
 import { clamp, containsPhrase, overlapRatio, tokenize } from "./text.js"
 import type {
   CatalogEntry,
@@ -109,18 +109,12 @@ export class DeterministicRetrievalPlanner {
           } satisfies ApplicabilityDecision,
         ]
       }
-      const conditionResults = institutional.applicability.conditions.map((condition) => {
+      const applicable = institutionalApplies(institutional, context, prompt)
+      const failed = institutional.applicability.conditions.find((condition) => {
         if (condition.kind === "topic")
           return !tokenize(prompt).includes(condition.value.toLowerCase())
         return context[condition.field] !== condition.value
       })
-      const failed = institutional.applicability.conditions.find(
-        (_, index) => conditionResults[index],
-      )
-      const applicable =
-        institutional.applicability.match === "all"
-          ? !conditionResults.some(Boolean)
-          : conditionResults.some((matched) => !matched)
       return [
         {
           catalogEntryId: entry.id,

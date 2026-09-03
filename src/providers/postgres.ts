@@ -116,6 +116,12 @@ function assertValidInstitutionalReview(memory: MemoryWrite): void {
   ) {
     throw new TypeError("institutional memory has an invalid review timestamp")
   }
+  if (
+    (memory.institutional?.role === "position" && memory.type !== "decision") ||
+    (memory.institutional?.role === "procedure" && memory.type !== "procedure")
+  ) {
+    throw new TypeError("institutional memory has an invalid memory type")
+  }
 }
 
 function rowToRecord(row: MemoryRow): MemoryRecord {

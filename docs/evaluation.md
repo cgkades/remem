@@ -52,7 +52,7 @@ default for a CI artifact or another local consumer.
 The deterministic baseline covers applicable, semantically similar but inapplicable, conflicting,
 stale, expired, ambiguous, and provider-failure cases. The inapplicable case supplies an exact
 semantic vector match while its deterministic project gate rejects the record before semantic routing;
-it must produce no retrieval or injection. Expired guidance is excluded from catalog rendering and
+it must produce no eligible result or injection. Expired guidance is excluded from catalog rendering and
 provider results, including continuity fallback.
 
 ### Add An Expert Correction

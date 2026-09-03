@@ -1,5 +1,9 @@
 import type { OrchestratorConfig } from "./config.js"
-import { institutionalReviewStatus, isInstitutionalMemory } from "./institutional.js"
+import {
+  institutionalApplies,
+  institutionalReviewStatus,
+  isInstitutionalMemory,
+} from "./institutional.js"
 import { clamp, contentFingerprint } from "./text.js"
 import { truncateToTokens } from "./token-budget.js"
 import { OperationTimeoutError, withTimeout } from "./timeout.js"
@@ -56,6 +60,7 @@ function normalizeResult(
   context: MemoryContext,
   maxTokens: number,
   blockedCatalogIds: ReadonlySet<string>,
+  query: string,
 ): MemoryResult | undefined {
   if (!value || typeof value !== "object" || !("record" in value)) return undefined
   const candidate = value as Partial<MemoryResult>
@@ -75,7 +80,9 @@ function normalizeResult(
   }
   if (
     blockedCatalogIds.has(record.id) ||
-    (record.institutional && institutionalReviewStatus(record.institutional) !== "current") ||
+    (record.institutional &&
+      (institutionalReviewStatus(record.institutional) !== "current" ||
+        !institutionalApplies(record.institutional, context, query))) ||
     (record.metadata?.institutional !== undefined &&
       (!isInstitutionalMemory(record.metadata.institutional) ||
         institutionalReviewStatus(record.metadata.institutional) !== "current"))
@@ -245,6 +252,7 @@ export class RecallEngine {
                 context,
                 this.config.budgets.perProviderTokens,
                 blockedCatalogIds,
+                request.query,
               ),
             )
             .filter((result): result is MemoryResult => result !== undefined)

@@ -451,7 +451,10 @@ integration("PostgreSQL managed provider", () => {
         owner: "release-engineering",
         sourceRefs: ["policy://release/rollback-position"],
         boundaryConditions: ["Production release only."],
-        applicability: { match: "all", conditions: [] },
+        applicability: {
+          match: "all",
+          conditions: [{ id: "topic", kind: "topic", value: "release" }],
+        },
         review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: null },
       },
     })
@@ -473,7 +476,10 @@ integration("PostgreSQL managed provider", () => {
         requiredEvidence: ["rollback evidence"],
         completionCriteria: ["evidence confirmed"],
         escalationConditions: ["evidence missing"],
-        applicability: { match: "all", conditions: [] },
+        applicability: {
+          match: "all",
+          conditions: [{ id: "topic", kind: "topic", value: "release" }],
+        },
         review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: null },
       },
     })
@@ -528,7 +534,10 @@ integration("PostgreSQL managed provider", () => {
         owner: "release-engineering",
         sourceRefs: ["policy://release/expired-rollback"],
         boundaryConditions: ["Historical release policy only."],
-        applicability: { match: "all", conditions: [] },
+        applicability: {
+          match: "all",
+          conditions: [{ id: "topic", kind: "topic", value: "expired" }],
+        },
         review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: "2027-01-01T00:00:00.000Z" },
       },
     })

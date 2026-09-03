@@ -103,7 +103,10 @@
         "owner": "database-engineering",
         "sourceRefs": ["policy://database/blue"],
         "boundaryConditions": ["Database production rollout."],
-        "applicability": { "match": "all", "conditions": [] },
+        "applicability": {
+          "match": "all",
+          "conditions": [{ "id": "topic", "kind": "topic", "value": "database" }]
+        },
         "review": { "reviewedAt": "2026-09-01T00:00:00.000Z", "expiresAt": null }
       }
     },
@@ -123,7 +126,10 @@
         "owner": "database-engineering",
         "sourceRefs": ["policy://database/green"],
         "boundaryConditions": ["Database production rollout."],
-        "applicability": { "match": "all", "conditions": [] },
+        "applicability": {
+          "match": "all",
+          "conditions": [{ "id": "topic", "kind": "topic", "value": "database" }]
+        },
         "review": { "reviewedAt": "2026-09-01T00:00:00.000Z", "expiresAt": null }
       }
     },
@@ -143,7 +149,10 @@
         "owner": "incident-management",
         "sourceRefs": ["policy://incident/legacy"],
         "boundaryConditions": ["Historical incident response only."],
-        "applicability": { "match": "all", "conditions": [] },
+        "applicability": {
+          "match": "all",
+          "conditions": [{ "id": "topic", "kind": "topic", "value": "legacy" }]
+        },
         "review": { "reviewedAt": "2025-01-01T00:00:00.000Z", "expiresAt": null }
       }
     },
@@ -163,7 +172,10 @@
         "owner": "release-engineering",
         "sourceRefs": ["policy://release/expired"],
         "boundaryConditions": ["Historical release policy only."],
-        "applicability": { "match": "all", "conditions": [] },
+        "applicability": {
+          "match": "all",
+          "conditions": [{ "id": "topic", "kind": "topic", "value": "expired" }]
+        },
         "review": {
           "reviewedAt": "2024-01-01T00:00:00.000Z",
           "expiresAt": "2025-01-01T00:00:00.000Z"
@@ -186,7 +198,10 @@
         "owner": "release-engineering",
         "sourceRefs": ["policy://deployment/ambiguous"],
         "boundaryConditions": ["Production deployment only."],
-        "applicability": { "match": "all", "conditions": [] },
+        "applicability": {
+          "match": "all",
+          "conditions": [{ "id": "topic", "kind": "topic", "value": "ambiguous" }]
+        },
         "review": { "reviewedAt": "2026-09-01T00:00:00.000Z", "expiresAt": null }
       }
     },
@@ -214,7 +229,10 @@
         "requiredEvidence": ["rollback evidence"],
         "completionCriteria": ["rollback evidence attached"],
         "escalationConditions": ["rollback evidence unavailable"],
-        "applicability": { "match": "all", "conditions": [] },
+        "applicability": {
+          "match": "all",
+          "conditions": [{ "id": "topic", "kind": "topic", "value": "ambiguous" }]
+        },
         "review": { "reviewedAt": "2026-09-01T00:00:00.000Z", "expiresAt": null }
       }
     },
@@ -234,7 +252,10 @@
         "owner": "platform-engineering",
         "sourceRefs": ["policy://provider/failure"],
         "boundaryConditions": ["Replay only."],
-        "applicability": { "match": "all", "conditions": [] },
+        "applicability": {
+          "match": "all",
+          "conditions": [{ "id": "topic", "kind": "topic", "value": "provider" }]
+        },
         "review": { "reviewedAt": "2026-09-01T00:00:00.000Z", "expiresAt": null }
       }
     }
