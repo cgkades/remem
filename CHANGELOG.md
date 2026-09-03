@@ -7,6 +7,31 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `BgeSmallEmbeddingModel`, a local `bge-small-en-v1.5` neural embedding model run via
+  `@huggingface/transformers`, selected by default for `remem init --mode managed|external` and
+  configurable through the OpenCode plugin's `embedding` option, with automatic fail-open fallback
+  to `remem-local-hash-v1`. Resolves [#1](https://github.com/cgkades/remem/issues/1).
+- Hook-triggered, cooldown-gated re-embedding that opportunistically re-embeds stale memories via
+  `PostgresReembedRunner` the next time OpenCode's `"prompt"` session hook fires, plus the manual
+  `remem reembed [--batch-size NUMBER]` CLI command.
+- `remem doctor` checks for embedding backlog size and embedding-settings persistence, so a
+  model-identity mismatch or stuck backlog is visible without querying the database directly.
+
+### Fixed
+
+- The OpenCode plugin now correctly reads the neural embedding backend `remem init` writes to the
+  application config; previously `parseEmbedding` only recognized the plugin-options config shape
+  and silently defaulted every installed plugin to `remem-local-hash-v1` regardless of
+  `remem init`'s selection.
+- `remem reembed` now uses the configured embedding backend instead of always re-embedding into
+  `remem-local-hash-v1`, which previously overwrote neural embeddings on any neural-configured
+  install.
+- The hook-triggered re-embed cooldown is now scoped per plugin session instead of a shared
+  module-level map, preventing one workspace's Postgres provider from suppressing another
+  workspace's re-embed attempt when `remem init`'s default provider id is reused.
+
 ## [0.2.0] - 2026-09-01
 
 ### Added

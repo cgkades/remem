@@ -16,6 +16,7 @@ import { runMigrations } from "../storage/migrations.js"
 import { openCodeConfigPath, rememPaths, type RememPaths } from "../storage/paths.js"
 import { runDoctor } from "./doctor.js"
 import { PostgresMemoryProvider } from "../providers/postgres.js"
+import { createEmbeddingModel } from "../storage/embedding-neural.js"
 import { withInstallLock } from "./lock.js"
 import { composeArguments, managedCommand, writeManagedFiles } from "./managed.js"
 import { NodeProcessRunner, type ProcessRunner } from "./process.js"
@@ -164,13 +165,20 @@ function appConfig(
         catalogLimit: 2_000,
       },
     ],
-    embedding: {
-      provider: "local-hash",
-      model: "remem-local-hash-v1",
-      dimensions: 384,
-    },
+    embedding: { provider: "neural", model: "bge-small-en-v1.5", dimensions: 384 },
     capture: { enabled: capture },
     ...(opencode ? { opencode } : {}),
+  }
+}
+
+export function warnAboutNeuralDownload(
+  config: Pick<RememAppConfig, "embedding">,
+  output: (line: string) => void,
+): void {
+  if (config.embedding.provider === "neural") {
+    output(
+      `First use will download the ${config.embedding.model} embedding model (~30MB) from huggingface.co; this happens once. If blocked, see \`remem doctor\`.`,
+    )
   }
 }
 
@@ -218,6 +226,7 @@ async function initialize(
       hasFlag(parsed, "capture"),
       configureHost ? { configured: true, configPath: opencodePath } : undefined,
     )
+    warnAboutNeuralDownload(config, output)
   } else if (mode === "managed") {
     await runner.run("docker", ["--version"])
     await runner.run("docker", ["compose", "version"])
@@ -241,6 +250,7 @@ async function initialize(
       hasFlag(parsed, "capture"),
       configureHost ? { configured: true, configPath: opencodePath } : undefined,
     )
+    warnAboutNeuralDownload(config, output)
   } else {
     throw new Error("--mode must be managed or external")
   }
@@ -267,13 +277,32 @@ async function stop(config: RememAppConfig, runner: ProcessRunner): Promise<void
   }
 }
 
-function primaryPostgresProvider(config: RememAppConfig): PostgresMemoryProvider {
+function findPrimaryPostgresConfig(config: RememAppConfig): PostgresProviderConfig {
   const provider = config.providers.find(
     (candidate): candidate is PostgresProviderConfig =>
       candidate.type === "postgres" && candidate.primary,
   )
   if (!provider) throw new Error("candidate management requires a primary PostgreSQL provider")
-  return new PostgresMemoryProvider(provider)
+  return provider
+}
+
+function primaryPostgresProvider(config: RememAppConfig): PostgresMemoryProvider {
+  // Intentionally defaults to LocalHashEmbeddingModel: candidates/review/consolidate
+  // operate on text content, not semantic search, so they don't need the
+  // configured neural embedding backend. Do not "fix" this to thread the
+  // configured model through — it would add cost with no benefit here.
+  return new PostgresMemoryProvider(findPrimaryPostgresConfig(config))
+}
+
+async function reembedProvider(config: RememAppConfig): Promise<PostgresMemoryProvider> {
+  // Unlike candidates/review/consolidate, reembed's entire purpose is to
+  // re-embed stale rows into the CONFIGURED embedding model — it must use
+  // the real configured backend, not the hash default primaryPostgresProvider
+  // intentionally uses for the text-only commands above.
+  const embeddingModel = await createEmbeddingModel({
+    backend: config.embedding.provider === "neural" ? "neural" : "hash",
+  })
+  return new PostgresMemoryProvider(findPrimaryPostgresConfig(config), { embeddingModel })
 }
 
 function postgresEnvironment(connectionString: string): NodeJS.ProcessEnv {
@@ -380,6 +409,7 @@ Commands:
   candidates [--status STATUS]
   review <CANDIDATE_ID> --approve|--reject
   consolidate [--batch-size NUMBER]
+  reembed [--batch-size NUMBER]
   backup [--output FILE]
   restore <FILE> --confirm
   reset --confirm`
@@ -409,6 +439,7 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
         "reset",
         "review",
         "consolidate",
+        "reembed",
       ]).has(parsed.command)
     ) {
       return await withInstallLock(paths, () =>
@@ -436,9 +467,13 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
     if (
       parsed.command === "candidates" ||
       parsed.command === "review" ||
-      parsed.command === "consolidate"
+      parsed.command === "consolidate" ||
+      parsed.command === "reembed"
     ) {
-      const provider = primaryPostgresProvider(config)
+      const provider =
+        parsed.command === "reembed"
+          ? await reembedProvider(config)
+          : primaryPostgresProvider(config)
       try {
         if (parsed.command === "candidates") {
           output(
@@ -455,6 +490,14 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
             throw new Error("review requires exactly one of --approve or --reject")
           await provider.reviewCandidate(id, approve ? "approved" : "rejected")
           output(`Candidate ${id} ${approve ? "approved" : "rejected"}.`)
+          return 0
+        }
+        if (parsed.command === "reembed") {
+          const batchSize = Number(stringFlag(parsed, "batch-size") ?? 25)
+          if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 1_000) {
+            throw new Error("--batch-size must be an integer from 1 to 1000")
+          }
+          output(JSON.stringify(await provider.reembedStale(batchSize), null, 2))
           return 0
         }
         const batchSize = Number(stringFlag(parsed, "batch-size") ?? 50)

@@ -12,6 +12,7 @@ import {
   DeterministicConsolidationPipeline,
   PostgresConsolidationRunner,
 } from "../consolidation.js"
+import { PostgresReembedRunner } from "../reembedding.js"
 import { LocalHashEmbeddingModel, vectorLiteral } from "../storage/embedding.js"
 import type {
   CatalogEntry,
@@ -81,6 +82,11 @@ export interface PostgresMemoryProviderOptions {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
+
+// The remem.memory_embeddings and remem.catalog_entries.embedding columns are
+// fixed-width vector(384). Switching to a different-dimension model requires
+// a dedicated schema migration that is not yet implemented.
+const SUPPORTED_EMBEDDING_DIMENSIONS = 384
 
 function clamp(value: number | undefined, fallback: number): number {
   return value === undefined || !Number.isFinite(value) ? fallback : Math.max(0, Math.min(1, value))
@@ -192,8 +198,13 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
   ) {
     this.id = config.id
     this.embeddingModel = options.embeddingModel ?? new LocalHashEmbeddingModel()
-    if (this.embeddingModel.dimensions !== 384) {
-      throw new TypeError("PostgreSQL storage currently requires 384-dimensional embeddings")
+    if (this.embeddingModel.dimensions !== SUPPORTED_EMBEDDING_DIMENSIONS) {
+      throw new TypeError(
+        `PostgreSQL storage currently requires ${SUPPORTED_EMBEDDING_DIMENSIONS}-dimensional ` +
+          "embeddings (the remem.memory_embeddings column is a fixed-width vector(384)); " +
+          "switching to a different-dimension model requires a dedicated schema migration " +
+          "that is not yet implemented",
+      )
     }
     this.ownsPool = !options.pool
     this.pool =
@@ -206,6 +217,11 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
         query_timeout: 5_000,
         application_name: "remem",
       })
+    // Best-effort bookkeeping for a future re-embed job to detect model
+    // drift without re-deriving it from a scan. Fire-and-forget: this must
+    // never block construction or throw out of the constructor, since it is
+    // auxiliary and not load-bearing for correctness.
+    void this.recordEmbeddingSettings()
   }
 
   capabilities() {
@@ -738,6 +754,18 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
     ).run()
   }
 
+  async reembedStale(batchSize = 25) {
+    return new PostgresReembedRunner(
+      this.pool,
+      (text, signal) => this.embeddingModel.embed(text, signal),
+      {
+        modelId: this.embeddingModel.id,
+        dimensions: this.embeddingModel.dimensions,
+        batchSize,
+      },
+    ).run()
+  }
+
   async health(): Promise<ProviderHealth> {
     const checkedAt = new Date().toISOString()
     try {
@@ -773,6 +801,20 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
 
   dispose(): Promise<void> {
     return this.close()
+  }
+
+  private async recordEmbeddingSettings(): Promise<void> {
+    try {
+      await this.pool.query(
+        `INSERT INTO remem.embedding_settings (id, model, dimensions, updated_at)
+         VALUES (true, $1, $2, now())
+         ON CONFLICT (id) DO UPDATE SET model = $1, dimensions = $2, updated_at = now()`,
+        [this.embeddingModel.id, this.embeddingModel.dimensions],
+      )
+    } catch {
+      // Auxiliary bookkeeping only; a failure here must never affect
+      // provider construction or availability.
+    }
   }
 
   private async writeWithClient(

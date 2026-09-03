@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { appendFile, copyFile, mkdir, mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -8,6 +9,7 @@ import {
   PostgresConsolidationRunner,
 } from "../src/consolidation.js"
 import { PostgresMemoryProvider } from "../src/providers/postgres.js"
+import { runCli } from "../src/cli/index.js"
 import { runDoctor } from "../src/cli/doctor.js"
 import type { CandidateMemory, SessionObservation } from "../src/observation.js"
 import { writeAppConfig, type RememAppConfig } from "../src/storage/config-file.js"
@@ -87,7 +89,7 @@ integration("PostgreSQL managed provider", () => {
       )
 
       const upgraded = await runMigrations(pool)
-      expect(upgraded).toMatchObject({ applied: [2, 3, 4], currentVersion: 4 })
+      expect(upgraded).toMatchObject({ applied: [2, 3, 4, 5], currentVersion: 5 })
       expect(
         (
           await pool.query<{ count: string }>(
@@ -105,7 +107,7 @@ integration("PostgreSQL managed provider", () => {
       ).toBeNull()
 
       const repeated = await runMigrations(pool)
-      expect(repeated).toMatchObject({ applied: [], currentVersion: 4 })
+      expect(repeated).toMatchObject({ applied: [], currentVersion: 5 })
 
       await copyFile(
         path.join(process.cwd(), "migrations/0002_consolidation_observation.sql"),
@@ -333,6 +335,63 @@ integration("PostgreSQL managed provider", () => {
     expect((await provider.search(request("rollback checklist")))[0]?.record.title).toBe(
       "Rollback checklist",
     )
+  })
+
+  it("rejects an embedding model with the wrong dimensions", () => {
+    const badModel: EmbeddingModel = {
+      id: "fake-768",
+      dimensions: 768,
+      embed: () => Promise.resolve(new Array<number>(768).fill(0)),
+    }
+    expect(
+      () =>
+        new PostgresMemoryProvider(
+          {
+            type: "postgres",
+            id: "x",
+            connectionString: databaseUrl ?? "",
+            primary: true,
+            maxConnections: 1,
+            catalogLimit: 10,
+          },
+          { embeddingModel: badModel },
+        ),
+    ).toThrow(/384-dimensional/)
+  })
+
+  it("records the configured embedding model in embedding_settings on construction", async () => {
+    const recordingModel: EmbeddingModel = {
+      id: "recorded-model-v1",
+      dimensions: 384,
+      embed: () => Promise.resolve(new Array<number>(384).fill(0)),
+    }
+    const provider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "remem-local",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 1,
+        catalogLimit: 10,
+      },
+      { pool, embeddingModel: recordingModel },
+    )
+    try {
+      let row: { model: string; dimensions: number } | undefined
+      for (let attempt = 0; attempt < 20 && !row; attempt++) {
+        const result = await pool.query<{ model: string; dimensions: number }>(
+          "SELECT model, dimensions FROM remem.embedding_settings WHERE id = true",
+        )
+        row = result.rows[0]
+        if (!row || row.model !== recordingModel.id) {
+          row = undefined
+          await new Promise((resolve) => setTimeout(resolve, 25))
+        }
+      }
+      expect(row).toEqual({ model: recordingModel.id, dimensions: recordingModel.dimensions })
+    } finally {
+      await provider.close()
+    }
   })
 
   it("claims approved candidates, records the run, and safely skips a repeated run", async () => {
@@ -614,5 +673,305 @@ integration("PostgreSQL managed provider", () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it("creates the embedding_settings singleton table", async () => {
+    const result = await pool.query(
+      "SELECT column_name FROM information_schema.columns WHERE table_schema = 'remem' AND table_name = 'embedding_settings'",
+    )
+    const columns = result.rows.map((row: { column_name: string }) => row.column_name)
+    expect(columns).toEqual(expect.arrayContaining(["id", "model", "dimensions", "updated_at"]))
+  })
+
+  it("reembeds a memory stored under a different model id", async () => {
+    const provider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "reembed-test",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 10,
+      },
+      { pool },
+    )
+    const written = await provider.write({
+      title: "Reembed target",
+      content: "Bedrock Claude credential passthrough failure",
+      scope: { kind: "workspace", id: "phoenix" },
+      type: "decision",
+    })
+    await pool.query(
+      "UPDATE remem.memory_embeddings SET model = 'stale-model' WHERE memory_id = $1",
+      [written.id],
+    )
+    const result = await provider.reembedStale(10)
+    expect(result.status).toBe("completed")
+    expect(result.reembedded).toBeGreaterThanOrEqual(1)
+    const row = await pool.query<{ model: string }>(
+      "SELECT model FROM remem.memory_embeddings WHERE memory_id = $1",
+      [written.id],
+    )
+    expect(row.rows[0]?.model).toBe("remem-local-hash-v1")
+  })
+
+  it("runs a manual reembed via the CLI", async () => {
+    const seedProvider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "reembed-cli-seed",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 10,
+      },
+      { pool },
+    )
+    const written = await seedProvider.write({
+      title: "Reembed CLI target",
+      content: "Manual reembed CLI wiring check",
+      scope: { kind: "workspace", id: "phoenix" },
+      type: "decision",
+    })
+    await pool.query(
+      "UPDATE remem.memory_embeddings SET model = 'stale-model' WHERE memory_id = $1",
+      [written.id],
+    )
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "remem-reembed-cli-"))
+    const paths = rememPaths({
+      REMEM_CONFIG_DIR: path.join(root, "config"),
+      REMEM_DATA_DIR: path.join(root, "data"),
+    })
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: databaseUrl ?? "" },
+      providers: [
+        {
+          type: "postgres",
+          id: "remem-local",
+          connectionString: databaseUrl ?? "",
+          primary: true,
+          maxConnections: 2,
+          catalogLimit: 100,
+        },
+      ],
+      embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
+    }
+    try {
+      await mkdir(paths.dataDir, { recursive: true, mode: 0o700 })
+      await writeAppConfig(config, paths)
+
+      const lines: string[] = []
+      const exitCode = await runCli(["reembed", "--batch-size", "5"], {
+        paths,
+        stdout: (line) => lines.push(line),
+      })
+
+      expect(exitCode).toBe(0)
+      const output = JSON.parse(lines.join("\n")) as { status: string; reembedded: number }
+      expect(output.status).toBe("completed")
+      expect(output.reembedded).toBeGreaterThanOrEqual(1)
+
+      const row = await pool.query<{ model: string }>(
+        "SELECT model FROM remem.memory_embeddings WHERE memory_id = $1",
+        [written.id],
+      )
+      expect(row.rows[0]?.model).toBe("remem-local-hash-v1")
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it("respects the configured neural backend when reembedding via the CLI, instead of always using hash", async () => {
+    // Regression test: `reembed` used to always construct its provider via
+    // primaryPostgresProvider(), which intentionally defaults to
+    // LocalHashEmbeddingModel for candidates/review/consolidate. Reembed was
+    // added to that same dispatch bucket without threading the configured
+    // embedding model through, so it silently overwrote neural embeddings
+    // with hash vectors regardless of `config.embedding.provider`.
+    const seedProvider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "reembed-neural-seed",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 10,
+      },
+      { pool },
+    )
+    const written = await seedProvider.write({
+      title: "Reembed neural CLI target",
+      content: "Manual reembed CLI must honor the configured neural backend",
+      scope: { kind: "workspace", id: "phoenix" },
+      type: "decision",
+    })
+    await pool.query(
+      "UPDATE remem.memory_embeddings SET model = 'stale-model' WHERE memory_id = $1",
+      [written.id],
+    )
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "remem-reembed-neural-cli-"))
+    const paths = rememPaths({
+      REMEM_CONFIG_DIR: path.join(root, "config"),
+      REMEM_DATA_DIR: path.join(root, "data"),
+    })
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: databaseUrl ?? "" },
+      providers: [
+        {
+          type: "postgres",
+          id: "remem-local",
+          connectionString: databaseUrl ?? "",
+          primary: true,
+          maxConnections: 2,
+          catalogLimit: 100,
+        },
+      ],
+      embedding: { provider: "neural", model: "bge-small-en-v1.5", dimensions: 384 },
+    }
+    try {
+      await mkdir(paths.dataDir, { recursive: true, mode: 0o700 })
+      await writeAppConfig(config, paths)
+
+      const lines: string[] = []
+      // Large batch size: this describe.sequential suite shares one Postgres
+      // instance across many tests, so other stale rows may sort ahead of
+      // ours by updated_at. A small batch could exhaust its capacity on
+      // unrelated rows before reaching the one this test actually seeded.
+      const exitCode = await runCli(["reembed", "--batch-size", "1000"], {
+        paths,
+        stdout: (line) => lines.push(line),
+      })
+
+      expect(exitCode).toBe(0)
+      const output = JSON.parse(lines.join("\n")) as { status: string; reembedded: number }
+      expect(output.status).toBe("completed")
+      expect(output.reembedded).toBeGreaterThanOrEqual(1)
+
+      const row = await pool.query<{ model: string }>(
+        "SELECT model FROM remem.memory_embeddings WHERE memory_id = $1",
+        [written.id],
+      )
+      // Must be the real neural model id, not "remem-local-hash-v1" — the
+      // latter would mean reembed silently ignored the configured neural
+      // backend, exactly the bug this test guards against.
+      expect(row.rows[0]?.model).toBe("bge-small-en-v1.5")
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it("reports a re-embed backlog in doctor output", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remem-doctor-backlog-"))
+    const paths = rememPaths({
+      REMEM_CONFIG_DIR: path.join(root, "config"),
+      REMEM_DATA_DIR: path.join(root, "data"),
+    })
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: databaseUrl ?? "" },
+      providers: [],
+      embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
+    }
+    const original = (
+      await pool.query<{ memory_id: string; model: string }>(
+        "SELECT memory_id, model FROM remem.memory_embeddings",
+      )
+    ).rows
+    try {
+      await mkdir(paths.dataDir, { recursive: true, mode: 0o700 })
+      await writeAppConfig(config, paths)
+      await pool.query("UPDATE remem.memory_embeddings SET model = 'stale-model'")
+
+      const report = await runDoctor(config, paths, {
+        run: () => Promise.resolve({ stdout: "", stderr: "" }),
+      })
+      const check = report.checks.find((c) => c.name === "embedding backlog")
+      expect(check?.status).toBe("warn")
+      expect(check?.detail).toMatch(/\d+ memor(y|ies) pending re-embedding/)
+    } finally {
+      for (const row of original) {
+        await pool.query("UPDATE remem.memory_embeddings SET model = $2 WHERE memory_id = $1", [
+          row.memory_id,
+          row.model,
+        ])
+      }
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it("reports the embedding_settings record health in doctor output", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remem-doctor-settings-"))
+    const paths = rememPaths({
+      REMEM_CONFIG_DIR: path.join(root, "config"),
+      REMEM_DATA_DIR: path.join(root, "data"),
+    })
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: databaseUrl ?? "" },
+      providers: [],
+      embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
+    }
+    const original = (
+      await pool.query<{ model: string; dimensions: number; updated_at: string }>(
+        "SELECT model, dimensions, updated_at FROM remem.embedding_settings WHERE id = true",
+      )
+    ).rows[0]
+    try {
+      await mkdir(paths.dataDir, { recursive: true, mode: 0o700 })
+      await writeAppConfig(config, paths)
+
+      await pool.query(
+        `INSERT INTO remem.embedding_settings (id, model, dimensions)
+           VALUES (true, $1, $2)
+         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions`,
+        [config.embedding.model, config.embedding.dimensions],
+      )
+      const matching = await runDoctor(config, paths, {
+        run: () => Promise.resolve({ stdout: "", stderr: "" }),
+      })
+      expect(
+        matching.checks.find((c) => c.name === "embedding settings persistence"),
+      ).toMatchObject({
+        status: "ok",
+      })
+
+      await pool.query(
+        `INSERT INTO remem.embedding_settings (id, model, dimensions)
+           VALUES (true, $1, $2)
+         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions`,
+        ["stale-recorded-model", 384],
+      )
+      const mismatched = await runDoctor(config, paths, {
+        run: () => Promise.resolve({ stdout: "", stderr: "" }),
+      })
+      const mismatchCheck = mismatched.checks.find(
+        (c) => c.name === "embedding settings persistence",
+      )
+      expect(mismatchCheck?.status).toBe("warn")
+      expect(mismatchCheck?.detail).toContain("stale-recorded-model")
+      expect(mismatchCheck?.detail).toContain(config.embedding.model)
+
+      await pool.query("DELETE FROM remem.embedding_settings WHERE id = true")
+      const missing = await runDoctor(config, paths, {
+        run: () => Promise.resolve({ stdout: "", stderr: "" }),
+      })
+      expect(missing.checks.find((c) => c.name === "embedding settings persistence")).toMatchObject(
+        {
+          status: "warn",
+        },
+      )
+    } finally {
+      await pool.query("DELETE FROM remem.embedding_settings WHERE id = true")
+      if (original) {
+        await pool.query(
+          "INSERT INTO remem.embedding_settings (id, model, dimensions, updated_at) VALUES (true, $1, $2, $3)",
+          [original.model, original.dimensions, original.updated_at],
+        )
+      }
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })
-import { randomUUID } from "node:crypto"

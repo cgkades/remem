@@ -3,8 +3,11 @@ import type { Context } from "@opencode-ai/plugin/promise/plugin"
 import { createCaptureCoordinator, type CaptureCoordinator } from "../../capture.js"
 import { parseConfig } from "../../config.js"
 import { RememOrchestrator } from "../../orchestrator.js"
+import { PostgresMemoryProvider } from "../../providers/postgres.js"
 import { createProviders } from "../../providers/factory.js"
+import { shouldAttemptReembed } from "../../reembedding.js"
 import { loadInstalledPluginOptions } from "../../storage/config-file.js"
+import { createEmbeddingModel } from "../../storage/embedding-neural.js"
 import type { MemoryContext, MemoryProvider, RememLogger } from "../../types.js"
 import {
   TRUSTED_REMEM_INSTRUCTION,
@@ -135,19 +138,34 @@ export const RememPlugin = Plugin.define({
     let providers: MemoryProvider[] = []
     let contextRegistration: { dispose(): Promise<void> } | undefined
     let promptRegistration: { dispose(): Promise<void> } | undefined
+    let reembedRegistration: { dispose(): Promise<void> } | undefined
     let capture: CaptureCoordinator | undefined
+    // Scoped to this setup() call rather than module-level: every plugin
+    // setup has at most one primaryPostgres, and `remem init` always writes
+    // the same literal provider id ("remem-local"), so a module-level Map
+    // keyed by that id would collide across unrelated workspaces/databases
+    // sharing one process, suppressing one workspace's reembed cooldown
+    // because of a different workspace's recent attempt.
+    let lastReembedAttempt: number | undefined
     try {
       const parsed = parseConfig(await loadInstalledPluginOptions(context.options))
       for (const diagnostic of parsed.diagnostics) {
         safeLoggerCall(logger, diagnostic.level, "config.invalid", { message: diagnostic.message })
       }
       const location = hostLocation(context)
-      const created = createProviders(parsed.config.providers, { worktree: location.worktree })
+      const embeddingModel = await createEmbeddingModel(parsed.config.embedding)
+      const created = createProviders(
+        parsed.config.providers,
+        { worktree: location.worktree },
+        { embeddingModel },
+      )
       providers = created.providers
       for (const diagnostic of created.diagnostics) {
         safeLoggerCall(logger, "warn", "provider.initialization_failed", { message: diagnostic })
       }
-      const orchestrator = new RememOrchestrator(created.providers, parsed.config, logger)
+      const orchestrator = new RememOrchestrator(created.providers, parsed.config, logger, {
+        embeddingModel,
+      })
       capture = createCaptureCoordinator(created.providers, parsed.config, logger)
       const coordinator = capture
       if (coordinator) {
@@ -167,6 +185,22 @@ export const RememPlugin = Plugin.define({
           }
         })
       }
+      const primaryPostgres = providers.find(
+        (provider): provider is PostgresMemoryProvider =>
+          provider instanceof PostgresMemoryProvider,
+      )
+      if (primaryPostgres) {
+        reembedRegistration = await context.session.hook("prompt", () => {
+          if (!shouldAttemptReembed(lastReembedAttempt)) return
+          lastReembedAttempt = Date.now()
+          // Fire-and-forget: must never delay or fail prompt handling.
+          void primaryPostgres.reembedStale().catch((error) => {
+            safeLoggerCall(logger, "warn", "reembed.attempt_failed", {
+              error: error instanceof Error ? error.name : "unknown error",
+            })
+          })
+        })
+      }
       contextRegistration = await context.session.hook("context", async (event) => {
         try {
           await injectV2DispatchMemory(
@@ -182,12 +216,20 @@ export const RememPlugin = Plugin.define({
       })
       const toolRegistration = await registerTools(context, orchestrator, location)
       return async () => {
-        await Promise.allSettled([contextRegistration?.dispose(), promptRegistration?.dispose()])
+        await Promise.allSettled([
+          contextRegistration?.dispose(),
+          promptRegistration?.dispose(),
+          reembedRegistration?.dispose(),
+        ])
         await capture?.dispose()
         await Promise.allSettled([toolRegistration.dispose(), disposeProviders(providers)])
       }
     } catch (error) {
-      await Promise.allSettled([contextRegistration?.dispose(), promptRegistration?.dispose()])
+      await Promise.allSettled([
+        contextRegistration?.dispose(),
+        promptRegistration?.dispose(),
+        reembedRegistration?.dispose(),
+      ])
       await Promise.allSettled([capture?.dispose(), disposeProviders(providers)])
       safeLoggerCall(logger, "error", "plugin.initialization_failed", {
         error: error instanceof Error ? error.name : "unknown error",

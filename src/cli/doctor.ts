@@ -3,7 +3,7 @@ import { access, readFile, stat } from "node:fs/promises"
 import { Pool } from "pg"
 import { createProviders } from "../providers/factory.js"
 import { PostgresMemoryProvider } from "../providers/postgres.js"
-import { LocalHashEmbeddingModel } from "../storage/embedding.js"
+import { createEmbeddingModel } from "../storage/embedding-neural.js"
 import { migrationStatus } from "../storage/migrations.js"
 import { openCodeConfigPath, type RememPaths } from "../storage/paths.js"
 import type { RememAppConfig } from "../storage/config-file.js"
@@ -155,6 +155,50 @@ export async function runDoctor(
     }
     await pool.query("CREATE TEMP TABLE remem_write_check (id integer) ON COMMIT DROP")
     checks.push({ name: "database writes", status: "ok", detail: "database is writable" })
+
+    try {
+      const backlog = await pool.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM remem.memory_embeddings
+          WHERE model <> $1 OR dimensions <> $2`,
+        [config.embedding.model, config.embedding.dimensions],
+      )
+      const pending = Number(backlog.rows[0]?.count ?? 0)
+      checks.push({
+        name: "embedding backlog",
+        status: pending === 0 ? "ok" : "warn",
+        detail:
+          pending === 0
+            ? "all memories use the configured embedding model"
+            : `${pending} ${pending === 1 ? "memory" : "memories"} pending re-embedding; ` +
+              "this drains automatically during normal use, or run `remem reembed` now",
+      })
+    } catch {
+      // The main PostgreSQL connectivity check above already reports connection
+      // failures; skip silently here rather than double-reporting.
+    }
+
+    try {
+      const settings = await pool.query<{ model: string; dimensions: number }>(
+        "SELECT model, dimensions FROM remem.embedding_settings WHERE id = true",
+      )
+      const row = settings.rows[0]
+      const matches =
+        row?.model === config.embedding.model && row?.dimensions === config.embedding.dimensions
+      checks.push({
+        name: "embedding settings persistence",
+        status: row === undefined ? "warn" : matches ? "ok" : "warn",
+        detail:
+          row === undefined
+            ? "no embedding_settings row found yet; it is written on first provider construction"
+            : matches
+              ? `recorded model matches configuration (${row.model}, ${row.dimensions} dimensions)`
+              : `recorded model (${row.model}, ${row.dimensions}d) does not match configured model ` +
+                `(${config.embedding.model}, ${config.embedding.dimensions}d) — the write may be failing`,
+      })
+    } catch {
+      // Table may not exist yet on an unmigrated database; the main PostgreSQL
+      // connectivity/migration checks already report that condition.
+    }
   } catch (error) {
     checks.push({
       name: "PostgreSQL connectivity",
@@ -166,12 +210,17 @@ export async function runDoctor(
   }
 
   try {
-    const model = new LocalHashEmbeddingModel()
+    const model = await createEmbeddingModel({
+      backend: config.embedding.provider === "neural" ? "neural" : "hash",
+    })
     const embedding = await model.embed("Remem doctor")
+    const fellBack = model.id !== config.embedding.model
     checks.push({
       name: "embedding configuration",
-      status: embedding.length === config.embedding.dimensions ? "ok" : "error",
-      detail: `${model.id}; ${embedding.length} dimensions`,
+      status: embedding.length !== config.embedding.dimensions ? "error" : fellBack ? "warn" : "ok",
+      detail: fellBack
+        ? `configured model ${config.embedding.model} unavailable; fell back to ${model.id}; ${embedding.length} dimensions`
+        : `${model.id}; ${embedding.length} dimensions`,
     })
   } catch {
     checks.push({ name: "embedding configuration", status: "error", detail: "embedding failed" })

@@ -20,6 +20,10 @@ export interface ExternalStorageConfig {
   connectionString: string
 }
 
+export type EmbeddingSetting =
+  | { provider: "local-hash"; model: "remem-local-hash-v1"; dimensions: 384 }
+  | { provider: "neural"; model: "bge-small-en-v1.5"; dimensions: 384 }
+
 export interface RememAppConfig {
   version: 1
   storage: ManagedStorageConfig | ExternalStorageConfig
@@ -35,11 +39,7 @@ export interface RememAppConfig {
   debug?: boolean
   compaction?: boolean
   capture?: Partial<CaptureConfig>
-  embedding: {
-    provider: "local-hash"
-    model: "remem-local-hash-v1"
-    dimensions: 384
-  }
+  embedding: EmbeddingSetting
   opencode?: {
     configured: boolean
     configPath?: string
@@ -62,6 +62,9 @@ export function validateAppConfig(value: unknown): asserts value is RememAppConf
   }
   if (!Array.isArray(value.providers) || !isRecord(value.embedding)) {
     throw new Error("provider or embedding configuration is missing")
+  }
+  if (value.embedding.provider !== "local-hash" && value.embedding.provider !== "neural") {
+    throw new Error("embedding.provider must be 'local-hash' or 'neural'")
   }
 }
 

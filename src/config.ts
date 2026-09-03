@@ -25,6 +25,11 @@ export interface CaptureConfig {
   timeoutMs: number
 }
 
+export interface EmbeddingConfig {
+  backend: "hash" | "neural"
+  modelPath?: string
+}
+
 export interface MarkdownProviderConfig {
   type: "markdown"
   id: string
@@ -59,6 +64,7 @@ export interface RememConfig extends OrchestratorConfig {
   providers: MemoryProviderConfig[]
   compaction: boolean
   capture: CaptureConfig
+  embedding: EmbeddingConfig
 }
 
 export interface ConfigDiagnostic {
@@ -165,6 +171,35 @@ function parseProvider(
   }
 }
 
+function parseEmbedding(value: unknown, diagnostics: ConfigDiagnostic[]): EmbeddingConfig {
+  const options = isRecord(value) ? value : {}
+  const backendFromPluginOptions =
+    options.backend === "neural" ? "neural" : options.backend === "hash" ? "hash" : undefined
+  if (options.backend !== undefined && backendFromPluginOptions === undefined) {
+    diagnostics.push({
+      level: "warn",
+      message: "embedding.backend must be 'hash' or 'neural'; defaulted to 'hash'",
+    })
+  }
+  // loadInstalledPluginOptions() merges the app-generated config (written by
+  // `remem init`, shape `{ provider, model, dimensions }`) into the object
+  // passed here whenever the plugin doesn't set its own `embedding` options.
+  // Without this fallback, `remem init`'s neural default is silently never
+  // read: this function would only recognize the plugin-options shape's
+  // `backend` field, defaulting every installed plugin to "hash" regardless
+  // of what `remem init` configured.
+  const backendFromAppConfig =
+    options.provider === "neural"
+      ? "neural"
+      : options.provider === "local-hash"
+        ? "hash"
+        : undefined
+  return {
+    backend: backendFromPluginOptions ?? backendFromAppConfig ?? "hash",
+    ...(typeof options.modelPath === "string" ? { modelPath: options.modelPath } : {}),
+  }
+}
+
 export function parseConfig(options: unknown): ParsedConfig {
   const diagnostics: ConfigDiagnostic[] = []
   const root = isRecord(options) ? options : {}
@@ -255,6 +290,7 @@ export function parseConfig(options: unknown): ParsedConfig {
         ),
         timeoutMs: finiteNumber(captureOptions.timeoutMs, 1_000, 50, 10_000),
       },
+      embedding: parseEmbedding(root.embedding, diagnostics),
     },
     diagnostics,
   }

@@ -87,3 +87,61 @@ describe("parseConfig", () => {
     expect(malformedScope.diagnostics[0]?.message).toContain("invalid scope")
   })
 })
+
+describe("embedding config", () => {
+  it("defaults to the hash backend", () => {
+    const parsed = parseConfig({})
+
+    expect(parsed.config.embedding).toEqual({ backend: "hash", modelPath: undefined })
+  })
+
+  it("accepts an explicit neural backend", () => {
+    const parsed = parseConfig({ embedding: { backend: "neural" } })
+
+    expect(parsed.config.embedding.backend).toBe("neural")
+  })
+
+  it("accepts a modelPath override", () => {
+    const parsed = parseConfig({
+      embedding: { backend: "neural", modelPath: "/opt/models/bge-small" },
+    })
+
+    expect(parsed.config.embedding.modelPath).toBe("/opt/models/bge-small")
+  })
+
+  it("falls back to hash and warns on an invalid backend value", () => {
+    const parsed = parseConfig({ embedding: { backend: "gpt4" } })
+
+    expect(parsed.config.embedding.backend).toBe("hash")
+    expect(parsed.diagnostics.some((d) => d.message.includes("embedding.backend"))).toBe(true)
+  })
+
+  it("resolves the app-config embedding shape written by remem init to the matching backend", () => {
+    // loadInstalledPluginOptions() passes the on-disk app config's `embedding`
+    // field (shape `{ provider, model, dimensions }`) straight through when
+    // the plugin doesn't set its own inline `embedding` options. Without
+    // recognizing this shape, every remem-init-installed plugin would
+    // silently resolve to "hash" regardless of `remem init`'s neural default.
+    const neural = parseConfig({
+      embedding: { provider: "neural", model: "bge-small-en-v1.5", dimensions: 384 },
+    })
+    expect(neural.config.embedding.backend).toBe("neural")
+
+    const hash = parseConfig({
+      embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
+    })
+    expect(hash.config.embedding.backend).toBe("hash")
+  })
+
+  it("prefers an explicit plugin-options backend over the app-config shape", () => {
+    const parsed = parseConfig({
+      embedding: {
+        provider: "neural",
+        model: "bge-small-en-v1.5",
+        dimensions: 384,
+        backend: "hash",
+      },
+    })
+    expect(parsed.config.embedding.backend).toBe("hash")
+  })
+})

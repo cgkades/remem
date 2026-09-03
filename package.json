@@ -69,6 +69,7 @@
     "prepack": "npm run build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:eval": "vitest run --config vitest.eval.config.ts",
     "test:opencode-v2": "node tests/opencode-v2.e2e.mjs",
     "test:opencode-v2:docker": "docker build -f docker/opencode-v2-e2e.Dockerfile -t remem-opencode-v2-e2e . && docker run --rm remem-opencode-v2-e2e",
     "typecheck": "tsc --noEmit"
@@ -85,12 +86,17 @@
     "llm",
     "agent"
   ],
+  "overrides": {
+    "sharp": "^0.35.4"
+  },
   "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "@opencode-ai/plugin": "0.0.0-beta-18743",
     "@types/node": "^22.20.1",
     "@types/pg": "^8.23.1",
     "opencode-plugin-v1": "npm:@opencode-ai/plugin@1.18.26",
-    "pg": "^8.23.0"
+    "pg": "^8.23.0",
+    "undici": "^7.29.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

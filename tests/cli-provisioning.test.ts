@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { BACKUP_FLAGS, RESTORE_FLAGS, runCli } from "../src/cli/index.js"
+import { BACKUP_FLAGS, RESTORE_FLAGS, runCli, warnAboutNeuralDownload } from "../src/cli/index.js"
 import { withInstallLock } from "../src/cli/lock.js"
 import { managedCommand, managedCompose, writeManagedFiles } from "../src/cli/managed.js"
 import { NodeProcessRunner, type ProcessRunner } from "../src/cli/process.js"
@@ -149,6 +149,35 @@ describe("CLI provisioning", () => {
     expect(errors.join("\n")).toContain("--status must be one of")
   })
 
+  it("rejects an out-of-range --batch-size for reembed before connecting to PostgreSQL", async () => {
+    const paths = await temporaryPaths()
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: "postgres://user:secret@localhost/remem" },
+      providers: [
+        {
+          type: "postgres",
+          id: "remem-local",
+          connectionString: "postgres://user:secret@localhost/remem",
+          primary: true,
+          maxConnections: 1,
+          catalogLimit: 10,
+        },
+      ],
+      embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
+    }
+    await writeAppConfig(config, paths)
+    const errors: string[] = []
+
+    expect(
+      await runCli(["reembed", "--batch-size", "0"], {
+        paths,
+        stderr: (line) => errors.push(line),
+      }),
+    ).toBe(1)
+    expect(errors.join("\n")).toContain("--batch-size must be an integer from 1 to 1000")
+  })
+
   it("redacts configured secrets from subprocess failures", async () => {
     const runner = new NodeProcessRunner()
     await expect(
@@ -178,6 +207,28 @@ describe("CLI provisioning", () => {
       }),
     ).rejects.toThrow()
     expect(await readFile(output, "utf8")).toBe("keep-this-backup")
+  })
+
+  it("warns about the one-time neural embedding model download", () => {
+    const lines: string[] = []
+    warnAboutNeuralDownload(
+      { embedding: { provider: "neural", model: "bge-small-en-v1.5", dimensions: 384 } },
+      (line) => lines.push(line),
+    )
+
+    const output = lines.join("\n")
+    expect(output).toContain("bge-small-en-v1.5")
+    expect(output).toContain("huggingface.co")
+  })
+
+  it("does not warn when the embedding backend is not neural", () => {
+    const lines: string[] = []
+    warnAboutNeuralDownload(
+      { embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 } },
+      (line) => lines.push(line),
+    )
+
+    expect(lines).toEqual([])
   })
 
   it("serializes lifecycle operations per installation", async () => {
