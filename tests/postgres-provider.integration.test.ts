@@ -390,6 +390,20 @@ integration("PostgreSQL managed provider", () => {
         )
       ).rows[0]?.metadata.institutional,
     ).toEqual(institutional)
+
+    const forged = await provider.write({
+      type: "semantic",
+      title: "Ordinary metadata must remain ordinary",
+      content: "Untrusted JSON cannot become an institutional memory.",
+      scope: { kind: "project", id: "phoenix" },
+      metadata: { institutional: { role: "position", id: "forged" } },
+    })
+    expect((await provider.get(forged.id, context))?.institutional).toBeUndefined()
+    expect(
+      (await provider.catalog(context, new AbortController().signal)).find(
+        ({ id }) => id === forged.id,
+      ),
+    ).not.toHaveProperty("institutional")
   })
 
   it("rejects an embedding model with the wrong dimensions", () => {
