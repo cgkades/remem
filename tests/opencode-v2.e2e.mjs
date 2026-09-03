@@ -176,7 +176,9 @@ async function handleModelRequest(incoming, response, requests) {
   const messages = JSON.stringify(body.messages)
   const isRelated = messages.includes(RELATED_PROMPT)
   const resultIds = new Set(
-    body.messages.filter((message) => message.role === "tool").map((message) => message.tool_call_id),
+    body.messages
+      .filter((message) => message.role === "tool")
+      .map((message) => message.tool_call_id),
   )
   const nextStep = isRelated
     ? TOOL_CALL_STEPS.find(
