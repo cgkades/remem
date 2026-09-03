@@ -46,13 +46,14 @@ npm run test:replay
 
 The command executes `RememOrchestrator.processPrompt`, not a test-only retrieval shortcut. It writes
 machine-readable per-case checks and the production `MemoryTrace` to
-`artifacts/curated-replay-results.json`. Set `REMEM_REPLAY_RESULTS_PATH` to redirect the output for a
-CI artifact or another local consumer.
+`artifacts/curated-replay-results.json`. A caller-provided `REMEM_REPLAY_RESULTS_PATH` overrides that
+default for a CI artifact or another local consumer.
 
 The deterministic baseline covers applicable, semantically similar but inapplicable, conflicting,
 stale, expired, ambiguous, and provider-failure cases. The inapplicable case supplies an exact
-semantic vector match while its deterministic project gate rejects the record; it must produce no
-retrieval or injection.
+semantic vector match while its deterministic project gate rejects the record before semantic routing;
+it must produce no retrieval or injection. Expired guidance is excluded from catalog rendering and
+provider results, including continuity fallback.
 
 ### Add An Expert Correction
 

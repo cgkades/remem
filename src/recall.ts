@@ -1,4 +1,5 @@
 import type { OrchestratorConfig } from "./config.js"
+import { institutionalReviewStatus } from "./institutional.js"
 import { clamp, contentFingerprint } from "./text.js"
 import { truncateToTokens } from "./token-budget.js"
 import { OperationTimeoutError, withTimeout } from "./timeout.js"
@@ -69,6 +70,9 @@ function normalizeResult(
     !FRESHNESS_VALUES.has(record.freshness) ||
     !scopeAllowed(record.scope, context)
   ) {
+    return undefined
+  }
+  if (record.institutional && institutionalReviewStatus(record.institutional) !== "current") {
     return undefined
   }
   const content = truncateToTokens(record.content, maxTokens).text

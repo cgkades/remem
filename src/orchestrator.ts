@@ -1,6 +1,7 @@
 import { MemoryCatalog, renderCatalog } from "./catalog.js"
 import type { OrchestratorConfig } from "./config.js"
 import { MemoryDiagnostics } from "./diagnostics.js"
+import { institutionalReviewStatus } from "./institutional.js"
 import { isObservationStore } from "./observation.js"
 import { DeterministicRetrievalPlanner } from "./planner.js"
 import { SemanticCatalogRecognizer, type SemanticRecognitionResult } from "./planning/semantic.js"
@@ -169,10 +170,22 @@ export class RememOrchestrator {
 
     try {
       const catalogStarted = performance.now()
-      catalog = await this.catalog.get(context)
+      const loadedCatalog = await this.catalog.get(context)
+      const renderedCatalog = renderCatalog(
+        loadedCatalog.entries.filter(
+          (entry) =>
+            !entry.institutional || institutionalReviewStatus(entry.institutional) === "current",
+        ),
+        this.config.budgets.catalogTokens,
+        loadedCatalog.providers,
+      )
+      catalog = {
+        ...renderedCatalog,
+        diagnostics: [...loadedCatalog.diagnostics, ...renderedCatalog.diagnostics],
+      }
       catalogMs = performance.now() - catalogStarted
       const planningStarted = performance.now()
-      let plan = this.planner.plan(prompt, catalog.entries, this.providerIds, context)
+      let plan = this.planner.plan(prompt, loadedCatalog.entries, this.providerIds, context)
       const semanticConfig = this.config.semantic ?? {
         enabled: true,
         minimumSimilarity: 0.55,
@@ -187,7 +200,7 @@ export class RememOrchestrator {
         try {
           const recognized = await this.semantic.recognize(
             prompt,
-            catalog.entries.filter(
+            loadedCatalog.entries.filter(
               (entry) =>
                 !(plan.applicability ?? []).some(
                   ({ catalogEntryId, applicable }) => catalogEntryId === entry.id && !applicable,

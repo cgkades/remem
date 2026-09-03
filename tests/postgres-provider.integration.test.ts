@@ -406,6 +406,24 @@ integration("PostgreSQL managed provider", () => {
         ({ id }) => id === forged.id,
       ),
     ).not.toHaveProperty("institutional")
+
+    await expect(
+      provider.write({
+        type: "decision",
+        title: "Invalid institutional review",
+        content: "Invalid review dates are rejected before persistence.",
+        scope: { kind: "project", id: "phoenix" },
+        institutional: {
+          role: "position",
+          id: "position.invalid-review",
+          owner: "release-engineering",
+          sourceRefs: ["policy://release/invalid"],
+          boundaryConditions: ["Replay only."],
+          applicability: { match: "all", conditions: [] },
+          review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: "invalid" },
+        },
+      }),
+    ).rejects.toThrow("invalid review timestamp")
   })
 
   it("routes persisted curated entries through production catalog, retrieval, and trace paths", async () => {
@@ -482,6 +500,67 @@ integration("PostgreSQL managed provider", () => {
     )
     expect(injection.trace.providers).toEqual([
       expect.objectContaining({ providerId: "institutional-replay-provider", status: "ok" }),
+    ])
+  })
+
+  it("keeps expired persisted guidance out of catalog injection and continuity recall", async () => {
+    const provider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "expired-institutional-replay-provider",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 100,
+      },
+      { pool },
+    )
+    const expired = await provider.write({
+      type: "decision",
+      title: "Expired release rollback position",
+      aliases: ["expired release rollback guidance"],
+      content: "Expired release rollback guidance must not be injected.",
+      source: "policy://release/expired-rollback",
+      scope: { kind: "project", id: "phoenix" },
+      institutional: {
+        role: "position",
+        id: "position.expired-release-rollback",
+        owner: "release-engineering",
+        sourceRefs: ["policy://release/expired-rollback"],
+        boundaryConditions: ["Historical release policy only."],
+        applicability: { match: "all", conditions: [] },
+        review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: "2027-01-01T00:00:00.000Z" },
+      },
+    })
+    await pool.query(
+      `UPDATE remem.memories
+       SET metadata = jsonb_set(metadata, '{institutional,review,expiresAt}', '"2025-01-01T00:00:00.000Z"')
+       WHERE id = $1`,
+      [expired.id],
+    )
+
+    const injection = await new RememOrchestrator(
+      [provider],
+      testConfig({
+        semantic: { enabled: false, minimumSimilarity: 0.55, deterministicHighConfidence: 0.82 },
+      }),
+    ).processPrompt("Continue the expired release rollback guidance.", context)
+
+    expect(injection.text).not.toContain("Expired release rollback position")
+    expect(injection.memoryText).toBe("")
+    expect(injection.trace.selectedResults).toBe(0)
+    expect(injection.trace.applicability).toContainEqual(
+      expect.objectContaining({
+        institutionalId: "position.expired-release-rollback",
+        applicable: false,
+        reason: "institutional review expired",
+      }),
+    )
+    expect(injection.trace.providers).toEqual([
+      expect.objectContaining({
+        providerId: "expired-institutional-replay-provider",
+        resultCount: 0,
+      }),
     ])
   })
 

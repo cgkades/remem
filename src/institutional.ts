@@ -33,6 +33,8 @@ export interface InstitutionalValidationOptions {
   asOf?: Date
 }
 
+export type InstitutionalReviewStatus = "current" | "expired" | "invalid"
+
 type InstitutionalWrite = Pick<
   MemoryWrite,
   "title" | "content" | "scope" | "type" | "provenance" | "institutional"
@@ -44,6 +46,21 @@ function hasText(value: unknown): value is string {
 
 function isValidDate(value: unknown): value is string {
   return hasText(value) && Number.isFinite(Date.parse(value))
+}
+
+export function institutionalReviewStatus(
+  institutional: unknown,
+  asOf = Date.now(),
+): InstitutionalReviewStatus {
+  if (typeof institutional !== "object" || institutional === null) return "invalid"
+  const review = (institutional as { review?: unknown }).review
+  if (typeof review !== "object" || review === null) return "invalid"
+  const expiresAt = (review as { expiresAt?: unknown }).expiresAt
+  if (expiresAt === null) return "current"
+  if (typeof expiresAt !== "string") return "invalid"
+  const timestamp = Date.parse(expiresAt)
+  if (!Number.isFinite(timestamp)) return "invalid"
+  return timestamp <= asOf ? "expired" : "current"
 }
 
 function nonEmptyStrings(values: unknown): values is string[] {

@@ -246,10 +246,17 @@
       "context": { "projectId": "phoenix" },
       "expected": {
         "outcome": "answer",
-        "route": { "shouldRetrieve": true, "providerIds": ["curated-replay"] },
+        "route": {
+          "shouldRetrieve": true,
+          "providerIds": ["curated-replay"],
+          "applicability": [
+            { "id": "position.production-rollout", "applicable": true },
+            { "id": "procedure.production-rollout", "applicable": true }
+          ]
+        },
         "positionIds": ["position.production-rollout"],
         "procedureIds": ["procedure.production-rollout"],
-        "citations": ["policy://release/rollback-position", "replay://production-procedure"],
+        "citations": ["replay://production-position", "replay://production-procedure"],
         "evidence": ["change ticket includes rollback owner", "Attach rollback evidence."],
         "forbiddenConclusions": ["skip the rollback plan"],
         "tokenLimit": 1600,
@@ -284,10 +291,17 @@
       "prompt": "What is the database rollout decision?",
       "expected": {
         "outcome": "escalation",
-        "route": { "shouldRetrieve": true, "providerIds": ["curated-replay"] },
+        "route": {
+          "shouldRetrieve": true,
+          "providerIds": ["curated-replay"],
+          "applicability": [
+            { "id": "position.database-blue", "applicable": true },
+            { "id": "position.database-green", "applicable": true }
+          ]
+        },
         "positionIds": ["position.database-blue", "position.database-green"],
         "procedureIds": [],
-        "citations": ["policy://database/blue", "policy://database/green"],
+        "citations": ["replay://conflict-blue-position", "replay://conflict-green-position"],
         "evidence": ["conflicts with the green position", "conflicts with the blue position"],
         "forbiddenConclusions": ["Deploy both routes simultaneously"],
         "escalation": "Escalate to the change authority",
@@ -301,10 +315,14 @@
       "prompt": "What is the legacy incident response?",
       "expected": {
         "outcome": "answer",
-        "route": { "shouldRetrieve": true, "providerIds": ["curated-replay"] },
+        "route": {
+          "shouldRetrieve": true,
+          "providerIds": ["curated-replay"],
+          "applicability": [{ "id": "position.legacy-incident-response", "applicable": true }]
+        },
         "positionIds": ["position.legacy-incident-response"],
         "procedureIds": [],
-        "citations": ["policy://incident/legacy"],
+        "citations": ["replay://stale-position"],
         "evidence": ["guidance is stale and requires review"],
         "forbiddenConclusions": ["current approved incident response"],
         "tokenLimit": 1600,
@@ -314,12 +332,12 @@
     },
     {
       "id": "expired-guidance-is-blocked",
-      "prompt": "What is the expired production release guidance?",
+      "prompt": "Continue the expired production release guidance.",
       "expected": {
         "outcome": "no-answer",
         "route": {
-          "shouldRetrieve": false,
-          "providerIds": [],
+          "shouldRetrieve": true,
+          "providerIds": ["curated-replay"],
           "applicability": [{ "id": "position.expired-release", "applicable": false }]
         },
         "positionIds": [],
@@ -337,10 +355,17 @@
       "prompt": "What is the ambiguous deployment guidance?",
       "expected": {
         "outcome": "escalation",
-        "route": { "shouldRetrieve": true, "providerIds": ["curated-replay"] },
+        "route": {
+          "shouldRetrieve": true,
+          "providerIds": ["curated-replay"],
+          "applicability": [
+            { "id": "position.ambiguous-deployment", "applicable": true },
+            { "id": "procedure.ambiguous-deployment", "applicable": true }
+          ]
+        },
         "positionIds": ["position.ambiguous-deployment"],
         "procedureIds": ["procedure.ambiguous-deployment"],
-        "citations": ["policy://deployment/ambiguous", "replay://ambiguous-procedure"],
+        "citations": ["replay://ambiguous-position", "replay://ambiguous-procedure"],
         "evidence": ["rollback evidence is required", "Request rollback evidence."],
         "forbiddenConclusions": ["approve without rollback evidence"],
         "escalation": "Escalate to the release manager",
@@ -355,7 +380,11 @@
       "providerFailure": true,
       "expected": {
         "outcome": "no-answer",
-        "route": { "shouldRetrieve": true, "providerIds": ["curated-replay"] },
+        "route": {
+          "shouldRetrieve": true,
+          "providerIds": ["curated-replay"],
+          "applicability": [{ "id": "position.provider-failure", "applicable": true }]
+        },
         "positionIds": [],
         "procedureIds": [],
         "citations": [],

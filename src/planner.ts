@@ -1,4 +1,5 @@
 import type { PlannerConfig } from "./config.js"
+import { institutionalReviewStatus } from "./institutional.js"
 import { clamp, containsPhrase, overlapRatio, tokenize } from "./text.js"
 import type {
   CatalogEntry,
@@ -94,14 +95,17 @@ export class DeterministicRetrievalPlanner {
     const applicability = entries.flatMap((entry) => {
       const institutional = entry.institutional
       if (!institutional || !context) return []
-      const expiresAt = institutional.review.expiresAt
-      if (expiresAt !== null && Date.parse(expiresAt) < Date.now()) {
+      const reviewStatus = institutionalReviewStatus(institutional)
+      if (reviewStatus !== "current") {
         return [
           {
             catalogEntryId: entry.id,
             institutionalId: institutional.id,
             applicable: false,
-            reason: "institutional review expired",
+            reason:
+              reviewStatus === "expired"
+                ? "institutional review expired"
+                : "institutional review is invalid",
           } satisfies ApplicabilityDecision,
         ]
       }

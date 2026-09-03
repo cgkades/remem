@@ -1,8 +1,10 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { RememOrchestrator } from "../src/orchestrator.js"
+import { SemanticCatalogRecognizer } from "../src/planning/semantic.js"
 import type {
   CatalogEntry,
   EmbeddingModel,
@@ -38,7 +40,7 @@ interface ReplayExpectation {
   route: {
     shouldRetrieve: boolean
     providerIds: string[]
-    applicability?: Array<{ id: string; applicable: boolean }>
+    applicability: Array<{ id: string; applicable: boolean }>
     semanticAttempted?: boolean
   }
   positionIds: string[]
@@ -87,7 +89,7 @@ interface ReplayCaseResult {
   selectedProcedureIds: string[]
   citations: string[]
   trace: MemoryTrace
-  judge?: { rubric: string; input: string; output: string }
+  judge?: { rubric: string; input: string; output?: string; error?: string }
 }
 
 interface ReplayResults {
@@ -137,19 +139,7 @@ class ReplayProvider implements MemoryProvider {
     return Promise.resolve(
       this.records
         .filter((record) => record.caseIds.includes(context.sessionId ?? ""))
-        .map((record) => ({
-          id: record.id,
-          title: record.title,
-          aliases: record.aliases,
-          summary: record.summary,
-          providerIds: [this.id],
-          scope: { kind: "project" as const, id: context.projectId },
-          tags: record.tags,
-          importance: 0.9,
-          unresolved: false,
-          ...(record.embedding ? { embedding: record.embedding } : {}),
-          ...(record.institutional ? { institutional: record.institutional } : {}),
-        })),
+        .map((record) => catalogEntry(record, context)),
     )
   }
 
@@ -184,6 +174,22 @@ const semanticProbe: EmbeddingModel = {
   id: "curated-replay-semantic-probe",
   dimensions: 1,
   embed: () => Promise.resolve([1]),
+}
+
+function catalogEntry(record: ReplayRecord, context: MemoryContext): CatalogEntry {
+  return {
+    id: record.id,
+    title: record.title,
+    aliases: record.aliases,
+    summary: record.summary,
+    providerIds: ["curated-replay"],
+    scope: { kind: "project", id: context.projectId },
+    tags: record.tags,
+    importance: 0.9,
+    unresolved: false,
+    ...(record.embedding ? { embedding: record.embedding } : {}),
+    ...(record.institutional ? { institutional: record.institutional } : {}),
+  }
 }
 
 function check(checks: ReplayCheck[], name: string, expected: unknown, actual: unknown): void {
@@ -223,14 +229,61 @@ function expectedOutcome(caseExpectation: ReplayExpectation, injection: MemoryIn
   )
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+}
+
 function validateFixture(fixture: ReplayFixture): void {
   if (fixture.version !== 1) throw new Error("unsupported replay fixture version")
+  if (!Array.isArray(fixture.records) || !Array.isArray(fixture.cases)) {
+    throw new Error("replay fixture requires records and cases arrays")
+  }
+  for (const record of fixture.records) {
+    if (
+      !isRecord(record) ||
+      typeof record.id !== "string" ||
+      typeof record.title !== "string" ||
+      typeof record.summary !== "string" ||
+      typeof record.content !== "string" ||
+      !isStringArray(record.caseIds) ||
+      !isStringArray(record.aliases) ||
+      !isStringArray(record.tags)
+    ) {
+      throw new Error("replay record has an invalid shape")
+    }
+  }
   const ids = new Set<string>()
   for (const replayCase of fixture.cases) {
+    const expected = replayCase.expected
+    if (
+      !isRecord(replayCase) ||
+      typeof replayCase.id !== "string" ||
+      typeof replayCase.prompt !== "string" ||
+      !isRecord(expected) ||
+      !isRecord(expected.route) ||
+      typeof expected.route.shouldRetrieve !== "boolean" ||
+      !isStringArray(expected.route.providerIds) ||
+      !Array.isArray(expected.route.applicability) ||
+      !isStringArray(expected.positionIds) ||
+      !isStringArray(expected.procedureIds) ||
+      !isStringArray(expected.citations) ||
+      !isStringArray(expected.evidence) ||
+      !isStringArray(expected.forbiddenConclusions) ||
+      !Number.isFinite(expected.tokenLimit) ||
+      !Number.isFinite(expected.latencyLimitMs) ||
+      !Number.isFinite(expected.providerFailures)
+    ) {
+      throw new Error("replay case has an invalid shape")
+    }
     if (ids.has(replayCase.id)) throw new Error(`duplicate replay case ${replayCase.id}`)
     ids.add(replayCase.id)
-    if (!replayCase.expected.outcome)
+    if (!["answer", "no-answer", "escalation"].includes(expected.outcome)) {
       throw new Error(`${replayCase.id} has no deterministic outcome`)
+    }
   }
 }
 
@@ -263,10 +316,10 @@ async function runReplayFixture(
       .map(({ institutionalId, applicable }) => ({ id: institutionalId, applicable }))
       .sort((left, right) => left.id.localeCompare(right.id))
     const expectedApplicability = expected.route.applicability
-      ?.slice()
+      .slice()
       .sort((left, right) => left.id.localeCompare(right.id))
     const citations = fixture.records
-      .filter((record) => injection.memoryText.includes(`replay://${record.id}`))
+      .filter((record) => injection.memoryText.includes(`(replay://${record.id})`))
       .map((record) => `replay://${record.id}`)
 
     check(
@@ -276,7 +329,7 @@ async function runReplayFixture(
       injection.plan.shouldRetrieve,
     )
     check(checks, "route providers", expected.route.providerIds.slice().sort(), providerIds)
-    if (expectedApplicability) check(checks, "applicability", expectedApplicability, applicability)
+    check(checks, "applicability", expectedApplicability, applicability)
     if (expected.route.semanticAttempted !== undefined) {
       check(
         checks,
@@ -288,8 +341,9 @@ async function runReplayFixture(
     check(checks, "selected positions", expected.positionIds.slice().sort(), selectedPositionIds)
     check(checks, "selected procedures", expected.procedureIds.slice().sort(), selectedProcedureIds)
     check(checks, "outcome", true, expectedOutcome(expected, injection))
-    for (const citation of expected.citations)
-      includes(checks, `citation ${citation}`, citation, injection.memoryText)
+    for (const citation of expected.citations) {
+      check(checks, `citation ${citation}`, true, citations.includes(citation))
+    }
     for (const evidence of expected.evidence)
       includes(checks, `evidence ${evidence}`, evidence, injection.memoryText)
     for (const conclusion of expected.forbiddenConclusions) {
@@ -320,17 +374,27 @@ async function runReplayFixture(
       `Required evidence: ${expected.evidence.join(", ") || "none"}.`,
       `Forbidden conclusions: ${expected.forbiddenConclusions.join(", ") || "none"}.`,
     ].join("\n")
-    const judgeRecord = judge
-      ? {
+    let judgeRecord: ReplayCaseResult["judge"]
+    if (judge) {
+      const input = JSON.stringify({ prompt: replayCase.prompt, memoryText: injection.memoryText })
+      try {
+        judgeRecord = {
           rubric,
-          input: JSON.stringify({ prompt: replayCase.prompt, memoryText: injection.memoryText }),
+          input,
           output: await judge.judge({
             rubric,
             prompt: replayCase.prompt,
             memoryText: injection.memoryText,
           }),
         }
-      : undefined
+      } catch (error) {
+        judgeRecord = {
+          rubric,
+          input,
+          error: error instanceof Error ? error.message : "unknown judge failure",
+        }
+      }
+    }
     cases.push({
       id: replayCase.id,
       passed: checks.every((item) => item.passed),
@@ -353,7 +417,9 @@ async function runReplayFixture(
 
 async function writeReplayResults(results: ReplayResults, file: string): Promise<void> {
   await mkdir(dirname(file), { recursive: true })
-  await writeFile(file, `${JSON.stringify(results, null, 2)}\n`)
+  const temporary = `${file}.${randomUUID()}.tmp`
+  await writeFile(temporary, `${JSON.stringify(results, null, 2)}\n`)
+  await rename(temporary, file)
 }
 
 describe("curated guidance behavioral replay", () => {
@@ -373,6 +439,14 @@ describe("curated guidance behavioral replay", () => {
       selectedPositionIds: [],
       trace: { semanticAttempted: true, shouldRetrieve: false },
     })
+    const blocked = fixture.records.find(({ id }) => id === "wrong-project-position")
+    if (!blocked) throw new Error("missing semantic gate fixture")
+    const recognition = await new SemanticCatalogRecognizer(semanticProbe).recognize(
+      fixture.cases.find(({ id }) => id === "inapplicable-semantic-gate")?.prompt ?? "",
+      [catalogEntry(blocked, { directory: "/", worktree: "/", projectId: "phoenix" })],
+      [],
+    )
+    expect(recognition.matches[0]?.score).toBe(1)
   })
 
   it("records an optional rubric-driven judge without making it a regression gate", async () => {
@@ -389,5 +463,18 @@ describe("curated guidance behavioral replay", () => {
     expect(results.cases[0]?.judge?.rubric).toContain("Expected outcome")
     expect(results.cases[0]?.judge?.input).toContain("memoryText")
     expect(results.cases[0]?.judge?.output).toContain("advisory review")
+  })
+
+  it("captures judge failures without changing deterministic replay status", async () => {
+    const fixturePath = fileURLToPath(
+      new URL("./fixtures/replay/curated-guidance.v1.json", import.meta.url),
+    )
+    const fixture = JSON.parse(await readFile(fixturePath, "utf8")) as ReplayFixture
+    const results = await runReplayFixture(fixture, {
+      judge: () => Promise.reject(new Error("judge unavailable")),
+    })
+
+    expect(results.passed).toBe(true)
+    expect(results.cases[0]?.judge?.error).toBe("judge unavailable")
   })
 })

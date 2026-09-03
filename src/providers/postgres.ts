@@ -12,6 +12,7 @@ import {
   DeterministicConsolidationPipeline,
   PostgresConsolidationRunner,
 } from "../consolidation.js"
+import { institutionalReviewStatus } from "../institutional.js"
 import { PostgresReembedRunner } from "../reembedding.js"
 import { LocalHashEmbeddingModel, vectorLiteral } from "../storage/embedding.js"
 import type {
@@ -134,6 +135,12 @@ function institutionalMetadata(
   return Array.isArray(memory.steps) && Array.isArray(memory.positionIds)
     ? (memory as unknown as NonNullable<MemoryRecord["institutional"]>)
     : undefined
+}
+
+function assertValidInstitutionalReview(memory: MemoryWrite): void {
+  if (memory.institutional && institutionalReviewStatus(memory.institutional) === "invalid") {
+    throw new TypeError("institutional memory has an invalid review timestamp")
+  }
 }
 
 function rowToRecord(row: MemoryRow): MemoryRecord {
@@ -866,6 +873,7 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
     options: MemoryMutationOptions,
   ): Promise<MemoryRecord> {
     options.signal?.throwIfAborted()
+    assertValidInstitutionalReview(memory)
     const id = memory.id ?? randomUUID()
     if (!UUID_PATTERN.test(id)) throw new TypeError("memory id must be a UUID")
     const resolvedScopeId = scopeId(memory, options.context)
