@@ -1,5 +1,5 @@
 import type { OrchestratorConfig } from "./config.js"
-import { institutionalReviewStatus } from "./institutional.js"
+import { institutionalReviewStatus, isInstitutionalMemory } from "./institutional.js"
 import { clamp, contentFingerprint } from "./text.js"
 import { truncateToTokens } from "./token-budget.js"
 import { OperationTimeoutError, withTimeout } from "./timeout.js"
@@ -55,6 +55,7 @@ function normalizeResult(
   providerId: string,
   context: MemoryContext,
   maxTokens: number,
+  blockedCatalogIds: ReadonlySet<string>,
 ): MemoryResult | undefined {
   if (!value || typeof value !== "object" || !("record" in value)) return undefined
   const candidate = value as Partial<MemoryResult>
@@ -72,7 +73,13 @@ function normalizeResult(
   ) {
     return undefined
   }
-  if (record.institutional && institutionalReviewStatus(record.institutional) !== "current") {
+  if (
+    blockedCatalogIds.has(record.id) ||
+    (record.institutional && institutionalReviewStatus(record.institutional) !== "current") ||
+    (record.metadata?.institutional !== undefined &&
+      (!isInstitutionalMemory(record.metadata.institutional) ||
+        institutionalReviewStatus(record.metadata.institutional) !== "current"))
+  ) {
     return undefined
   }
   const content = truncateToTokens(record.content, maxTokens).text
@@ -180,6 +187,12 @@ export class RecallEngine {
       return { memories: [], attempts: [], rawCount: 0, deduplicatedCount: 0 }
     }
 
+    const blockedCatalogIds = new Set(
+      (plan.applicability ?? [])
+        .filter(({ applicable }) => !applicable)
+        .map(({ catalogEntryId }) => catalogEntryId),
+    )
+
     const settled = await Promise.all(
       plan.requests.map(async (request) => {
         const provider = this.providers.get(request.providerId)
@@ -226,7 +239,13 @@ export class RecallEngine {
           )
           const results = providerResults
             .map((result) =>
-              normalizeResult(result, provider.id, context, this.config.budgets.perProviderTokens),
+              normalizeResult(
+                result,
+                provider.id,
+                context,
+                this.config.budgets.perProviderTokens,
+                blockedCatalogIds,
+              ),
             )
             .filter((result): result is MemoryResult => result !== undefined)
           return {

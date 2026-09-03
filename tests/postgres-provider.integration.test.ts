@@ -420,7 +420,7 @@ integration("PostgreSQL managed provider", () => {
           sourceRefs: ["policy://release/invalid"],
           boundaryConditions: ["Replay only."],
           applicability: { match: "all", conditions: [] },
-          review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: "invalid" },
+          review: { reviewedAt: "invalid", expiresAt: null },
         },
       }),
     ).rejects.toThrow("invalid review timestamp")
@@ -539,14 +539,20 @@ integration("PostgreSQL managed provider", () => {
       [expired.id],
     )
 
-    const injection = await new RememOrchestrator(
+    const orchestrator = new RememOrchestrator(
       [provider],
       testConfig({
         semantic: { enabled: false, minimumSimilarity: 0.55, deterministicHighConfidence: 0.82 },
       }),
-    ).processPrompt("Continue the expired release rollback guidance.", context)
+    )
+    const injection = await orchestrator.processPrompt(
+      "Continue the expired release rollback guidance.",
+      context,
+    )
+    const compaction = await orchestrator.compactionContext(context)
 
     expect(injection.text).not.toContain("Expired release rollback position")
+    expect(compaction).not.toContain("Expired release rollback position")
     expect(injection.memoryText).toBe("")
     expect(injection.trace.selectedResults).toBe(0)
     expect(injection.trace.applicability).toContainEqual(

@@ -52,6 +52,7 @@ interface ReplayExpectation {
   tokenLimit: number
   latencyLimitMs: number
   providerFailures: number
+  freshness?: string[]
 }
 
 interface ReplayCase {
@@ -258,16 +259,24 @@ function validateFixture(fixture: ReplayFixture): void {
   }
   const ids = new Set<string>()
   for (const replayCase of fixture.cases) {
-    const expected = replayCase.expected
     if (
       !isRecord(replayCase) ||
       typeof replayCase.id !== "string" ||
-      typeof replayCase.prompt !== "string" ||
+      typeof replayCase.prompt !== "string"
+    ) {
+      throw new Error("replay case has an invalid shape")
+    }
+    const expected = replayCase.expected
+    if (
       !isRecord(expected) ||
       !isRecord(expected.route) ||
       typeof expected.route.shouldRetrieve !== "boolean" ||
       !isStringArray(expected.route.providerIds) ||
       !Array.isArray(expected.route.applicability) ||
+      !expected.route.applicability.every(
+        (item) =>
+          isRecord(item) && typeof item.id === "string" && typeof item.applicable === "boolean",
+      ) ||
       !isStringArray(expected.positionIds) ||
       !isStringArray(expected.procedureIds) ||
       !isStringArray(expected.citations) ||
@@ -346,6 +355,9 @@ async function runReplayFixture(
     }
     for (const evidence of expected.evidence)
       includes(checks, `evidence ${evidence}`, evidence, injection.memoryText)
+    for (const freshness of expected.freshness ?? []) {
+      includes(checks, `freshness ${freshness}`, freshness, injection.memoryText)
+    }
     for (const conclusion of expected.forbiddenConclusions) {
       check(
         checks,
@@ -437,7 +449,7 @@ describe("curated guidance behavioral replay", () => {
     expect(results.cases.find((item) => item.id === "inapplicable-semantic-gate")).toMatchObject({
       passed: true,
       selectedPositionIds: [],
-      trace: { semanticAttempted: true, shouldRetrieve: false },
+      trace: { semanticAttempted: true, shouldRetrieve: true },
     })
     const blocked = fixture.records.find(({ id }) => id === "wrong-project-position")
     if (!blocked) throw new Error("missing semantic gate fixture")

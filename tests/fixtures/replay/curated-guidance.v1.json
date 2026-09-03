@@ -136,7 +136,7 @@
       "tags": ["incident", "legacy"],
       "type": "decision",
       "freshness": "stale",
-      "content": "Citation: policy://incident/legacy. Evidence: this guidance is stale and requires review before execution.",
+      "content": "Citation: policy://incident/legacy. Evidence: legacy incident procedures require review before execution.",
       "institutional": {
         "role": "position",
         "id": "position.legacy-incident-response",
@@ -266,13 +266,13 @@
     },
     {
       "id": "inapplicable-semantic-gate",
-      "prompt": "Use the production rollback guidance for Mercury.",
+      "prompt": "Continue with the production rollback guidance for Mercury.",
       "context": { "projectId": "mercury" },
       "expected": {
         "outcome": "no-answer",
         "route": {
-          "shouldRetrieve": false,
-          "providerIds": [],
+          "shouldRetrieve": true,
+          "providerIds": ["curated-replay"],
           "applicability": [{ "id": "position.phoenix-only-rollback", "applicable": false }],
           "semanticAttempted": true
         },
@@ -323,7 +323,8 @@
         "positionIds": ["position.legacy-incident-response"],
         "procedureIds": [],
         "citations": ["replay://stale-position"],
-        "evidence": ["guidance is stale and requires review"],
+        "evidence": ["legacy incident procedures require review"],
+        "freshness": ["stale; decision"],
         "forbiddenConclusions": ["current approved incident response"],
         "tokenLimit": 1600,
         "latencyLimitMs": 500,

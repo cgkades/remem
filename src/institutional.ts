@@ -48,14 +48,49 @@ function isValidDate(value: unknown): value is string {
   return hasText(value) && Number.isFinite(Date.parse(value))
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+}
+
+export function isInstitutionalMemory(value: unknown): value is InstitutionalMemory {
+  if (!isRecord(value) || (value.role !== "position" && value.role !== "procedure")) return false
+  if (
+    typeof value.id !== "string" ||
+    !isRecord(value.applicability) ||
+    (value.applicability.match !== "all" && value.applicability.match !== "any") ||
+    !Array.isArray(value.applicability.conditions) ||
+    !isRecord(value.review) ||
+    typeof value.review.reviewedAt !== "string" ||
+    !(typeof value.review.expiresAt === "string" || value.review.expiresAt === null)
+  ) {
+    return false
+  }
+  if (value.role === "position") {
+    return isStringArray(value.sourceRefs) && isStringArray(value.boundaryConditions)
+  }
+  return (
+    Array.isArray(value.steps) &&
+    value.steps.every(
+      (step) =>
+        isRecord(step) && typeof step.id === "string" && typeof step.instruction === "string",
+    ) &&
+    isStringArray(value.positionIds)
+  )
+}
+
 export function institutionalReviewStatus(
   institutional: unknown,
   asOf = Date.now(),
 ): InstitutionalReviewStatus {
-  if (typeof institutional !== "object" || institutional === null) return "invalid"
+  if (!isInstitutionalMemory(institutional)) return "invalid"
   const review = (institutional as { review?: unknown }).review
   if (typeof review !== "object" || review === null) return "invalid"
-  const expiresAt = (review as { expiresAt?: unknown }).expiresAt
+  const { reviewedAt, expiresAt } = review as { reviewedAt?: unknown; expiresAt?: unknown }
+  if (typeof reviewedAt !== "string" || !Number.isFinite(Date.parse(reviewedAt))) return "invalid"
   if (expiresAt === null) return "current"
   if (typeof expiresAt !== "string") return "invalid"
   const timestamp = Date.parse(expiresAt)
@@ -140,7 +175,7 @@ function validateReview(
     })
     return
   }
-  if (expiresAt !== null && Date.parse(expiresAt) < asOf.getTime()) {
+  if (expiresAt !== null && Date.parse(expiresAt) <= asOf.getTime()) {
     issues.push({ code: "expired", id: memory.id, message: "institutional memory has expired" })
   }
 }
