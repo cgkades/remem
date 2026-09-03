@@ -976,6 +976,75 @@ integration("PostgreSQL managed provider", () => {
     }
   })
 
+  it("uses the active embedding model when constructing doctor providers", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remem-doctor-provider-model-"))
+    const paths = rememPaths({
+      REMEM_CONFIG_DIR: path.join(root, "config"),
+      REMEM_DATA_DIR: path.join(root, "data"),
+    })
+    const embeddingModel: EmbeddingModel = {
+      id: "doctor-active-model",
+      dimensions: 384,
+      embed: () => Promise.resolve(new Array(384).fill(0)),
+    }
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: databaseUrl ?? "" },
+      providers: [
+        {
+          type: "postgres",
+          id: "doctor-provider-model",
+          connectionString: databaseUrl ?? "",
+          primary: true,
+          maxConnections: 2,
+          catalogLimit: 10,
+        },
+      ],
+      embedding: { provider: "neural", model: "bge-small-en-v1.5", dimensions: 384 },
+    }
+    const originalSettings = (
+      await pool.query<{ model: string; dimensions: number; updated_at: string }>(
+        "SELECT model, dimensions, updated_at FROM remem.embedding_settings WHERE id = true",
+      )
+    ).rows[0]
+    try {
+      await mkdir(paths.dataDir, { recursive: true, mode: 0o700 })
+      await writeAppConfig(config, paths)
+      await pool.query("DELETE FROM remem.embedding_settings WHERE id = true")
+
+      await runDoctor(
+        config,
+        paths,
+        { run: () => Promise.resolve({ stdout: "", stderr: "" }) },
+        { embeddingModel },
+      )
+
+      let recorded: { model: string; dimensions: number } | undefined
+      for (let attempt = 0; attempt < 10; attempt++) {
+        recorded = (
+          await pool.query<{ model: string; dimensions: number }>(
+            "SELECT model, dimensions FROM remem.embedding_settings WHERE id = true",
+          )
+        ).rows[0]
+        if (recorded?.model === embeddingModel.id) break
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      expect(recorded).toMatchObject({
+        model: embeddingModel.id,
+        dimensions: embeddingModel.dimensions,
+      })
+    } finally {
+      await pool.query("DELETE FROM remem.embedding_settings WHERE id = true")
+      if (originalSettings) {
+        await pool.query(
+          "INSERT INTO remem.embedding_settings (id, model, dimensions, updated_at) VALUES (true, $1, $2, $3)",
+          [originalSettings.model, originalSettings.dimensions, originalSettings.updated_at],
+        )
+      }
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it("reports the embedding_settings record health in doctor output", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "remem-doctor-settings-"))
     const paths = rememPaths({
