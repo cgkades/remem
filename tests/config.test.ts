@@ -135,7 +135,12 @@ describe("embedding config", () => {
 
   it("prefers an explicit plugin-options backend over the app-config shape", () => {
     const parsed = parseConfig({
-      embedding: { provider: "neural", model: "bge-small-en-v1.5", dimensions: 384, backend: "hash" },
+      embedding: {
+        provider: "neural",
+        model: "bge-small-en-v1.5",
+        dimensions: 384,
+        backend: "hash",
+      },
     })
     expect(parsed.config.embedding.backend).toBe("hash")
   })

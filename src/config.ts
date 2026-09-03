@@ -189,7 +189,11 @@ function parseEmbedding(value: unknown, diagnostics: ConfigDiagnostic[]): Embedd
   // `backend` field, defaulting every installed plugin to "hash" regardless
   // of what `remem init` configured.
   const backendFromAppConfig =
-    options.provider === "neural" ? "neural" : options.provider === "local-hash" ? "hash" : undefined
+    options.provider === "neural"
+      ? "neural"
+      : options.provider === "local-hash"
+        ? "hash"
+        : undefined
   return {
     backend: backendFromPluginOptions ?? backendFromAppConfig ?? "hash",
     ...(typeof options.modelPath === "string" ? { modelPath: options.modelPath } : {}),
