@@ -1,7 +1,7 @@
 # ReMem
 
 <p align="center">
-  <img src="docs/assets/remem-logo.svg" alt="ReMem — Remember What Matters" width="720" />
+  <img src="docs/assets/remem-logo.png" alt="ReMem — Remember What Matters" width="720" />
 </p>
 
 Remem is a local-first memory orchestration plugin for [OpenCode](https://opencode.ai). It recognizes
