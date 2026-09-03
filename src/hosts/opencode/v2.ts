@@ -131,8 +131,6 @@ async function registerTools(
   })
 }
 
-const lastReembedAttempt = new Map<string, number>()
-
 export const RememPlugin = Plugin.define({
   id: "opencode-remem",
   async setup(context) {
@@ -142,6 +140,13 @@ export const RememPlugin = Plugin.define({
     let promptRegistration: { dispose(): Promise<void> } | undefined
     let reembedRegistration: { dispose(): Promise<void> } | undefined
     let capture: CaptureCoordinator | undefined
+    // Scoped to this setup() call rather than module-level: every plugin
+    // setup has at most one primaryPostgres, and `remem init` always writes
+    // the same literal provider id ("remem-local"), so a module-level Map
+    // keyed by that id would collide across unrelated workspaces/databases
+    // sharing one process, suppressing one workspace's reembed cooldown
+    // because of a different workspace's recent attempt.
+    let lastReembedAttempt: number | undefined
     try {
       const parsed = parseConfig(await loadInstalledPluginOptions(context.options))
       for (const diagnostic of parsed.diagnostics) {
@@ -186,8 +191,8 @@ export const RememPlugin = Plugin.define({
       )
       if (primaryPostgres) {
         reembedRegistration = await context.session.hook("prompt", () => {
-          if (!shouldAttemptReembed(lastReembedAttempt.get(primaryPostgres.id))) return
-          lastReembedAttempt.set(primaryPostgres.id, Date.now())
+          if (!shouldAttemptReembed(lastReembedAttempt)) return
+          lastReembedAttempt = Date.now()
           // Fire-and-forget: must never delay or fail prompt handling.
           void primaryPostgres.reembedStale().catch((error) => {
             safeLoggerCall(logger, "warn", "reembed.attempt_failed", {

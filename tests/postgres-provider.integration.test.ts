@@ -782,6 +782,87 @@ integration("PostgreSQL managed provider", () => {
     }
   })
 
+  it("respects the configured neural backend when reembedding via the CLI, instead of always using hash", async () => {
+    // Regression test: `reembed` used to always construct its provider via
+    // primaryPostgresProvider(), which intentionally defaults to
+    // LocalHashEmbeddingModel for candidates/review/consolidate. Reembed was
+    // added to that same dispatch bucket without threading the configured
+    // embedding model through, so it silently overwrote neural embeddings
+    // with hash vectors regardless of `config.embedding.provider`.
+    const seedProvider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "reembed-neural-seed",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 10,
+      },
+      { pool },
+    )
+    const written = await seedProvider.write({
+      title: "Reembed neural CLI target",
+      content: "Manual reembed CLI must honor the configured neural backend",
+      scope: { kind: "workspace", id: "phoenix" },
+      type: "decision",
+    })
+    await pool.query(
+      "UPDATE remem.memory_embeddings SET model = 'stale-model' WHERE memory_id = $1",
+      [written.id],
+    )
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "remem-reembed-neural-cli-"))
+    const paths = rememPaths({
+      REMEM_CONFIG_DIR: path.join(root, "config"),
+      REMEM_DATA_DIR: path.join(root, "data"),
+    })
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: databaseUrl ?? "" },
+      providers: [
+        {
+          type: "postgres",
+          id: "remem-local",
+          connectionString: databaseUrl ?? "",
+          primary: true,
+          maxConnections: 2,
+          catalogLimit: 100,
+        },
+      ],
+      embedding: { provider: "neural", model: "bge-small-en-v1.5", dimensions: 384 },
+    }
+    try {
+      await mkdir(paths.dataDir, { recursive: true, mode: 0o700 })
+      await writeAppConfig(config, paths)
+
+      const lines: string[] = []
+      // Large batch size: this describe.sequential suite shares one Postgres
+      // instance across many tests, so other stale rows may sort ahead of
+      // ours by updated_at. A small batch could exhaust its capacity on
+      // unrelated rows before reaching the one this test actually seeded.
+      const exitCode = await runCli(["reembed", "--batch-size", "1000"], {
+        paths,
+        stdout: (line) => lines.push(line),
+      })
+
+      expect(exitCode).toBe(0)
+      const output = JSON.parse(lines.join("\n")) as { status: string; reembedded: number }
+      expect(output.status).toBe("completed")
+      expect(output.reembedded).toBeGreaterThanOrEqual(1)
+
+      const row = await pool.query<{ model: string }>(
+        "SELECT model FROM remem.memory_embeddings WHERE memory_id = $1",
+        [written.id],
+      )
+      // Must be the real neural model id, not "remem-local-hash-v1" — the
+      // latter would mean reembed silently ignored the configured neural
+      // backend, exactly the bug this test guards against.
+      expect(row.rows[0]?.model).toBe("bge-small-en-v1.5")
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it("reports a re-embed backlog in doctor output", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "remem-doctor-backlog-"))
     const paths = rememPaths({

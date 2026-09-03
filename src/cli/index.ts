@@ -16,6 +16,7 @@ import { runMigrations } from "../storage/migrations.js"
 import { openCodeConfigPath, rememPaths, type RememPaths } from "../storage/paths.js"
 import { runDoctor } from "./doctor.js"
 import { PostgresMemoryProvider } from "../providers/postgres.js"
+import { createEmbeddingModel } from "../storage/embedding-neural.js"
 import { withInstallLock } from "./lock.js"
 import { composeArguments, managedCommand, writeManagedFiles } from "./managed.js"
 import { NodeProcessRunner, type ProcessRunner } from "./process.js"
@@ -276,17 +277,32 @@ async function stop(config: RememAppConfig, runner: ProcessRunner): Promise<void
   }
 }
 
-function primaryPostgresProvider(config: RememAppConfig): PostgresMemoryProvider {
+function findPrimaryPostgresConfig(config: RememAppConfig): PostgresProviderConfig {
   const provider = config.providers.find(
     (candidate): candidate is PostgresProviderConfig =>
       candidate.type === "postgres" && candidate.primary,
   )
   if (!provider) throw new Error("candidate management requires a primary PostgreSQL provider")
+  return provider
+}
+
+function primaryPostgresProvider(config: RememAppConfig): PostgresMemoryProvider {
   // Intentionally defaults to LocalHashEmbeddingModel: candidates/review/consolidate
   // operate on text content, not semantic search, so they don't need the
   // configured neural embedding backend. Do not "fix" this to thread the
   // configured model through — it would add cost with no benefit here.
-  return new PostgresMemoryProvider(provider)
+  return new PostgresMemoryProvider(findPrimaryPostgresConfig(config))
+}
+
+async function reembedProvider(config: RememAppConfig): Promise<PostgresMemoryProvider> {
+  // Unlike candidates/review/consolidate, reembed's entire purpose is to
+  // re-embed stale rows into the CONFIGURED embedding model — it must use
+  // the real configured backend, not the hash default primaryPostgresProvider
+  // intentionally uses for the text-only commands above.
+  const embeddingModel = await createEmbeddingModel({
+    backend: config.embedding.provider === "neural" ? "neural" : "hash",
+  })
+  return new PostgresMemoryProvider(findPrimaryPostgresConfig(config), { embeddingModel })
 }
 
 function postgresEnvironment(connectionString: string): NodeJS.ProcessEnv {
@@ -454,7 +470,10 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
       parsed.command === "consolidate" ||
       parsed.command === "reembed"
     ) {
-      const provider = primaryPostgresProvider(config)
+      const provider =
+        parsed.command === "reembed"
+          ? await reembedProvider(config)
+          : primaryPostgresProvider(config)
       try {
         if (parsed.command === "candidates") {
           output(
