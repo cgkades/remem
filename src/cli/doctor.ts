@@ -9,6 +9,7 @@ import { openCodeConfigPath, type RememPaths } from "../storage/paths.js"
 import type { RememAppConfig } from "../storage/config-file.js"
 import { managedCommand } from "./managed.js"
 import type { ProcessRunner } from "./process.js"
+import type { EmbeddingModel } from "../types.js"
 
 export interface DoctorCheck {
   name: string
@@ -19,6 +20,10 @@ export interface DoctorCheck {
 export interface DoctorReport {
   healthy: boolean
   checks: DoctorCheck[]
+}
+
+export interface DoctorOptions {
+  embeddingModel?: EmbeddingModel
 }
 
 function supportedVectorVersion(version: string): boolean {
@@ -41,8 +46,14 @@ export async function runDoctor(
   config: RememAppConfig,
   paths: RememPaths,
   runner: ProcessRunner,
+  options: DoctorOptions = {},
 ): Promise<DoctorReport> {
   const checks: DoctorCheck[] = []
+  const embeddingModel =
+    options.embeddingModel ??
+    (await createEmbeddingModel({
+      backend: config.embedding.provider === "neural" ? "neural" : "hash",
+    }))
   checks.push(await checkPermissions(paths.configFile, "configuration permissions"))
   if (config.storage.mode === "managed") {
     checks.push(await checkPermissions(config.storage.environmentFile, "credential permissions"))
@@ -80,7 +91,7 @@ export async function runDoctor(
     checks.push({ name: "data directory", status: "error", detail: "directory is not writable" })
   }
 
-  const created = createProviders(config.providers, { worktree: process.cwd() })
+  const created = createProviders(config.providers, { worktree: process.cwd() }, { embeddingModel })
   for (const diagnostic of created.diagnostics) {
     checks.push({ name: "provider configuration", status: "error", detail: diagnostic })
   }
@@ -160,7 +171,7 @@ export async function runDoctor(
       const backlog = await pool.query<{ count: string }>(
         `SELECT count(*)::text AS count FROM remem.memory_embeddings
           WHERE model <> $1 OR dimensions <> $2`,
-        [config.embedding.model, config.embedding.dimensions],
+        [embeddingModel.id, embeddingModel.dimensions],
       )
       const pending = Number(backlog.rows[0]?.count ?? 0)
       checks.push({
@@ -168,7 +179,7 @@ export async function runDoctor(
         status: pending === 0 ? "ok" : "warn",
         detail:
           pending === 0
-            ? "all memories use the configured embedding model"
+            ? "all memories use the active embedding model"
             : `${pending} ${pending === 1 ? "memory" : "memories"} pending re-embedding; ` +
               "this drains automatically during normal use, or run `remem reembed` now",
       })
@@ -183,7 +194,7 @@ export async function runDoctor(
       )
       const row = settings.rows[0]
       const matches =
-        row?.model === config.embedding.model && row?.dimensions === config.embedding.dimensions
+        row?.model === embeddingModel.id && row?.dimensions === embeddingModel.dimensions
       checks.push({
         name: "embedding settings persistence",
         status: row === undefined ? "warn" : matches ? "ok" : "warn",
@@ -191,9 +202,9 @@ export async function runDoctor(
           row === undefined
             ? "no embedding_settings row found yet; it is written on first provider construction"
             : matches
-              ? `recorded model matches configuration (${row.model}, ${row.dimensions} dimensions)`
-              : `recorded model (${row.model}, ${row.dimensions}d) does not match configured model ` +
-                `(${config.embedding.model}, ${config.embedding.dimensions}d) — the write may be failing`,
+              ? `recorded model matches active model (${row.model}, ${row.dimensions} dimensions)`
+              : `recorded model (${row.model}, ${row.dimensions}d) does not match active model ` +
+                `(${embeddingModel.id}, ${embeddingModel.dimensions}d) — the write may be failing`,
       })
     } catch {
       // Table may not exist yet on an unmigrated database; the main PostgreSQL
@@ -210,17 +221,14 @@ export async function runDoctor(
   }
 
   try {
-    const model = await createEmbeddingModel({
-      backend: config.embedding.provider === "neural" ? "neural" : "hash",
-    })
-    const embedding = await model.embed("Remem doctor")
-    const fellBack = model.id !== config.embedding.model
+    const embedding = await embeddingModel.embed("Remem doctor")
+    const fellBack = embeddingModel.id !== config.embedding.model
     checks.push({
       name: "embedding configuration",
       status: embedding.length !== config.embedding.dimensions ? "error" : fellBack ? "warn" : "ok",
       detail: fellBack
-        ? `configured model ${config.embedding.model} unavailable; fell back to ${model.id}; ${embedding.length} dimensions`
-        : `${model.id}; ${embedding.length} dimensions`,
+        ? `configured model ${config.embedding.model} unavailable; fell back to ${embeddingModel.id}; ${embedding.length} dimensions`
+        : `${embeddingModel.id}; ${embedding.length} dimensions`,
     })
   } catch {
     checks.push({ name: "embedding configuration", status: "error", detail: "embedding failed" })
