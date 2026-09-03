@@ -1,4 +1,9 @@
-import type { InstitutionalMemory, MemoryWrite } from "./types.js"
+import type {
+  InstitutionalMemory,
+  InstitutionalPosition,
+  InstitutionalProcedure,
+  MemoryWrite,
+} from "./types.js"
 
 export type InstitutionalValidationCode =
   | "duplicate_id"
@@ -131,16 +136,15 @@ function hasProvenance(memory: InstitutionalWrite): boolean {
   )
 }
 
-function validateEntry(
+function validateSharedEntry(
   memory: InstitutionalWrite,
+  institutional: InstitutionalMemory,
   asOf: Date,
   issues: InstitutionalValidationIssue[],
 ): void {
-  const institutional = memory.institutional
-  if (!institutional) return
   if (!hasText(institutional.id) || !hasText(memory.title)) {
     issues.push({
-      code: "invalid_position",
+      code: institutional.role === "position" ? "invalid_position" : "invalid_procedure",
       id: institutional.id,
       message: "institutional memories require stable IDs and titles",
     })
@@ -157,88 +161,112 @@ function validateEntry(
   }
   validateApplicability(institutional, issues)
   validateReview(institutional, asOf, issues)
+}
 
-  if (institutional.role === "position") {
-    if (memory.type !== "decision") {
-      issues.push({
-        code: "invalid_position",
-        id: institutional.id,
-        message: "positions must use the decision memory type",
-      })
-    }
-    if (!hasText(institutional.owner) && !hasText(institutional.authority)) {
-      issues.push({
-        code: "missing_authority",
-        id: institutional.id,
-        message: "positions require an owner or authority",
-      })
-    }
-    if (!nonEmptyStrings(institutional.sourceRefs)) {
-      issues.push({
-        code: "missing_source_ref",
-        id: institutional.id,
-        message: "positions require non-empty source references",
-      })
-    }
-    if (!hasProvenance(memory)) {
-      issues.push({
-        code: "missing_provenance",
-        id: institutional.id,
-        message: "positions require attributable provenance",
-      })
-    }
-    if (!nonEmptyStrings(institutional.boundaryConditions)) {
-      issues.push({
-        code: "invalid_position",
-        id: institutional.id,
-        message: "positions require non-empty boundary conditions",
-      })
-    }
-    return
+function validatePosition(
+  memory: InstitutionalWrite,
+  position: InstitutionalPosition,
+  issues: InstitutionalValidationIssue[],
+): void {
+  if (memory.type !== "decision") {
+    issues.push({
+      code: "invalid_position",
+      id: position.id,
+      message: "positions must use the decision memory type",
+    })
   }
+  if (!hasText(position.owner) && !hasText(position.authority)) {
+    issues.push({
+      code: "missing_authority",
+      id: position.id,
+      message: "positions require an owner or authority",
+    })
+  }
+  if (!nonEmptyStrings(position.sourceRefs)) {
+    issues.push({
+      code: "missing_source_ref",
+      id: position.id,
+      message: "positions require non-empty source references",
+    })
+  }
+  if (!hasProvenance(memory)) {
+    issues.push({
+      code: "missing_provenance",
+      id: position.id,
+      message: "positions require attributable provenance",
+    })
+  }
+  if (!nonEmptyStrings(position.boundaryConditions)) {
+    issues.push({
+      code: "invalid_position",
+      id: position.id,
+      message: "positions require non-empty boundary conditions",
+    })
+  }
+}
 
+function validateProcedure(
+  memory: InstitutionalWrite,
+  procedure: InstitutionalProcedure,
+  issues: InstitutionalValidationIssue[],
+): void {
   if (memory.type !== "procedure") {
     issues.push({
       code: "invalid_procedure",
-      id: institutional.id,
+      id: procedure.id,
       message: "procedures must use the procedure memory type",
     })
   }
   const stepIds = new Set<string>()
   const invalidSteps =
-    !Array.isArray(institutional.steps) ||
-    institutional.steps.some((step) => {
+    !Array.isArray(procedure.steps) ||
+    procedure.steps.some((step) => {
       if (!hasText(step.id) || !hasText(step.instruction) || stepIds.has(step.id)) return true
       stepIds.add(step.id)
       return false
     })
-  if (!Array.isArray(institutional.steps) || institutional.steps.length === 0 || invalidSteps) {
+  if (!Array.isArray(procedure.steps) || procedure.steps.length === 0 || invalidSteps) {
     issues.push({
       code: "invalid_procedure",
-      id: institutional.id,
+      id: procedure.id,
       message: "procedures require uniquely identified ordered steps",
     })
   }
   if (
-    !nonEmptyStrings(institutional.positionIds) ||
-    !nonEmptyStrings(institutional.requiredEvidence) ||
-    !nonEmptyStrings(institutional.completionCriteria) ||
-    !nonEmptyStrings(institutional.escalationConditions)
+    !nonEmptyStrings(procedure.positionIds) ||
+    !nonEmptyStrings(procedure.requiredEvidence) ||
+    !nonEmptyStrings(procedure.completionCriteria) ||
+    !nonEmptyStrings(procedure.escalationConditions)
   ) {
     issues.push({
       code: "invalid_procedure",
-      id: institutional.id,
+      id: procedure.id,
       message:
         "procedures require positions, evidence, completion criteria, and escalation conditions",
     })
   }
-  if (memory.content !== procedureContent(institutional)) {
+  if (memory.content !== procedureContent(procedure)) {
     issues.push({
       code: "invalid_procedure",
-      id: institutional.id,
+      id: procedure.id,
       message: "procedure content must be the ordered steps only, not copied position facts",
     })
   }
+}
+
+function validateEntry(
+  memory: InstitutionalWrite,
+  asOf: Date,
+  issues: InstitutionalValidationIssue[],
+): void {
+  const institutional = memory.institutional
+  if (!institutional) return
+  validateSharedEntry(memory, institutional, asOf, issues)
+  if (institutional.role === "position") {
+    validatePosition(memory, institutional, issues)
+    return
+  }
+  validateProcedure(memory, institutional, issues)
 }
 
 function validateReferences(
