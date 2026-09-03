@@ -130,7 +130,7 @@ export function institutionalApplies(
   if (!isInstitutionalMemory(institutional)) return false
   const matches = institutional.applicability.conditions.map((condition) => {
     if (condition.kind === "topic") {
-      return prompt !== undefined && tokenize(prompt).includes(condition.value.toLowerCase())
+      return prompt === undefined || tokenize(prompt).includes(condition.value.toLowerCase())
     }
     return context[condition.field] === condition.value
   })
@@ -360,6 +360,15 @@ function validateEntry(
     return
   }
   validateProcedure(memory, institutional, issues)
+}
+
+export function validateInstitutionalMemory(
+  memory: MemoryWrite,
+  options: InstitutionalValidationOptions = {},
+): InstitutionalValidationResult {
+  const issues: InstitutionalValidationIssue[] = []
+  if (memory.institutional) validateEntry(memory, options.asOf ?? new Date(), issues)
+  return { valid: issues.length === 0, issues }
 }
 
 function validateReferences(

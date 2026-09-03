@@ -462,7 +462,7 @@ integration("PostgreSQL managed provider", () => {
       type: "procedure",
       title: "Release rollback procedure",
       aliases: ["release rollback guidance"],
-      content: "1. Confirm rollback evidence. 2. Escalate when evidence is missing.",
+      content: "1. Confirm rollback evidence.\n2. Escalate when evidence is missing.",
       source: "policy://release/rollback-procedure",
       scope: { kind: "project", id: "phoenix" },
       institutional: {
@@ -492,7 +492,7 @@ integration("PostgreSQL managed provider", () => {
     ).processPrompt("What is the release rollback guidance?", context)
 
     expect(injection.memoryText).toContain(position.content)
-    expect(injection.memoryText).toContain(procedure.content)
+    expect(injection.memoryText).toContain(procedure.content.replace("\n", " "))
     expect(injection.memoryText).toContain("policy://release/rollback-position")
     expect(injection.memoryText).toContain("policy://release/rollback-procedure")
     expect(injection.trace.applicability).toEqual(

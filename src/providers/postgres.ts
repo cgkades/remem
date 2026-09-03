@@ -12,7 +12,11 @@ import {
   DeterministicConsolidationPipeline,
   PostgresConsolidationRunner,
 } from "../consolidation.js"
-import { institutionalReviewStatus, isInstitutionalMemory } from "../institutional.js"
+import {
+  institutionalReviewStatus,
+  isInstitutionalMemory,
+  validateInstitutionalMemory,
+} from "../institutional.js"
 import { PostgresReembedRunner } from "../reembedding.js"
 import { LocalHashEmbeddingModel, vectorLiteral } from "../storage/embedding.js"
 import type {
@@ -121,6 +125,24 @@ function assertValidInstitutionalReview(memory: MemoryWrite): void {
     (memory.institutional?.role === "procedure" && memory.type !== "procedure")
   ) {
     throw new TypeError("institutional memory has an invalid memory type")
+  }
+  if (memory.institutional) {
+    const validation = validateInstitutionalMemory({
+      ...memory,
+      provenance:
+        memory.provenance && memory.provenance.length > 0
+          ? memory.provenance
+          : [
+              {
+                source: sourceFromWrite(memory),
+                capturedAt: new Date().toISOString(),
+                original: true,
+              },
+            ],
+    })
+    if (!validation.valid) {
+      throw new TypeError(validation.issues[0]?.message ?? "invalid institutional memory")
+    }
   }
 }
 
