@@ -29,6 +29,7 @@ function emptyPlan(): RetrievalPlan {
     requests: [],
     matches: [],
     signals: [],
+    applicability: [],
   }
 }
 
@@ -169,7 +170,7 @@ export class RememOrchestrator {
       catalog = await this.catalog.get(context)
       catalogMs = performance.now() - catalogStarted
       const planningStarted = performance.now()
-      let plan = this.planner.plan(prompt, catalog.entries, this.providerIds)
+      let plan = this.planner.plan(prompt, catalog.entries, this.providerIds, context)
       const semanticConfig = this.config.semantic ?? {
         enabled: true,
         minimumSimilarity: 0.55,
@@ -184,7 +185,12 @@ export class RememOrchestrator {
         try {
           const recognized = await this.semantic.recognize(
             prompt,
-            catalog.entries,
+            catalog.entries.filter(
+              (entry) =>
+                !(plan.applicability ?? []).some(
+                  ({ catalogEntryId, applicable }) => catalogEntryId === entry.id && !applicable,
+                ),
+            ),
             catalog.providers,
           )
           const candidate = semanticPlan(
@@ -231,6 +237,7 @@ export class RememOrchestrator {
         confidence: Number(plan.confidence.toFixed(3)),
         topics: plan.topics,
         signals: plan.signals,
+        applicability: plan.applicability ?? [],
         providers: recall.attempts,
         rawResults: recall.rawCount,
         deduplicatedResults: recall.deduplicatedCount,
