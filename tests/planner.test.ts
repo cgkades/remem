@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { DeterministicRetrievalPlanner } from "../src/planner.js"
 import type { CatalogEntry } from "../src/types.js"
+import { memoryContext } from "./helpers.js"
 
 const phoenix: CatalogEntry = {
   id: "notes:phoenix",
@@ -46,5 +47,67 @@ describe("DeterministicRetrievalPlanner", () => {
     const plan = planner.plan("Walk through this function", [hr], ["notes"])
 
     expect(plan.shouldRetrieve).toBe(false)
+  })
+
+  it("blocks specialized guidance before catalog matching regardless of title similarity", () => {
+    const gated: CatalogEntry = {
+      ...phoenix,
+      id: "institutional:production",
+      title: "Production rollback procedure",
+      institutional: {
+        role: "procedure",
+        id: "procedure.production-rollback",
+        steps: [{ id: "plan", instruction: "Prepare the plan." }],
+        positionIds: ["position.rollback"],
+        requiredEvidence: ["approval"],
+        completionCriteria: ["plan approved"],
+        escalationConditions: ["no approval"],
+        applicability: {
+          match: "all",
+          conditions: [
+            { id: "project", kind: "context", field: "projectId", value: "other-project" },
+          ],
+        },
+        review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: null },
+      },
+    }
+    const plan = planner.plan("Production rollback procedure", [gated], ["notes"], memoryContext)
+
+    expect(plan.shouldRetrieve).toBe(false)
+    expect(plan.matches).toEqual([])
+    expect(plan.applicability).toEqual([
+      expect.objectContaining({
+        applicable: false,
+        institutionalId: "procedure.production-rollback",
+      }),
+    ])
+  })
+
+  it("records an applicable any-gate without claiming every condition passed", () => {
+    const gated: CatalogEntry = {
+      ...phoenix,
+      institutional: {
+        role: "position",
+        id: "position.production",
+        owner: "release-engineering",
+        sourceRefs: ["policy"],
+        boundaryConditions: ["Production only."],
+        applicability: {
+          match: "any",
+          conditions: [
+            { id: "other-project", kind: "context", field: "projectId", value: "other" },
+            { id: "this-project", kind: "context", field: "projectId", value: "project-test" },
+          ],
+        },
+        review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: null },
+      },
+    }
+    const [decision] =
+      planner.plan("Phoenix", [gated], ["notes"], memoryContext).applicability ?? []
+
+    expect(decision).toMatchObject({
+      applicable: true,
+      reason: "deterministic applicability conditions passed",
+    })
   })
 })

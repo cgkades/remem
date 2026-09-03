@@ -131,6 +131,7 @@ export interface CatalogEntry {
   source?: string
   parentId?: string
   embedding?: number[]
+  institutional?: InstitutionalMemory
 }
 
 export interface ProviderDescriptor {
@@ -270,6 +271,14 @@ export interface RetrievalPlan {
   requests: ProviderRetrievalRequest[]
   matches: CatalogMatch[]
   signals: string[]
+  applicability?: ApplicabilityDecision[]
+}
+
+export interface ApplicabilityDecision {
+  catalogEntryId: string
+  institutionalId: string
+  applicable: boolean
+  reason: string
 }
 
 export interface RankedMemory extends MemoryResult {
@@ -312,6 +321,7 @@ export interface MemoryTrace {
   confidence: number
   topics: string[]
   signals: string[]
+  applicability?: ApplicabilityDecision[]
   providers: ProviderAttempt[]
   rawResults: number
   deduplicatedResults: number

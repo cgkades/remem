@@ -3,6 +3,8 @@ import { clamp, containsPhrase, overlapRatio, tokenize } from "./text.js"
 import type {
   CatalogEntry,
   CatalogMatch,
+  ApplicabilityDecision,
+  MemoryContext,
   ProviderRetrievalRequest,
   RetrievalPlan,
 } from "./types.js"
@@ -83,10 +85,50 @@ function scoreEntry(prompt: string, promptTokens: string[], entry: CatalogEntry)
 export class DeterministicRetrievalPlanner {
   constructor(private readonly config: PlannerConfig) {}
 
-  plan(prompt: string, entries: CatalogEntry[], availableProviderIds: string[]): RetrievalPlan {
+  plan(
+    prompt: string,
+    entries: CatalogEntry[],
+    availableProviderIds: string[],
+    context?: MemoryContext,
+  ): RetrievalPlan {
+    const applicability = entries.flatMap((entry) => {
+      const institutional = entry.institutional
+      if (!institutional || !context) return []
+      const conditionResults = institutional.applicability.conditions.map((condition) => {
+        if (condition.kind === "topic")
+          return !tokenize(prompt).includes(condition.value.toLowerCase())
+        return context[condition.field] !== condition.value
+      })
+      const failed = institutional.applicability.conditions.find(
+        (_, index) => conditionResults[index],
+      )
+      const applicable =
+        institutional.applicability.match === "all"
+          ? !conditionResults.some(Boolean)
+          : conditionResults.some((matched) => !matched)
+      return [
+        {
+          catalogEntryId: entry.id,
+          institutionalId: institutional.id,
+          applicable,
+          reason: applicable
+            ? "deterministic applicability conditions passed"
+            : `failed deterministic gate ${failed?.id ?? "none"}`,
+        } satisfies ApplicabilityDecision,
+      ]
+    })
+    const blocked = new Set(
+      applicability
+        .filter(({ applicable }) => !applicable)
+        .map(({ catalogEntryId }) => catalogEntryId),
+    )
+    entries = entries.filter((entry) => !blocked.has(entry.id))
     const promptTokens = tokenize(prompt)
     const continuity = STRONG_CONTINUITY.test(prompt)
-    const signals = continuity ? ["explicit continuity phrase"] : []
+    const signals = [
+      ...(continuity ? ["explicit continuity phrase"] : []),
+      ...(blocked.size > 0 ? ["institutional applicability gate blocked catalog entries"] : []),
+    ]
     const matches = entries
       .map((entry) => scoreEntry(prompt, promptTokens, entry))
       .filter((match) => match.score > 0)
@@ -134,6 +176,7 @@ export class DeterministicRetrievalPlanner {
       requests,
       matches,
       signals,
+      applicability,
     }
   }
 }
