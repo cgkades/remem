@@ -12,6 +12,7 @@ import { PostgresMemoryProvider } from "../src/providers/postgres.js"
 import { runCli } from "../src/cli/index.js"
 import { runDoctor } from "../src/cli/doctor.js"
 import type { CandidateMemory, SessionObservation } from "../src/observation.js"
+import { LocalHashEmbeddingModel } from "../src/storage/embedding.js"
 import { writeAppConfig, type RememAppConfig } from "../src/storage/config-file.js"
 import { MigrationIntegrityError, runMigrations } from "../src/storage/migrations.js"
 import { rememPaths } from "../src/storage/paths.js"
@@ -905,6 +906,71 @@ integration("PostgreSQL managed provider", () => {
           row.memory_id,
           row.model,
         ])
+      }
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it("does not report a backlog when neural embedding falls back to hash", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remem-doctor-fallback-"))
+    const paths = rememPaths({
+      REMEM_CONFIG_DIR: path.join(root, "config"),
+      REMEM_DATA_DIR: path.join(root, "data"),
+    })
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: databaseUrl ?? "" },
+      providers: [],
+      embedding: { provider: "neural", model: "bge-small-en-v1.5", dimensions: 384 },
+    }
+    const originalEmbeddings = (
+      await pool.query<{ memory_id: string; model: string }>(
+        "SELECT memory_id, model FROM remem.memory_embeddings",
+      )
+    ).rows
+    const originalSettings = (
+      await pool.query<{ model: string; dimensions: number; updated_at: string }>(
+        "SELECT model, dimensions, updated_at FROM remem.embedding_settings WHERE id = true",
+      )
+    ).rows[0]
+    try {
+      await mkdir(paths.dataDir, { recursive: true, mode: 0o700 })
+      await writeAppConfig(config, paths)
+      await pool.query("UPDATE remem.memory_embeddings SET model = 'remem-local-hash-v1'")
+      await pool.query(
+        `INSERT INTO remem.embedding_settings (id, model, dimensions)
+           VALUES (true, 'remem-local-hash-v1', 384)
+         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions`,
+      )
+
+      const report = await runDoctor(
+        config,
+        paths,
+        { run: () => Promise.resolve({ stdout: "", stderr: "" }) },
+        { embeddingModel: new LocalHashEmbeddingModel() },
+      )
+      expect(report.checks.find((c) => c.name === "embedding backlog")).toMatchObject({
+        status: "ok",
+      })
+      expect(report.checks.find((c) => c.name === "embedding settings persistence")).toMatchObject({
+        status: "ok",
+      })
+      expect(report.checks.find((c) => c.name === "embedding configuration")).toMatchObject({
+        status: "warn",
+      })
+    } finally {
+      for (const row of originalEmbeddings) {
+        await pool.query("UPDATE remem.memory_embeddings SET model = $2 WHERE memory_id = $1", [
+          row.memory_id,
+          row.model,
+        ])
+      }
+      await pool.query("DELETE FROM remem.embedding_settings WHERE id = true")
+      if (originalSettings) {
+        await pool.query(
+          "INSERT INTO remem.embedding_settings (id, model, dimensions, updated_at) VALUES (true, $1, $2, $3)",
+          [originalSettings.model, originalSettings.dimensions, originalSettings.updated_at],
+        )
       }
       await rm(root, { recursive: true, force: true })
     }
