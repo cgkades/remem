@@ -44,6 +44,10 @@ export interface RememAppConfig {
     configured: boolean
     configPath?: string
   }
+  pi?: {
+    configured: boolean
+    settingsPath?: string
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

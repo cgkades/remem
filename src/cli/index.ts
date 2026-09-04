@@ -13,7 +13,13 @@ import {
   type RememAppConfig,
 } from "../storage/config-file.js"
 import { runMigrations } from "../storage/migrations.js"
-import { openCodeConfigPath, rememPaths, type RememPaths } from "../storage/paths.js"
+import {
+  openCodeConfigPath,
+  packageRoot,
+  piSettingsPath,
+  rememPaths,
+  type RememPaths,
+} from "../storage/paths.js"
 import { runDoctor } from "./doctor.js"
 import { PostgresMemoryProvider } from "../providers/postgres.js"
 import { createEmbeddingModel } from "../storage/embedding-neural.js"
@@ -147,10 +153,42 @@ async function configureOpenCode(configPath: string): Promise<void> {
   await rename(temporary, configPath)
 }
 
+/**
+ * Configures remem as a Pi package by adding this package's own installed
+ * root directory to Pi's global `packages` setting (`~/.pi/agent/settings.json`
+ * by default). Pi auto-discovers `pi.extensions` from `package.json` for a
+ * local-path package (see docs/pi-integration.md), so this does not need to
+ * know about `dist/hosts/pi/index.js` directly. Additive: preserves any
+ * existing settings and package entries.
+ */
+async function configurePi(settingsPath: string): Promise<void> {
+  await mkdir(path.dirname(settingsPath), { recursive: true, mode: 0o700 })
+  let value: Record<string, unknown> = {}
+  try {
+    const parsed: unknown = JSON.parse(await readFile(settingsPath, "utf8"))
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Pi settings must be a JSON object")
+    }
+    value = parsed as Record<string, unknown>
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+  }
+  const packages: unknown[] = Array.isArray(value.packages)
+    ? Array.from(value.packages as unknown[])
+    : []
+  const root = packageRoot(import.meta.url)
+  if (!packages.some((entry) => entry === root)) packages.push(root)
+  value.packages = packages
+  const temporary = `${settingsPath}.${process.pid}.tmp`
+  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
+  await rename(temporary, settingsPath)
+}
+
 function appConfig(
   storage: RememAppConfig["storage"],
   capture: boolean,
   opencode?: RememAppConfig["opencode"],
+  pi?: RememAppConfig["pi"],
 ): RememAppConfig {
   return {
     version: 1,
@@ -168,6 +206,7 @@ function appConfig(
     embedding: { provider: "neural", model: "bge-small-en-v1.5", dimensions: 384 },
     capture: { enabled: capture },
     ...(opencode ? { opencode } : {}),
+    ...(pi ? { pi } : {}),
   }
 }
 
@@ -201,6 +240,12 @@ async function initialize(
       existing = { ...existing, opencode: { configured: true, configPath } }
       await writeAppConfig(existing, paths)
     }
+    if (hasFlag(parsed, "pi") && !existing.pi?.configured) {
+      const settingsPath = piSettingsPath()
+      await configurePi(settingsPath)
+      existing = { ...existing, pi: { configured: true, settingsPath } }
+      await writeAppConfig(existing, paths)
+    }
     await start(existing, runner)
     await migrate(existing)
     return existing
@@ -213,6 +258,8 @@ async function initialize(
   await mkdir(paths.backupDir, { recursive: true, mode: 0o700 })
   const configureHost = hasFlag(parsed, "opencode")
   const opencodePath = openCodeConfigPath()
+  const configurePiHost = hasFlag(parsed, "pi")
+  const piPath = piSettingsPath()
   const mode = stringFlag(parsed, "mode") ?? "managed"
   let config: RememAppConfig
 
@@ -225,6 +272,7 @@ async function initialize(
       { mode: "external", connectionString },
       hasFlag(parsed, "capture"),
       configureHost ? { configured: true, configPath: opencodePath } : undefined,
+      configurePiHost ? { configured: true, settingsPath: piPath } : undefined,
     )
     warnAboutNeuralDownload(config, output)
   } else if (mode === "managed") {
@@ -249,6 +297,7 @@ async function initialize(
       storage,
       hasFlag(parsed, "capture"),
       configureHost ? { configured: true, configPath: opencodePath } : undefined,
+      configurePiHost ? { configured: true, settingsPath: piPath } : undefined,
     )
     warnAboutNeuralDownload(config, output)
   } else {
@@ -256,6 +305,7 @@ async function initialize(
   }
 
   if (configureHost) await configureOpenCode(opencodePath)
+  if (configurePiHost) await configurePi(piPath)
   await writeAppConfig(config, paths)
   await start(config, runner)
   const migrated = await migrate(config)
@@ -404,7 +454,7 @@ function usage(): string {
   return `Usage: remem <command> [options]
 
 Commands:
-  init [--mode managed|external] [--database-url URL] [--opencode] [--capture]
+  init [--mode managed|external] [--database-url URL] [--opencode] [--pi] [--capture]
   start | stop | status | doctor | migrate
   candidates [--status STATUS]
   review <CANDIDATE_ID> --approve|--reject
@@ -460,6 +510,8 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
       output(`PostgreSQL: ${report.healthy ? "healthy" : "needs attention"}.`)
       if (!config.opencode?.configured)
         output("OpenCode: run remem init --opencode or configure the plugin manually.")
+      if (!config.pi?.configured)
+        output("Pi: run remem init --pi or configure the extension manually.")
       return report.healthy ? 0 : 1
     }
 

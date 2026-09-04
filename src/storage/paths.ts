@@ -1,5 +1,6 @@
 import os from "node:os"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 
 export interface RememPaths {
   configDir: string
@@ -61,4 +62,29 @@ export function openCodeConfigPath(environment: NodeJS.ProcessEnv = process.env)
     "opencode",
     "opencode.json",
   )
+}
+
+/**
+ * Resolves this installed remem package's own root directory (the directory
+ * containing this package's `package.json`) at runtime, regardless of
+ * whether the caller is running from `src/...` (tests) or the built
+ * `dist/...` (production) -- both sit two directories below the package
+ * root for `src/cli/index.ts`/`src/cli/doctor.ts` (see `tsconfig.build.json`
+ * `rootDir`/`outDir`).
+ */
+export function packageRoot(fromFileUrl: string): string {
+  return path.resolve(path.dirname(fileURLToPath(fromFileUrl)), "..", "..")
+}
+
+/**
+ * Global Pi settings file path. Pi has no separate "config file" env var like
+ * OpenCode's `OPENCODE_CONFIG`; it exposes `PI_CODING_AGENT_DIR` to relocate
+ * its whole `~/.pi/agent` directory (see Pi's environment-variables.md),
+ * under which `settings.json` lives.
+ */
+export function piSettingsPath(environment: NodeJS.ProcessEnv = process.env): string {
+  const agentDir = environment.PI_CODING_AGENT_DIR
+    ? path.resolve(environment.PI_CODING_AGENT_DIR)
+    : path.join(os.homedir(), ".pi", "agent")
+  return path.join(agentDir, "settings.json")
 }

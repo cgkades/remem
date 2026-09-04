@@ -5,7 +5,12 @@ import { createProviders } from "../providers/factory.js"
 import { PostgresMemoryProvider } from "../providers/postgres.js"
 import { createEmbeddingModel } from "../storage/embedding-neural.js"
 import { migrationStatus } from "../storage/migrations.js"
-import { openCodeConfigPath, type RememPaths } from "../storage/paths.js"
+import {
+  openCodeConfigPath,
+  packageRoot,
+  piSettingsPath,
+  type RememPaths,
+} from "../storage/paths.js"
 import type { RememAppConfig } from "../storage/config-file.js"
 import { managedCommand } from "./managed.js"
 import type { ProcessRunner } from "./process.js"
@@ -249,6 +254,25 @@ export async function runDoctor(
       name: "OpenCode integration",
       status: "warn",
       detail: "run remem init --opencode or configure the plugin manually",
+    })
+  }
+
+  const piPath = config.pi?.settingsPath ?? piSettingsPath()
+  try {
+    const text = await readFile(piPath, "utf8")
+    const root = packageRoot(import.meta.url)
+    checks.push({
+      name: "Pi integration",
+      status: text.includes(root) ? "ok" : "warn",
+      detail: text.includes(root)
+        ? `configured in ${piPath}`
+        : `add ${root} to packages in ${piPath}`,
+    })
+  } catch {
+    checks.push({
+      name: "Pi integration",
+      status: "warn",
+      detail: "run remem init --pi or configure the extension manually",
     })
   }
 
