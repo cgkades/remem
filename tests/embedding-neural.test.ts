@@ -111,10 +111,17 @@ describe("createEmbeddingModel", () => {
     try {
       await createEmbeddingModel({ backend: "neural" })
       expect(fakeTransformersEnv.cacheDir).toBe(".cache/test-transformers")
+      // Exact match, not objectContaining: a typo or dropped key in either
+      // the model id or the pipeline options (dtype, revision) must fail
+      // this test, not silently pass because objectContaining only checks
+      // the keys it's told to check.
       expect(transformers.pipeline).toHaveBeenCalledWith(
         "feature-extraction",
         "Xenova/bge-small-en-v1.5",
-        expect.objectContaining({ revision: "ea104dacec62c0de699686887e3f920caeb4f3e3" }),
+        {
+          dtype: "q8",
+          revision: "ea104dacec62c0de699686887e3f920caeb4f3e3",
+        },
       )
     } finally {
       if (previousCacheDir === undefined) delete process.env.REMEM_TRANSFORMERS_CACHE_DIR
