@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import type { Pool, QueryResultRow } from "pg"
 import type { CandidateMemory, ConsolidationPipeline } from "./observation.js"
+import { describeError } from "./text.js"
 import type {
   MemoryContext,
   MemoryMutationOptions,
@@ -193,11 +194,7 @@ export class DeterministicConsolidationPipeline implements ConsolidationPipeline
       } catch (error) {
         signal?.throwIfAborted()
         output.push(
-          withResult(
-            candidate,
-            "approved",
-            `consolidation failed: ${error instanceof Error ? error.name : "unknown error"}`,
-          ),
+          withResult(candidate, "approved", `consolidation failed: ${describeError(error)}`),
         )
       }
     }
@@ -429,7 +426,7 @@ export class PostgresConsolidationRunner {
         errors,
       }
     } catch (error) {
-      const message = error instanceof Error ? error.name : "unknown error"
+      const message = describeError(error)
       await this.fail(
         claim.id,
         claim.candidates.map((candidate) => candidate.id),

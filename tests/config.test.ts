@@ -1,3 +1,4 @@
+import path from "node:path"
 import { describe, expect, it } from "vitest"
 import { parseConfig } from "../src/config.js"
 
@@ -109,6 +110,41 @@ describe("embedding config", () => {
     expect(parsed.config.embedding.modelPath).toBe("/opt/models/bge-small")
   })
 
+  it("rejects a relative modelPath and warns instead of passing it through", () => {
+    // A relative path is rejected by the isAbsolute() branch specifically
+    // (node:path leaves a relative path with no ".."/"." segments unchanged
+    // under normalize(), so this input alone would not trip the
+    // normalized-mismatch branch -- confirming isAbsolute() itself is doing
+    // the rejecting here, not incidentally the other check).
+    const input = "relative/models/bge-small"
+    expect(path.normalize(input)).toBe(input)
+    const parsed = parseConfig({ embedding: { backend: "neural", modelPath: input } })
+
+    expect(parsed.config.embedding.modelPath).toBeUndefined()
+    expect(parsed.diagnostics.some((d) => d.message.includes("modelPath"))).toBe(true)
+  })
+
+  it("rejects a modelPath containing path-traversal segments", () => {
+    // Confirm this input is actually exercising the normalized-mismatch
+    // branch (not just happening to also be non-absolute, which the
+    // previous test already covers): it's absolute, but normalize()
+    // collapses the ".." segments to a different string.
+    const input = "/opt/models/../../etc/passwd"
+    expect(path.isAbsolute(input)).toBe(true)
+    expect(path.normalize(input)).not.toBe(input)
+    const parsed = parseConfig({ embedding: { backend: "neural", modelPath: input } })
+
+    expect(parsed.config.embedding.modelPath).toBeUndefined()
+    expect(parsed.diagnostics.some((d) => d.message.includes("modelPath"))).toBe(true)
+  })
+
+  it("rejects an empty modelPath", () => {
+    const parsed = parseConfig({ embedding: { backend: "neural", modelPath: "   " } })
+
+    expect(parsed.config.embedding.modelPath).toBeUndefined()
+    expect(parsed.diagnostics.some((d) => d.message.includes("modelPath"))).toBe(true)
+  })
+
   it("falls back to hash and warns on an invalid backend value", () => {
     const parsed = parseConfig({ embedding: { backend: "gpt4" } })
 
@@ -143,5 +179,25 @@ describe("embedding config", () => {
       },
     })
     expect(parsed.config.embedding.backend).toBe("hash")
+  })
+})
+
+describe("reembedCooldownMs", () => {
+  it("defaults to 5 minutes", () => {
+    const parsed = parseConfig({})
+    expect(parsed.config.reembedCooldownMs).toBe(5 * 60_000)
+  })
+
+  it("accepts an explicit override", () => {
+    const parsed = parseConfig({ reembedCooldownMs: 60_000 })
+    expect(parsed.config.reembedCooldownMs).toBe(60_000)
+  })
+
+  it("clamps an out-of-range override instead of accepting it verbatim", () => {
+    const tooLarge = parseConfig({ reembedCooldownMs: 999_999_999 })
+    expect(tooLarge.config.reembedCooldownMs).toBe(60 * 60_000)
+
+    const negative = parseConfig({ reembedCooldownMs: -1 })
+    expect(negative.config.reembedCooldownMs).toBe(0)
   })
 })

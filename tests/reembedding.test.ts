@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { PostgresReembedRunner, shouldAttemptReembed } from "../src/reembedding.js"
+import { describeError } from "../src/text.js"
 
 function fakePool(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -66,6 +67,66 @@ describe("PostgresReembedRunner", () => {
       expect.stringContaining("WHERE reembed_claim_id = $1"),
       expect.any(Array),
     )
+  })
+
+  it("records a descriptive error, not just the error name, when an embed call fails", async () => {
+    const target = { memory_id: "memory-1", content: "stale content" }
+    const client = {
+      query: vi.fn((sql: string) => {
+        if (sql.includes("SELECT me.memory_id")) return Promise.resolve({ rows: [target] })
+        return Promise.resolve({ rows: [], rowCount: 1 })
+      }),
+      release: vi.fn(),
+    }
+    const pool = fakePool({
+      query: vi.fn().mockResolvedValue({ rows: [], rowCount: 1 }),
+      connect: vi.fn().mockResolvedValue(client),
+    })
+    const runner = new PostgresReembedRunner(
+      pool as never,
+      () => Promise.reject(new TypeError("dimension mismatch: expected 384, got 512")),
+      { modelId: "bge-small-en-v1.5", dimensions: 384, batchSize: 10 },
+    )
+
+    const result = await runner.run()
+
+    expect(result.status).toBe("failed")
+    expect(result.errors).toEqual(["TypeError: dimension mismatch: expected 384, got 512"])
+  })
+})
+
+describe("describeError", () => {
+  it("combines the error name and message", () => {
+    expect(describeError(new TypeError("bad input"))).toBe("TypeError: bad input")
+  })
+
+  it("falls back to just the name when there is no message", () => {
+    expect(describeError(new Error())).toBe("Error")
+  })
+
+  it("returns 'unknown error' for a non-Error value", () => {
+    expect(describeError("not an error")).toBe("unknown error")
+    expect(describeError(undefined)).toBe("unknown error")
+  })
+
+  it("truncates a pathologically long message instead of persisting it unbounded", () => {
+    const description = describeError(new Error("x".repeat(1_000)), 20)
+    expect(description.length).toBeLessThanOrEqual(21)
+    expect(description.startsWith("Error: xxxxxxxxxxxxx")).toBe(true)
+  })
+
+  it("redacts a credential a library/driver error echoed back", () => {
+    const description = describeError(
+      new Error("connection failed: postgresql://remem:hunter2@db.internal:5432/remem"),
+    )
+    expect(description).not.toContain("hunter2")
+    expect(description).toContain("[redacted]")
+  })
+
+  it("strips control characters from the message", () => {
+    const description = describeError(new Error("bad input\x1b[31m injected\x07"))
+    // eslint-disable-next-line no-control-regex -- asserting control characters are gone.
+    expect(/[\x00-\x1f\x7f]/u.test(description)).toBe(false)
   })
 })
 

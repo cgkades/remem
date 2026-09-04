@@ -340,6 +340,29 @@ integration("PostgreSQL managed provider", () => {
     )
   })
 
+  it("returns a descriptor without an embedding when embedding generation fails, instead of throwing", async () => {
+    const unavailableEmbedding: EmbeddingModel = {
+      id: "unavailable",
+      dimensions: 384,
+      embed: () => Promise.reject(new Error("embedding unavailable")),
+    }
+    const provider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "remem-local",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 100,
+      },
+      { pool, embeddingModel: unavailableEmbedding },
+    )
+
+    const descriptor = await provider.descriptor()
+    expect(descriptor.id).toBe("remem-local")
+    expect(descriptor.embedding).toBeUndefined()
+  })
+
   it("persists curated metadata through records and catalog entries", async () => {
     const provider = new PostgresMemoryProvider(
       {

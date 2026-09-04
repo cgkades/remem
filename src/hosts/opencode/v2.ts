@@ -385,7 +385,8 @@ export const RememPlugin = Plugin.define({
       }
       if (primaryPostgres) {
         reembedRegistration = await context.session.hook("prompt", () => {
-          if (!shouldAttemptReembed(lastReembedAttempt)) return
+          if (!shouldAttemptReembed(lastReembedAttempt, Date.now, parsed.config.reembedCooldownMs))
+            return
           lastReembedAttempt = Date.now()
           // Fire-and-forget: must never delay or fail prompt handling.
           void primaryPostgres.reembedStale().catch((error) => {

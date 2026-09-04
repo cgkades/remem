@@ -1,5 +1,6 @@
 import { ProxyAgent, setGlobalDispatcher } from "undici"
 import { LocalHashEmbeddingModel } from "./embedding.js"
+import { EMBEDDING_DIMENSIONS, HUGGING_FACE_MODEL, NEURAL_MODEL_ID } from "./embedding-model-ids.js"
 import type { EmbeddingModel } from "../types.js"
 
 export interface NeuralEmbeddingConfig {
@@ -27,9 +28,8 @@ export interface EmbeddingModelFactoryOptions {
   onFallback?: (error: unknown) => void
 }
 
-const MODEL_ID = "bge-small-en-v1.5"
-const MODEL_DIMENSIONS = 384
-const HUGGING_FACE_MODEL = "Xenova/bge-small-en-v1.5"
+const MODEL_ID = NEURAL_MODEL_ID
+const MODEL_DIMENSIONS = EMBEDDING_DIMENSIONS
 const HUGGING_FACE_REVISION = "ea104dacec62c0de699686887e3f920caeb4f3e3"
 
 // Module-level guard: setGlobalDispatcher replaces the process-wide undici

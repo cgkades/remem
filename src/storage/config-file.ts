@@ -2,6 +2,11 @@ import { randomBytes } from "node:crypto"
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { CaptureConfig, MemoryProviderConfig, PlannerConfig, TokenBudgets } from "../config.js"
+import {
+  EMBEDDING_DIMENSIONS,
+  LOCAL_HASH_MODEL_ID,
+  NEURAL_MODEL_ID,
+} from "./embedding-model-ids.js"
 import { rememPaths, type RememPaths } from "./paths.js"
 
 export interface ManagedStorageConfig {
@@ -20,9 +25,20 @@ export interface ExternalStorageConfig {
   connectionString: string
 }
 
-export type EmbeddingSetting =
-  | { provider: "local-hash"; model: "remem-local-hash-v1"; dimensions: 384 }
-  | { provider: "neural"; model: "bge-small-en-v1.5"; dimensions: 384 }
+/**
+ * The persisted app-config embedding shape (`{provider, model, dimensions}`)
+ * `remem init` writes to disk, distinct from `EmbeddingPluginOptions`
+ * (`../config.js`), the runtime plugin-options shape (`{backend,
+ * modelPath}`). See that type's doc comment for why these are deliberately
+ * named differently rather than sharing a name.
+ */
+export type EmbeddingAppConfig =
+  | {
+      provider: "local-hash"
+      model: typeof LOCAL_HASH_MODEL_ID
+      dimensions: typeof EMBEDDING_DIMENSIONS
+    }
+  | { provider: "neural"; model: typeof NEURAL_MODEL_ID; dimensions: typeof EMBEDDING_DIMENSIONS }
 
 export interface RememAppConfig {
   version: 1
@@ -39,7 +55,7 @@ export interface RememAppConfig {
   debug?: boolean
   compaction?: boolean
   capture?: Partial<CaptureConfig>
-  embedding: EmbeddingSetting
+  embedding: EmbeddingAppConfig
   opencode?: {
     configured: boolean
     configPath?: string
@@ -69,6 +85,31 @@ export function validateAppConfig(value: unknown): asserts value is RememAppConf
   }
   if (value.embedding.provider !== "local-hash" && value.embedding.provider !== "neural") {
     throw new Error("embedding.provider must be 'local-hash' or 'neural'")
+  }
+  // Validate the full literal pair, not just `provider`: downstream code
+  // (warnAboutNeuralDownload, doctor's "embedding settings persistence"
+  // check) trusts `model`/`dimensions` unconditionally after this
+  // assertion, so a hand-edited config with a mismatched combination (e.g.
+  // provider "local-hash" with model "bge-small-en-v1.5") would otherwise
+  // pass validation and mislead those checks.
+  if (value.embedding.provider === "local-hash") {
+    if (
+      value.embedding.model !== LOCAL_HASH_MODEL_ID ||
+      value.embedding.dimensions !== EMBEDDING_DIMENSIONS
+    ) {
+      throw new Error(
+        `embedding.model/dimensions do not match provider 'local-hash' ` +
+          `(expected model '${LOCAL_HASH_MODEL_ID}' and dimensions ${EMBEDDING_DIMENSIONS})`,
+      )
+    }
+  } else if (
+    value.embedding.model !== NEURAL_MODEL_ID ||
+    value.embedding.dimensions !== EMBEDDING_DIMENSIONS
+  ) {
+    throw new Error(
+      `embedding.model/dimensions do not match provider 'neural' ` +
+        `(expected model '${NEURAL_MODEL_ID}' and dimensions ${EMBEDDING_DIMENSIONS})`,
+    )
   }
 }
 

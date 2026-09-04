@@ -19,6 +19,7 @@ import {
 } from "../institutional.js"
 import { PostgresReembedRunner } from "../reembedding.js"
 import { LocalHashEmbeddingModel, vectorLiteral } from "../storage/embedding.js"
+import { EMBEDDING_DIMENSIONS } from "../storage/embedding-model-ids.js"
 import type {
   CatalogEntry,
   EmbeddingModel,
@@ -92,7 +93,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 // The remem.memory_embeddings and remem.catalog_entries.embedding columns are
 // fixed-width vector(384). Switching to a different-dimension model requires
 // a dedicated schema migration that is not yet implemented.
-const SUPPORTED_EMBEDDING_DIMENSIONS = 384
+const SUPPORTED_EMBEDDING_DIMENSIONS = EMBEDDING_DIMENSIONS
 
 function clamp(value: number | undefined, fallback: number): number {
   return value === undefined || !Number.isFinite(value) ? fallback : Math.max(0, Math.min(1, value))
@@ -296,6 +297,16 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
   async descriptor(): Promise<ProviderDescriptor> {
     const summary =
       "Managed durable memory containing decisions, preferences, procedures, incidents, tasks, and project history."
+    // An embedding backend failure must never break OpenCode prompt
+    // execution (see search()'s identical fallback): `embedding` is
+    // optional on ProviderDescriptor, so this descriptor is still usable
+    // for lexical/keyword catalog matching without it.
+    let embedding: number[] | undefined
+    try {
+      embedding = await this.embeddingModel.embed(summary)
+    } catch {
+      // Fall through with no embedding.
+    }
     return {
       id: this.id,
       name: "Remem managed memory",
@@ -303,7 +314,7 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
       categories: ["decisions", "preferences", "procedures", "incidents", "tasks", "history"],
       aliases: ["local memory", "managed memory", "prior work"],
       scopeKinds: ["global", "workspace", "project", "session"],
-      embedding: await this.embeddingModel.embed(summary),
+      ...(embedding ? { embedding } : {}),
     }
   }
 

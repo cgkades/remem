@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { Pool } from "pg"
+import { describeError } from "./text.js"
 
 export interface ReembedTarget {
   memoryId: string
@@ -21,6 +22,9 @@ export interface ReembedRunResult {
   errors: string[]
 }
 
+/** Default cooldown, overridable via `RememConfig.reembedCooldownMs` (see `config.ts`). */
+export const DEFAULT_REEMBED_COOLDOWN_MS = 5 * 60_000
+
 /**
  * Cooldown gate for opportunistic hook-triggered re-embedding: avoids
  * hammering the database with a reembedStale() attempt on every prompt.
@@ -28,7 +32,7 @@ export interface ReembedRunResult {
 export function shouldAttemptReembed(
   lastAttemptMs: number | undefined,
   now: () => number = Date.now,
-  cooldownMs = 5 * 60_000,
+  cooldownMs: number = DEFAULT_REEMBED_COOLDOWN_MS,
 ): boolean {
   return lastAttemptMs === undefined || now() - lastAttemptMs >= cooldownMs
 }
@@ -82,7 +86,7 @@ export class PostgresReembedRunner {
         )
         if (updated.rowCount !== null && updated.rowCount > 0) reembedded++
       } catch (error) {
-        errors.push(error instanceof Error ? error.name : "unknown error")
+        errors.push(describeError(error))
       }
     }
     if (errors.length > 0 && reembedded === 0) {

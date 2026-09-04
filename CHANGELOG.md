@@ -18,6 +18,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `remem reembed [--batch-size NUMBER]` CLI command.
 - `remem doctor` checks for embedding backlog size and embedding-settings persistence, so a
   model-identity mismatch or stuck backlog is visible without querying the database directly.
+- `reembedCooldownMs` config option to override the 5-minute default between hook-triggered
+  opportunistic re-embed attempts.
 - A correction-candidate review workflow: an expert correction is diagnosed, turned into a minimal
   create/update/supersede/retire/route-adjustment mutation, structurally validated, and gated by a
   behavioral replay before an explicit human can approve it. Adds the `memory_submit_correction`
@@ -37,6 +39,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `CorrectionCandidate` gained a new required `revision` field, an optimistic-concurrency counter
   bumped on every write. Any code constructing a `CorrectionCandidate` directly (test fixtures,
   custom `CorrectionCandidateStore` implementations) must now supply `revision`.
+- `config.ts`'s `EmbeddingConfig` (the runtime plugin-options shape, `{backend, modelPath}`) is
+  renamed to `EmbeddingPluginOptions`, and `config-file.ts`'s `EmbeddingSetting` (the persisted
+  app-config shape, `{provider, model, dimensions}`) is renamed to `EmbeddingAppConfig`. The naming
+  collision between these two distinct shapes was the direct root cause of a real bug fixed earlier
+  in this project (the OpenCode plugin silently ignoring `remem init`'s neural default).
+- `validateAppConfig` now validates the full `embedding` literal pair (`provider`/`model`/
+  `dimensions`), not just `provider`. A hand-edited `config.json` with a mismatched combination
+  (e.g. `provider: "local-hash"` with `model: "bge-small-en-v1.5"`) previously passed validation and
+  was trusted unconditionally by downstream code (`warnAboutNeuralDownload`, doctor's "embedding
+  settings persistence" check).
+- `embedding.modelPath` (the air-gapped local-weights override) must now be an absolute, normalized
+  path; a relative path or one containing `..` segments is rejected with a diagnostic instead of
+  being passed through to `@huggingface/transformers` verbatim.
 
 ### Fixed
 
@@ -73,6 +88,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The hook-triggered re-embed cooldown is now scoped per plugin session instead of a shared
   module-level map, preventing one workspace's Postgres provider from suppressing another
   workspace's re-embed attempt when `remem init`'s default provider id is reused.
+- `PostgresMemoryProvider.descriptor()` now catches an embedding backend failure and omits
+  `embedding` from the returned descriptor instead of throwing, matching `search()`'s existing
+  fail-open behavior and this project's own design intent that an embedding failure must never
+  break OpenCode prompt execution.
+- `PostgresReembedRunner`'s (and `PostgresConsolidationRunner`'s) per-item error collection now
+  records `"Name: message"` instead of only the error name, so a failed run's persisted errors are
+  actually useful for debugging instead of a bare "TypeError".
 - The `memory_search`, `memory_status`, and `memory_explain` tools registered by the OpenCode v2
   plugin are now actually invocable by the model; they previously registered without
   `codemode: false`, so OpenCode's beta runtime defaulted them into a sandboxed code-execution
