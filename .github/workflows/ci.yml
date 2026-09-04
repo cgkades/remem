@@ -67,6 +67,8 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 15
+    env:
+      REMEM_TRANSFORMERS_CACHE_DIR: ${{ runner.temp }}/transformers-cache
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
@@ -75,8 +77,8 @@ jobs:
           cache: npm
       - uses: actions/cache@0c45773b623bea8c8e75f6c82b208c3cf94ea4f9
         with:
-          path: node_modules/@huggingface/transformers/.cache
-          key: neural-evaluation-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          path: ${{ runner.temp }}/transformers-cache
+          key: neural-evaluation-${{ runner.os }}-ea104dacec62c0de699686887e3f920caeb4f3e3-${{ hashFiles('package-lock.json') }}
       - run: npm ci
       - run: npm run test:eval -- --reporter=json --outputFile=artifacts/neural-evaluation.json
       - if: always()

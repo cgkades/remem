@@ -30,6 +30,7 @@ export interface EmbeddingModelFactoryOptions {
 const MODEL_ID = "bge-small-en-v1.5"
 const MODEL_DIMENSIONS = 384
 const HUGGING_FACE_MODEL = "Xenova/bge-small-en-v1.5"
+const HUGGING_FACE_REVISION = "ea104dacec62c0de699686887e3f920caeb4f3e3"
 
 // Module-level guard: setGlobalDispatcher replaces the process-wide undici
 // dispatcher without closing/destroying the one it replaces, so repeated
@@ -58,11 +59,16 @@ async function defaultLoadPipeline(
 ): Promise<FeatureExtractionPipeline> {
   configureProxyFromEnvironment()
   const { pipeline, env } = await import("@huggingface/transformers")
+  const cacheDir = process.env.REMEM_TRANSFORMERS_CACHE_DIR
+  if (cacheDir) env.cacheDir = cacheDir
   if (modelPath) {
     env.localModelPath = modelPath
     env.allowRemoteModels = false
   }
-  const extractor = await pipeline("feature-extraction", HUGGING_FACE_MODEL, { dtype: "q8" })
+  const extractor = await pipeline("feature-extraction", HUGGING_FACE_MODEL, {
+    dtype: "q8",
+    revision: HUGGING_FACE_REVISION,
+  })
   return (text, options) =>
     extractor(text, options).then((output) => output as unknown as { data: ArrayLike<number> })
 }
