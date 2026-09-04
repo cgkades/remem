@@ -143,7 +143,7 @@ function nonEmptyStrings(values: unknown): values is string[] {
   return Array.isArray(values) && values.length > 0 && values.every(hasText)
 }
 
-function procedureContent(memory: InstitutionalMemory): string | undefined {
+export function procedureContent(memory: InstitutionalMemory): string | undefined {
   if (memory.role !== "procedure") return undefined
   if (!Array.isArray(memory.steps)) return undefined
   return memory.steps.map((step, index) => `${index + 1}. ${step.instruction}`).join("\n")
