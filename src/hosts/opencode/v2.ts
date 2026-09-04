@@ -137,6 +137,25 @@ async function registerTools(
         })
       },
     })
+    draft.add({
+      name: "memory_review_status",
+      description:
+        "Show correction-candidate review status and diagnostics. Read-only: this tool " +
+        "cannot approve, reject, or otherwise mutate a candidate or active memory.",
+      options: BARE_CALLABLE_TOOL_OPTIONS,
+      input: {
+        type: "object",
+        properties: { candidateId: { type: "string", minLength: 1 } },
+        additionalProperties: false,
+      },
+      execute(input) {
+        const args = input as { candidateId?: string }
+        const result = args.candidateId
+          ? orchestrator.explainCorrectionCandidate(args.candidateId)
+          : orchestrator.reviewCandidates()
+        return Promise.resolve({ content: JSON.stringify(result, null, 2) })
+      },
+    })
   })
 }
 
