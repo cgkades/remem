@@ -62,9 +62,18 @@ The v2 adapter registers:
 
 - `memory_search`: explicit bounded search across all providers or one provider ID;
 - `memory_status`: provider capabilities, sanitized health, catalog counts, budgets, and latest trace;
-- `memory_explain`: the latest sanitized retrieval decision for the current session.
+- `memory_explain`: the latest sanitized retrieval decision for the current session;
+- `memory_submit_correction`: submits an expert correction for review (see
+  [Correction Candidate Review Workflow](correction-workflow.md)); it only
+  queues a candidate for diagnosis and validation, it never writes to memory;
+- `memory_review_status`: read-only, redacted correction-candidate status and
+  diagnostics — never the untrusted correction text or proposed memory body.
 
-These tools are read-only. `MemoryManager` CRUD is not exposed to OpenCode.
+These tools are read-only with respect to active memory. `MemoryManager` CRUD
+and correction-candidate approve/reject/requestChanges are not exposed to
+OpenCode; see [Correction Candidate Review Workflow](correction-workflow.md)
+for how a human reviews and approves a correction out of band (currently the
+`remem correction-review` CLI command).
 
 ## v2 Configuration
 

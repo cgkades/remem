@@ -193,7 +193,16 @@ export class RememOrchestrator {
     return { ...rendered, diagnostics: [...catalog.diagnostics, ...rendered.diagnostics] }
   }
 
-  async processPrompt(prompt: string, context: MemoryContext): Promise<MemoryInjection> {
+  /**
+   * `turnId`, when supplied by the host, identifies the user turn this
+   * dispatch belongs to -- see `MemoryDiagnostics.priorDispatch`. Opaque to
+   * this method beyond being forwarded to `diagnostics.record`.
+   */
+  async processPrompt(
+    prompt: string,
+    context: MemoryContext,
+    turnId?: string,
+  ): Promise<MemoryInjection> {
     const started = performance.now()
     const fallbackCatalog = renderCatalog([], this.config.budgets.catalogTokens)
     let catalog = fallbackCatalog
@@ -276,6 +285,7 @@ export class RememOrchestrator {
       ]
       const trace: MemoryTrace = {
         sessionId: context.sessionId ?? "unknown",
+        prompt,
         timestamp: new Date().toISOString(),
         catalogEntries: catalog.entries.length,
         catalogMatches: plan.matches.slice(0, this.config.planner.maxTopics).map((match) => ({
@@ -313,7 +323,7 @@ export class RememOrchestrator {
           synthesisMs: Math.round(synthesisMs),
         },
       }
-      this.diagnostics.record(trace)
+      this.diagnostics.record(trace, "dispatch", turnId)
       this.logTrace(trace)
       return {
         text: synthesis.text ? `${catalog.text}\n\n${synthesis.text}` : catalog.text,
@@ -326,6 +336,7 @@ export class RememOrchestrator {
       const diagnostic = error instanceof Error ? error.name : "unknown error"
       const trace: MemoryTrace = {
         sessionId: context.sessionId ?? "unknown",
+        prompt,
         timestamp: new Date().toISOString(),
         catalogEntries: catalog.entries.length,
         catalogMatches: [],
@@ -350,7 +361,7 @@ export class RememOrchestrator {
           synthesisMs: Math.round(synthesisMs),
         },
       }
-      this.diagnostics.record(trace)
+      this.diagnostics.record(trace, "dispatch", turnId)
       safeLog(this.logger, "warn", "orchestration.failed", { error: diagnostic })
       return {
         text: catalog.text,
@@ -388,6 +399,7 @@ export class RememOrchestrator {
     const synthesis = await this.synthesize(plan.topics, recall.memories, [])
     const trace: MemoryTrace = {
       sessionId: context.sessionId ?? "unknown",
+      prompt: query,
       timestamp: new Date().toISOString(),
       catalogEntries: (await this.catalog.get(context)).entries.length,
       catalogMatches: [],
@@ -406,7 +418,7 @@ export class RememOrchestrator {
         .filter((attempt) => attempt.status !== "ok")
         .map((attempt) => `provider ${attempt.providerId} ${attempt.status}`),
     }
-    this.diagnostics.record(trace)
+    this.diagnostics.record(trace, "search")
     this.logTrace(trace)
     return {
       text: synthesis.text || "No relevant memories were found in the selected providers.",
@@ -495,28 +507,66 @@ export class RememOrchestrator {
   }
 
   /**
-   * Submits a correction to the review queue for diagnosis and validation.
-   * Read/write access to approve, reject, or request changes on the
-   * resulting candidate is intentionally not available through the
-   * orchestrator -- see `OrchestratorDependencies.reviewQueue`.
+   * The dispatch trace for the turn before the current one, for callers
+   * (e.g. `memory_submit_correction`) that need the retrieval decision
+   * behind an already-delivered response, not whatever the current turn's
+   * own message happens to be. A single "latest trace" per session cannot
+   * disambiguate these: when the current turn's message is itself a
+   * correction ("that answer was wrong; X is required"), the "context" hook
+   * running for that turn records a fresh dispatch trace for the
+   * correction message before any tool call in that same turn can run, so
+   * `explain()`'s "latest" would return the trace for the correction text,
+   * not for the disputed response. See `MemoryDiagnostics.priorDispatch`.
    */
-  submitCorrection(correction: CorrectionInput): CorrectionCandidate | { status: "unavailable" } {
-    if (!this.reviewQueue) return { status: "unavailable" }
-    return this.reviewQueue.submit(correction)
+  explainPreviousTurn(sessionId: string): MemoryTrace | { status: "no-trace" } {
+    return this.diagnostics.priorDispatch(sessionId) ?? { status: "no-trace" }
   }
 
-  reviewCandidates(filter?: {
+  /**
+   * Submits a correction to the review queue, then immediately runs
+   * diagnosis/mutation-proposal/structural-validation/replay -- validation
+   * is a deterministic, fully automatic pipeline with no human judgment
+   * involved, unlike approve/reject/requestChanges, so running it here
+   * (rather than requiring a second call nothing in this codebase's shipped
+   * surfaces would ever make) is what gets a candidate to "validated" or
+   * "needs_changes" at all. Read/write access to approve, reject, or
+   * request changes on the resulting candidate is intentionally not
+   * available through the orchestrator -- see
+   * `OrchestratorDependencies.reviewQueue`.
+   */
+  async submitCorrection(
+    correction: CorrectionInput,
+  ): Promise<CorrectionCandidate | { status: "unavailable" }> {
+    if (!this.reviewQueue) return { status: "unavailable" }
+    const submitted = await this.reviewQueue.submit(correction)
+    return this.reviewQueue.runValidation(submitted.id)
+  }
+
+  /**
+   * Re-runs validation for a candidate already in "pending_validation" or
+   * "needs_changes" -- e.g. after a human fixes whatever caused
+   * "needs_changes" the first time, or as an explicit retry. Not needed
+   * after a plain `submitCorrection` call, which already validates once.
+   */
+  async runCorrectionValidation(
+    candidateId: string,
+  ): Promise<CorrectionCandidate | { status: "unavailable" }> {
+    if (!this.reviewQueue) return { status: "unavailable" }
+    return this.reviewQueue.runValidation(candidateId)
+  }
+
+  async reviewCandidates(filter?: {
     state?: CandidateLifecycleState
-  }): CorrectionCandidate[] | { status: "unavailable" } {
+  }): Promise<CorrectionCandidate[] | { status: "unavailable" }> {
     if (!this.reviewQueue) return { status: "unavailable" }
     return this.reviewQueue.list(filter)
   }
 
-  explainCorrectionCandidate(
+  async explainCorrectionCandidate(
     candidateId: string,
-  ): CorrectionCandidate | { status: "unavailable" | "not-found" } {
+  ): Promise<CorrectionCandidate | { status: "unavailable" | "not-found" }> {
     if (!this.reviewQueue) return { status: "unavailable" }
-    return this.reviewQueue.get(candidateId) ?? { status: "not-found" }
+    return (await this.reviewQueue.get(candidateId)) ?? { status: "not-found" }
   }
 
   private async synthesize(

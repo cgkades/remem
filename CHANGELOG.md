@@ -18,8 +18,43 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `remem reembed [--batch-size NUMBER]` CLI command.
 - `remem doctor` checks for embedding backlog size and embedding-settings persistence, so a
   model-identity mismatch or stuck backlog is visible without querying the database directly.
+- A correction-candidate review workflow: an expert correction is diagnosed, turned into a minimal
+  create/update/supersede/retire/route-adjustment mutation, structurally validated, and gated by a
+  behavioral replay before an explicit human can approve it. Adds the `memory_submit_correction`
+  and `memory_review_status` OpenCode v2 tools (submission and read-only redacted status; neither
+  can approve anything), the `remem correction-candidates` / `remem correction-review` CLI commands
+  for durable, cross-process human review, and `remem.correction_candidates`
+  (migration `0007`) for persistence. See
+  [Correction Candidate Review Workflow](docs/correction-workflow.md). Resolves
+  [#26](https://github.com/cgkades/remem/issues/26).
+
+### Changed
+
+- `MemoryTrace` gained a new required `prompt` field: the exact request text the trace was computed
+  for. This binds a trace to the request it belongs to so `memory_submit_correction` can derive its
+  `prompt` from the trace itself rather than accepting a caller-supplied value. Any code constructing
+  a `MemoryTrace` directly (rather than through the orchestrator) must now supply `prompt`.
+- `CorrectionCandidate` gained a new required `revision` field, an optimistic-concurrency counter
+  bumped on every write. Any code constructing a `CorrectionCandidate` directly (test fixtures,
+  custom `CorrectionCandidateStore` implementations) must now supply `revision`.
 
 ### Fixed
+
+- `memory_submit_correction` now binds a correction to the retrieval trace of the turn _before_ the
+  current one (`RememOrchestrator.explainPreviousTurn`) instead of the session's single "latest"
+  trace. A single latest-trace slot could not distinguish the disputed response's own trace from the
+  trace the correction message itself (or an intervening `memory_search` call) generated, so a
+  correction could silently bind to the wrong retrieval decision. Dispatch traces recorded during a
+  tool-calling loop's repeated re-dispatches within one turn are now also coalesced (via a `turnId`
+  the OpenCode v2 host derives from the user-authored message count) so a same-turn continuation
+  dispatch isn't itself mistaken for an earlier, separate turn.
+- `CorrectionReviewQueue.runValidation`'s finalize write now aborts if the candidate was modified
+  concurrently (e.g. a human `requestChanges()` call landing while validation's replay gate was still
+  running), instead of silently overwriting that decision. `needs_changes` is a legitimate state to
+  start revalidation from, so the existing terminal-state check did not catch this.
+- `CorrectionInput.evidence` is now bounded (100 entries of 2000 characters each, `CORRECTION_INPUT_LIMITS`)
+  in `CorrectionReviewQueue.submit()`, matching every other free-text/array field persisted to durable
+  JSONB storage.
 
 - The OpenCode plugin now correctly reads the neural embedding backend `remem init` writes to the
   application config; previously `parseEmbedding` only recognized the plugin-options config shape

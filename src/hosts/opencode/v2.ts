@@ -2,9 +2,16 @@ import { Plugin } from "@opencode-ai/plugin"
 import type { Context } from "@opencode-ai/plugin/promise/plugin"
 import { createCaptureCoordinator, type CaptureCoordinator } from "../../capture.js"
 import { parseConfig } from "../../config.js"
-import type { CorrectionCandidate } from "../../correction.js"
+import {
+  InMemoryCorrectionCandidateStore,
+  type CorrectionCandidate,
+  type CorrectionCandidateStore,
+} from "../../correction.js"
+import { CORRECTION_INPUT_LIMITS } from "../../correction.js"
+import { createCorrectionReviewQueue } from "../../correction-wiring.js"
 import { RememOrchestrator } from "../../orchestrator.js"
 import { PostgresMemoryProvider } from "../../providers/postgres.js"
+import { PostgresCorrectionCandidateStore } from "../../providers/postgres-correction-store.js"
 import { createProviders } from "../../providers/factory.js"
 import { shouldAttemptReembed } from "../../reembedding.js"
 import { loadInstalledPluginOptions } from "../../storage/config-file.js"
@@ -12,6 +19,7 @@ import { createEmbeddingModel } from "../../storage/embedding-neural.js"
 import type { MemoryContext, MemoryProvider, RememLogger } from "../../types.js"
 import {
   TRUSTED_REMEM_INSTRUCTION,
+  currentTurnId,
   disposeProviders,
   latestUserPrompt,
   memoryContext,
@@ -33,7 +41,12 @@ export async function injectV2DispatchMemory(
   event: { readonly sessionID: string; system: unknown[]; messages: unknown[] },
   context: MemoryContext,
 ): Promise<void> {
-  const injection = await recallForDispatch(orchestrator, latestUserPrompt(event.messages), context)
+  const injection = await recallForDispatch(
+    orchestrator,
+    latestUserPrompt(event.messages),
+    context,
+    currentTurnId(event.messages),
+  )
   if (!injection.text) return
 
   event.system.push({ type: "text", text: TRUSTED_REMEM_INSTRUCTION })
@@ -104,6 +117,21 @@ function redactCandidateSummary(candidate: CorrectionCandidate) {
     createdAt: candidate.createdAt,
     updatedAt: candidate.updatedAt,
   }
+}
+
+/**
+ * Selects durable storage for a live CorrectionReviewQueue. Durable,
+ * cross-process review (so the `remem correction-review` CLI command can
+ * act on a candidate this plugin session created) requires a Postgres
+ * provider; without one, review state is in-memory only for the lifetime
+ * of this process, same as every other in-memory fallback in this plugin.
+ */
+function correctionCandidateStore(
+  primaryPostgres: PostgresMemoryProvider | undefined,
+): CorrectionCandidateStore {
+  return primaryPostgres
+    ? new PostgresCorrectionCandidateStore(primaryPostgres.connectionPool, primaryPostgres.id)
+    : new InMemoryCorrectionCandidateStore()
 }
 
 async function registerTools(
@@ -190,17 +218,101 @@ async function registerTools(
         properties: { candidateId: { type: "string", minLength: 1 } },
         additionalProperties: false,
       },
-      execute(input) {
+      async execute(input) {
         const args = input as { candidateId?: string }
         const result = args.candidateId
-          ? orchestrator.explainCorrectionCandidate(args.candidateId)
-          : orchestrator.reviewCandidates()
+          ? await orchestrator.explainCorrectionCandidate(args.candidateId)
+          : await orchestrator.reviewCandidates()
         const redacted = Array.isArray(result)
           ? result.map(redactCandidateSummary)
           : "id" in result
             ? redactCandidateSummary(result)
             : result
         return Promise.resolve({ content: JSON.stringify(redacted, null, 2) })
+      },
+    })
+    draft.add({
+      name: "memory_submit_correction",
+      description:
+        "Submit an expert correction for the retrieval decision behind the assistant's most " +
+        "recent response (the turn before this one -- not this correction message's own " +
+        "retrieval) as a review candidate. This immediately runs diagnosis, structural " +
+        "validation, and a replay gate against it, but never writes to memory and cannot " +
+        "approve, reject, or otherwise mutate active memory. An explicit human action " +
+        "elsewhere is required before anything from this correction is applied.",
+      options: BARE_CALLABLE_TOOL_OPTIONS,
+      input: {
+        type: "object",
+        properties: {
+          correctionText: {
+            type: "string",
+            minLength: 1,
+            maxLength: CORRECTION_INPUT_LIMITS.maxTextLength,
+          },
+          expectedOutcome: {
+            type: "string",
+            minLength: 1,
+            maxLength: CORRECTION_INPUT_LIMITS.maxTextLength,
+          },
+          disputedMemoryIds: {
+            type: "array",
+            items: {
+              type: "string",
+              minLength: 1,
+              maxLength: CORRECTION_INPUT_LIMITS.maxMemoryIdLength,
+            },
+            maxItems: CORRECTION_INPUT_LIMITS.maxDisputedMemoryIds,
+          },
+        },
+        required: ["correctionText", "expectedOutcome"],
+        additionalProperties: false,
+      },
+      async execute(input, toolContext) {
+        const args = input as {
+          correctionText: string
+          expectedOutcome: string
+          disputedMemoryIds?: string[]
+        }
+        // Deliberately the trace from the turn BEFORE this one, not
+        // orchestrator.explain()'s "latest" trace: this correction message
+        // itself already triggered a fresh dispatch trace for the current
+        // turn (via the "context" hook), so "latest" would bind the
+        // correction to its own retrieval instead of to the disputed
+        // response's. See RememOrchestrator.explainPreviousTurn.
+        const trace = orchestrator.explainPreviousTurn(toolContext.sessionID)
+        if ("status" in trace) {
+          return {
+            content:
+              "No prior retrieval trace is available for this session yet; ask a question " +
+              "that triggers memory retrieval, let it respond, and then submit a correction " +
+              "about that response.",
+          }
+        }
+        let submitted
+        try {
+          submitted = await orchestrator.submitCorrection({
+            sessionId: toolContext.sessionID,
+            // Bound to the exact prompt this trace was computed for --
+            // never a caller-supplied replacement -- so diagnosis is always
+            // evaluated against the retrieval manifest for the request it
+            // actually describes.
+            prompt: trace.prompt,
+            correctionText: args.correctionText,
+            expectedOutcome: args.expectedOutcome,
+            actor: `opencode-session:${toolContext.sessionID}`,
+            context: memoryContext(location, toolContext.sessionID),
+            trace,
+            ...(args.disputedMemoryIds ? { disputedMemoryIds: args.disputedMemoryIds } : {}),
+          })
+        } catch (error) {
+          return {
+            content: `Correction was not accepted: ${error instanceof Error ? error.message : "unknown error"}`,
+          }
+        }
+        if ("status" in submitted) {
+          return { content: "Correction review is not configured for this workspace." }
+        }
+        return { content: JSON.stringify(redactCandidateSummary(submitted), null, 2) }
       },
     })
   })
@@ -238,8 +350,19 @@ export const RememPlugin = Plugin.define({
       for (const diagnostic of created.diagnostics) {
         safeLoggerCall(logger, "warn", "provider.initialization_failed", { message: diagnostic })
       }
+      const primaryPostgres = providers.find(
+        (provider): provider is PostgresMemoryProvider =>
+          provider instanceof PostgresMemoryProvider,
+      )
+      const reviewQueue = createCorrectionReviewQueue(
+        correctionCandidateStore(primaryPostgres),
+        created.providers,
+        parsed.config,
+        embeddingModel,
+      )
       const orchestrator = new RememOrchestrator(created.providers, parsed.config, logger, {
         embeddingModel,
+        reviewQueue,
       })
       capture = createCaptureCoordinator(created.providers, parsed.config, logger)
       const coordinator = capture
@@ -260,10 +383,6 @@ export const RememPlugin = Plugin.define({
           }
         })
       }
-      const primaryPostgres = providers.find(
-        (provider): provider is PostgresMemoryProvider =>
-          provider instanceof PostgresMemoryProvider,
-      )
       if (primaryPostgres) {
         reembedRegistration = await context.session.hook("prompt", () => {
           if (!shouldAttemptReembed(lastReembedAttempt)) return

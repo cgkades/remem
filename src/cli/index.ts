@@ -4,8 +4,15 @@ import { access, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promi
 import net from "node:net"
 import path from "node:path"
 import { Pool } from "pg"
-import type { PostgresProviderConfig } from "../config.js"
+import { parseConfig, type PostgresProviderConfig } from "../config.js"
+import {
+  CANDIDATE_LIFECYCLE_STATES,
+  type CandidateLifecycleState,
+  type CorrectionReviewQueue,
+} from "../correction.js"
+import { createCorrectionReviewQueue } from "../correction-wiring.js"
 import type { CandidateMemory } from "../observation.js"
+import { PostgresCorrectionCandidateStore } from "../providers/postgres-correction-store.js"
 import {
   readAppConfig,
   writeAppConfig,
@@ -75,6 +82,15 @@ function parseArguments(args: string[]): ParsedArguments {
 function stringFlag(parsed: ParsedArguments, name: string): string | undefined {
   const value = parsed.flags.get(name)
   return typeof value === "string" ? value : undefined
+}
+
+/** Like `stringFlag`, but rejects a value over `maxLength` -- these flags end up persisted to and echoed back from the database, so an unbounded value is a denial-of-service and output-bloat risk, not just a style concern. */
+function boundedFlag(parsed: ParsedArguments, name: string, maxLength: number): string | undefined {
+  const value = stringFlag(parsed, name)
+  if (value !== undefined && value.length > maxLength) {
+    throw new Error(`--${name} must be at most ${maxLength} characters`)
+  }
+  return value
 }
 
 function hasFlag(parsed: ParsedArguments, name: string): boolean {
@@ -344,6 +360,38 @@ function primaryPostgresProvider(config: RememAppConfig): PostgresMemoryProvider
   return new PostgresMemoryProvider(findPrimaryPostgresConfig(config))
 }
 
+/**
+ * Builds a CorrectionReviewQueue against the primary PostgreSQL provider
+ * only -- the same scope every other candidate-related CLI command
+ * (candidates/review/consolidate/reembed) already uses. If institutional
+ * memory or a mutation's target ever lives in a *different* configured
+ * provider (e.g. a markdown provider), this command cannot see or mutate
+ * it; only a live OpenCode session (which wires every configured provider)
+ * can. Candidates themselves are always visible here regardless, since
+ * they're persisted in the primary provider's own database.
+ */
+async function correctionReviewQueue(config: RememAppConfig): Promise<{
+  queue: CorrectionReviewQueue
+  provider: PostgresMemoryProvider
+}> {
+  const provider = primaryPostgresProvider(config)
+  const store = new PostgresCorrectionCandidateStore(provider.connectionPool, provider.id)
+  // `RememAppConfig` stores partial overrides on disk; resolve it through
+  // the same defaulting path plugin options go through to get a full
+  // OrchestratorConfig for the replay gate's throwaway orchestrator, and
+  // build the same configured embedding model a live session would use so
+  // replay's semantic recognition matches production.
+  const resolvedConfig = parseConfig(config).config
+  const embeddingModel = await createEmbeddingModel(resolvedConfig.embedding)
+  const queue = createCorrectionReviewQueue(store, [provider], resolvedConfig, embeddingModel)
+  return { queue, provider }
+}
+
+function correctionStateFlag(parsed: ParsedArguments): CandidateLifecycleState | undefined {
+  const value = stringFlag(parsed, "state")
+  return CANDIDATE_LIFECYCLE_STATES.find((state) => state === value)
+}
+
 async function reembedProvider(config: RememAppConfig): Promise<PostgresMemoryProvider> {
   // Unlike candidates/review/consolidate, reembed's entire purpose is to
   // re-embed stale rows into the CONFIGURED embedding model — it must use
@@ -458,6 +506,9 @@ Commands:
   start | stop | status | doctor | migrate
   candidates [--status STATUS]
   review <CANDIDATE_ID> --approve|--reject
+  correction-candidates [--state STATE]
+  correction-review <CANDIDATE_ID> --approve|--reject|--request-changes|--recover-validated|--recover-applied|--validate
+    [--reason TEXT] [--actor NAME] [--memory-id ID (with --recover-applied)]
   consolidate [--batch-size NUMBER]
   reembed [--batch-size NUMBER]
   backup [--output FILE]
@@ -488,6 +539,7 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
         "restore",
         "reset",
         "review",
+        "correction-review",
         "consolidate",
         "reembed",
       ]).has(parsed.command)
@@ -557,6 +609,80 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
           throw new Error("--batch-size must be an integer from 1 to 1000")
         }
         output(JSON.stringify(await provider.consolidateCandidates(batchSize), null, 2))
+        return 0
+      } finally {
+        await provider.close()
+      }
+    }
+    if (parsed.command === "correction-candidates" || parsed.command === "correction-review") {
+      const { queue, provider } = await correctionReviewQueue(config)
+      try {
+        if (parsed.command === "correction-candidates") {
+          const state = correctionStateFlag(parsed)
+          output(JSON.stringify(await queue.list(state ? { state } : undefined), null, 2))
+          return 0
+        }
+        const id = parsed.positionals[0]
+        if (!id) throw new Error("correction-review requires a candidate id")
+        const approve = hasFlag(parsed, "approve")
+        const reject = hasFlag(parsed, "reject")
+        const requestChanges = hasFlag(parsed, "request-changes")
+        const recoverValidated = hasFlag(parsed, "recover-validated")
+        const recoverApplied = hasFlag(parsed, "recover-applied")
+        const validate = hasFlag(parsed, "validate")
+        const actionCount = [
+          approve,
+          reject,
+          requestChanges,
+          recoverValidated,
+          recoverApplied,
+          validate,
+        ].filter(Boolean).length
+        if (actionCount !== 1) {
+          throw new Error(
+            "correction-review requires exactly one of --approve, --reject, --request-changes, " +
+              "--recover-validated, --recover-applied, or --validate",
+          )
+        }
+        const actor = boundedFlag(parsed, "actor", 255) ?? "cli"
+        const reason = boundedFlag(parsed, "reason", 4_096) ?? ""
+        if (validate) {
+          // Re-runs the same automatic diagnosis/validation/replay pipeline
+          // memory_submit_correction already runs once at submission time --
+          // useful after a human fixes whatever caused "needs_changes", or
+          // to retry if it never ran for some other reason.
+          const result = await queue.runValidation(id)
+          output(`Correction candidate ${id} is now ${result.state}.`)
+          return 0
+        }
+        if (approve) {
+          const result = await queue.approve(id, actor)
+          output(`Correction candidate ${id} applied as memory ${result.appliedMemoryId ?? ""}.`)
+          return 0
+        }
+        if (recoverValidated || recoverApplied) {
+          if (!reason) {
+            throw new Error("--recover-validated and --recover-applied require --reason")
+          }
+          const appliedMemoryId = recoverApplied ? stringFlag(parsed, "memory-id") : undefined
+          if (recoverApplied && !appliedMemoryId) {
+            throw new Error("--recover-applied requires --memory-id")
+          }
+          const result = await queue.recoverStuckApplying(
+            id,
+            actor,
+            recoverApplied ? "applied" : "validated",
+            reason,
+            appliedMemoryId,
+          )
+          output(`Correction candidate ${id} is now ${result.state} (manual recovery).`)
+          return 0
+        }
+        if (!reason) throw new Error("--reject and --request-changes require --reason")
+        const result = reject
+          ? await queue.reject(id, actor, reason)
+          : await queue.requestChanges(id, actor, reason)
+        output(`Correction candidate ${id} is now ${result.state}.`)
         return 0
       } finally {
         await provider.close()

@@ -105,4 +105,77 @@ describe("OpenCode prompt injection", () => {
 
     expect(JSON.stringify(event.messages.at(-1))).toContain("use logical replication")
   })
+
+  it("binds a correction to the original answered turn, not a tool-loop continuation dispatch within the correction turn", async () => {
+    const provider = new MarkdownMemoryProvider(
+      {
+        type: "markdown",
+        id: "fixtures",
+        paths: [fixtureDirectory],
+        exclude: [],
+        scope: "workspace",
+        maxFileBytes: 256 * 1024,
+        maxFiles: 100,
+      },
+      [fixtureDirectory],
+    )
+    const orchestrator = new RememOrchestrator([provider], testConfig())
+    const sessionID = "correction-turn-loop"
+
+    // Turn 1: original question -> dispatch A.
+    await injectV2DispatchMemory(
+      orchestrator,
+      {
+        sessionID,
+        system: [],
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Continue the Phoenix database migration." }],
+          },
+        ],
+      },
+      memoryContext,
+    )
+
+    // Turn 2: the user's correction message -> a fresh dispatch (B), which
+    // must NOT be mistaken for the trace behind the disputed response.
+    const correctionEvent = {
+      sessionID,
+      system: [] as unknown[],
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Continue the Phoenix database migration." }],
+        },
+        { role: "assistant", content: [{ type: "text", text: "Here is the migration plan." }] },
+        {
+          role: "user",
+          content: [{ type: "text", text: "That answer was wrong; rollback plans are required." }],
+        },
+      ] as unknown[],
+    }
+    await injectV2DispatchMemory(orchestrator, correctionEvent, memoryContext)
+
+    // Same correction turn: the model calls a tool, then OpenCode
+    // re-dispatches to the model with the tool result appended -- re-running
+    // the "context" hook (dispatch C) without a new user message.
+    const toolLoopEvent = {
+      sessionID,
+      system: [] as unknown[],
+      messages: [
+        ...correctionEvent.messages,
+        { role: "assistant", content: [{ type: "tool-call", name: "read", id: "1", input: {} }] },
+        { role: "tool", content: [{ type: "tool-result", name: "read", id: "1", result: {} }] },
+      ] as unknown[],
+    }
+    await injectV2DispatchMemory(orchestrator, toolLoopEvent, memoryContext)
+
+    // The model now calls memory_submit_correction. explainPreviousTurn must
+    // resolve to turn 1's dispatch (A), not turn 2's own repeated dispatches
+    // (B or C).
+    const previous = orchestrator.explainPreviousTurn(memoryContext.sessionId ?? "")
+    if ("status" in previous) throw new Error("expected a trace")
+    expect(previous.prompt).toBe("Continue the Phoenix database migration.")
+  })
 })
