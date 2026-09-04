@@ -161,7 +161,7 @@ async function configureOpenCode(configPath: string): Promise<void> {
  * know about `dist/hosts/pi/index.js` directly. Additive: preserves any
  * existing settings and package entries.
  */
-async function configurePi(settingsPath: string): Promise<void> {
+export async function configurePi(settingsPath: string): Promise<void> {
   await mkdir(path.dirname(settingsPath), { recursive: true, mode: 0o700 })
   let value: Record<string, unknown> = {}
   try {

@@ -1,12 +1,15 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { configurePi } from "../src/cli/index.js"
+import { piIntegrationCheck } from "../src/cli/doctor.js"
 import remem from "../src/hosts/pi/index.js"
 import { deriveHostLocation } from "../src/hosts/pi/location.js"
 import { writeAppConfig, type RememAppConfig } from "../src/storage/config-file.js"
-import { rememPaths } from "../src/storage/paths.js"
+import { packageRoot, piSettingsPath, rememPaths } from "../src/storage/paths.js"
 import { fixtureDirectory } from "./helpers.js"
 
 const roots: string[] = []
@@ -64,6 +67,10 @@ class FakeExtensionAPI {
 
 function fakeContext(cwd: string, sessionId = "session-test") {
   return { cwd, sessionManager: { getSessionId: () => sessionId } }
+}
+
+async function writeAppConfigLikeSettings(settingsPath: string, value: unknown): Promise<void> {
+  await writeFile(settingsPath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
 }
 
 /** Test-only cast: `FakeExtensionAPI` implements only the subset of `ExtensionAPI` the Pi adapter uses. */
@@ -255,5 +262,81 @@ describe("Pi host extension", () => {
     expect(result.compaction?.summary).toContain("Remem continuity")
 
     await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+})
+
+describe("Pi CLI and doctor wiring", () => {
+  it("packageRoot resolves two directories up from the caller (its real src/cli/* call-site depth)", () => {
+    const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)))
+    const syntheticCallSite = new URL("../src/cli/probe.ts", import.meta.url)
+    expect(packageRoot(syntheticCallSite.toString())).toBe(repoRoot)
+  })
+
+  it("piSettingsPath respects PI_CODING_AGENT_DIR and defaults to ~/.pi/agent", () => {
+    const overridden = piSettingsPath({ PI_CODING_AGENT_DIR: "/custom/pi-dir" })
+    expect(overridden).toBe(path.join("/custom/pi-dir", "settings.json"))
+
+    const defaulted = piSettingsPath({})
+    expect(defaulted).toBe(path.join(os.homedir(), ".pi", "agent", "settings.json"))
+  })
+
+  it("configurePi adds this package's root to packages, additively and idempotently", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remem-pi-settings-"))
+    roots.push(root)
+    const settingsPath = path.join(root, "settings.json")
+    const expectedRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)))
+
+    await configurePi(settingsPath)
+    const first = JSON.parse(await readFile(settingsPath, "utf8")) as { packages: unknown[] }
+    expect(first.packages).toEqual([expectedRoot])
+
+    // Re-running must not duplicate the entry or drop unrelated settings.
+    const withUnrelatedSetting = {
+      ...first,
+      defaultProjectTrust: "ask",
+    }
+    await writeAppConfigLikeSettings(settingsPath, withUnrelatedSetting)
+    await configurePi(settingsPath)
+    const second = JSON.parse(await readFile(settingsPath, "utf8")) as {
+      packages: unknown[]
+      defaultProjectTrust: string
+    }
+    expect(second.packages).toEqual([expectedRoot])
+    expect(second.defaultProjectTrust).toBe("ask")
+  })
+
+  it("piIntegrationCheck reports ok only when this package's root is present, even with backslash-heavy paths", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remem-pi-doctor-"))
+    roots.push(root)
+    const settingsPath = path.join(root, "settings.json")
+
+    const missing = await piIntegrationCheck(settingsPath)
+    expect(missing.status).toBe("warn")
+
+    await configurePi(settingsPath)
+    const configured = await piIntegrationCheck(settingsPath)
+    expect(configured.status).toBe("ok")
+    expect(configured.detail).toContain(settingsPath)
+
+    // Regression coverage for the Windows JSON-escaping bug: a settings file
+    // whose `packages` array contains a backslash-heavy (Windows-style) path
+    // must still be recognized via array membership, not a raw substring
+    // match against the JSON-escaped file text.
+    const windowsStylePath = "C:\\Users\\example\\opencode-remem"
+    await writeAppConfigLikeSettings(settingsPath, { packages: [windowsStylePath] })
+    const windowsStyle = await piIntegrationCheck(settingsPath)
+    const written = JSON.parse(await readFile(settingsPath, "utf8")) as { packages: unknown[] }
+    expect(written.packages).toContain(windowsStylePath)
+    expect(windowsStyle.status).toBe("warn")
+  })
+
+  it("piIntegrationCheck fails open on malformed settings JSON", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remem-pi-doctor-malformed-"))
+    roots.push(root)
+    const settingsPath = path.join(root, "settings.json")
+    await writeFile(settingsPath, "{not-json")
+
+    const result = await piIntegrationCheck(settingsPath)
+    expect(result.status).toBe("warn")
   })
 })

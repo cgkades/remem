@@ -156,7 +156,9 @@ function registerTools(pi: ExtensionAPI, getState: () => PiSessionState | undefi
       const state = getState()
       if (!state) {
         return {
-          content: [{ type: "text", text: "Memory status unavailable: extension not initialized" }],
+          content: [
+            { type: "text", text: "Memory status unavailable: extension not initialized." },
+          ],
           details: {},
         }
       }
