@@ -376,14 +376,19 @@ export function validateCandidateStructure(
   }
 }
 
-export interface SubmitCorrectionResult {
-  candidate: CorrectionCandidate
-}
-
 export interface ApplyMutationResult {
   memoryId: string
 }
 
+/**
+ * Applies an approved mutation to the owning provider and returns the
+ * resulting memory id. Implementations are responsible for refreshing that
+ * provider's retrieval state (e.g. calling `MemoryProvider.refresh()`) as
+ * part of applying the mutation, so the approved change is immediately
+ * visible to subsequent retrieval -- `CorrectionReviewQueue.approve` treats
+ * this call as the single atomic apply step and does not refresh anything
+ * itself.
+ */
 export type ApplyMutation = (mutation: CandidateMutation) => Promise<ApplyMutationResult>
 
 function clone(candidate: CorrectionCandidate): CorrectionCandidate {
