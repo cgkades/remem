@@ -125,6 +125,26 @@ Restart Pi (or run `/reload`) after changing its settings for the extension chan
 - `dist/hosts/pi/index.js`: source-build entry Pi's package loader discovers via
   `package.json#pi.extensions`.
 
+## Testing
+
+Unit tests (`tests/pi-integration.test.ts`, run via `npm run test:pi`) exercise the adapter against a
+hand-rolled fake `ExtensionAPI`/`ExtensionContext`.
+
+An end-to-end test (`tests/pi.e2e.mjs`, run via `npm run test:pi:e2e`) drives the real `pi` CLI binary
+against a local, deterministic OpenAI-compatible mock model server -- no real provider credentials
+are used or required. It overrides `HOME` for the spawned `pi` process to a scratch directory, so it
+never reads or writes an operator's real `~/.pi/agent` state (settings, sessions, auth). It verifies:
+
+- the first request to the model contains the injected, attributed memory context (the
+  `before_agent_start` hook fired and the untrusted-evidence framing is present);
+- a subsequent request contains a real `memory_status` tool result from the actual orchestrator
+  (`pi.registerTool` round-tripped through Pi's tool-execution path, not a stub).
+
+Run it in a Linux container (`npm run test:pi:e2e:docker`, `docker/pi-e2e.Dockerfile`) for full
+isolation from the host, including from any `pi` CLI version already installed locally -- the
+container pins its own. This mirrors the existing `test:opencode-v2`/`test:opencode-v2:docker`
+pattern in `docs/opencode-integration.md`.
+
 ## Compatibility Policy
 
 - Core orchestration imports no Pi types; `src/hosts/pi/index.ts` and `src/hosts/pi/location.ts` are

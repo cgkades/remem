@@ -78,6 +78,8 @@
     "test:opencode-v2": "node tests/opencode-v2.e2e.mjs",
     "test:opencode-v2:docker": "docker build -f docker/opencode-v2-e2e.Dockerfile -t remem-opencode-v2-e2e . && docker run --rm remem-opencode-v2-e2e",
     "test:pi": "vitest run tests/pi-integration.test.ts",
+    "test:pi:e2e": "node tests/pi.e2e.mjs",
+    "test:pi:e2e:docker": "docker build -f docker/pi-e2e.Dockerfile -t remem-pi-e2e . && docker run --rm remem-pi-e2e",
     "test:postgres": "REMEM_TEST_DATABASE_URL=postgresql://remem_test:remem_test@127.0.0.1:54330/remem_test vitest run tests/postgres-provider.integration.test.ts",
     "test:postgres:down": "docker compose -f compose.test.yaml down --volumes",
     "test:postgres:up": "docker compose -f compose.test.yaml up --detach --wait",
