@@ -240,6 +240,11 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
   private readonly embeddingModel: EmbeddingModel
   private readonly ownsPool: boolean
 
+  /** Exposes the underlying connection pool so other durable stores (e.g. `PostgresCorrectionCandidateStore`) can share it instead of opening a second pool to the same database. */
+  get connectionPool(): Pool {
+    return this.pool
+  }
+
   constructor(
     private readonly config: PostgresProviderConfig,
     options: PostgresMemoryProviderOptions = {},
