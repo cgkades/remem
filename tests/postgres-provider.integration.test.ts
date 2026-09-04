@@ -1161,35 +1161,38 @@ integration("PostgreSQL managed provider", () => {
       },
       { pool, embeddingModel: failingEmbedding },
     )
-    // A large batch: every row not already at "always-fails-integration-test-marker"
-    // looks stale to this runner, so this must cover the whole current
-    // backlog to guarantee our row is included regardless of what else is
-    // in the shared schema at this point in the suite.
-    const result = await failingProvider.reembedStale(10_000)
+    try {
+      // A large batch: every row not already at "always-fails-integration-test-marker"
+      // looks stale to this runner, so this must cover the whole current
+      // backlog to guarantee our row is included regardless of what else is
+      // in the shared schema at this point in the suite.
+      const result = await failingProvider.reembedStale(10_000)
 
-    expect(result.status).toBe("failed")
-    expect(result.reembedded).toBe(0)
-    expect(result.errors.length).toBeGreaterThan(0)
-    const row = await pool.query<{ model: string; reembed_claim_id: string | null }>(
-      "SELECT model, reembed_claim_id FROM remem.memory_embeddings WHERE memory_id = $1",
-      [written.id],
-    )
-    // Nothing was actually overwritten, and the claim was released rather
-    // than left dangling.
-    expect(row.rows[0]?.model).toBe("stale-failure-test")
-    expect(row.rows[0]?.reembed_claim_id).toBeNull()
-    const runRecord = await pool.query<{ status: string }>(
-      "SELECT status FROM remem.consolidation_records WHERE id = $1",
-      [result.id],
-    )
-    expect(runRecord.rows[0]?.status).toBe("failed")
-
-    // Restore the row to a healthy state so it doesn't linger as permanent
-    // backlog noise for the rest of this sequential suite.
-    await pool.query("UPDATE remem.memory_embeddings SET model = $2 WHERE memory_id = $1", [
-      written.id,
-      originalModel,
-    ])
+      expect(result.status).toBe("failed")
+      expect(result.reembedded).toBe(0)
+      expect(result.errors.length).toBeGreaterThan(0)
+      const row = await pool.query<{ model: string; reembed_claim_id: string | null }>(
+        "SELECT model, reembed_claim_id FROM remem.memory_embeddings WHERE memory_id = $1",
+        [written.id],
+      )
+      // Nothing was actually overwritten, and the claim was released rather
+      // than left dangling.
+      expect(row.rows[0]?.model).toBe("stale-failure-test")
+      expect(row.rows[0]?.reembed_claim_id).toBeNull()
+      const runRecord = await pool.query<{ status: string }>(
+        "SELECT status FROM remem.consolidation_records WHERE id = $1",
+        [result.id],
+      )
+      expect(runRecord.rows[0]?.status).toBe("failed")
+    } finally {
+      // Restore the row to a healthy state so it doesn't linger as permanent
+      // backlog noise for the rest of this sequential suite, even if an
+      // assertion above threw first.
+      await pool.query(
+        "UPDATE remem.memory_embeddings SET model = $2, reembed_claim_id = NULL WHERE memory_id = $1",
+        [written.id, originalModel],
+      )
+    }
   })
 
   it("runs a manual reembed via the CLI", async () => {
