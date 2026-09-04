@@ -14,6 +14,17 @@ const SENTINEL = "REMEM_E2E_PHOENIX_SENTINEL"
 const RELATED_PROMPT = "Let's continue the Phoenix database work."
 const UNRELATED_PROMPT = "Summarize this unrelated weather report."
 const OUTAGE_PROMPT = "Continue even if long-term memory is unavailable."
+// Issue #13: RememPlugin.setup() registers two independent
+// context.session.hook("prompt", ...) callbacks -- the capture-enqueue hook
+// and the cooldown-gated re-embed trigger. Whether OpenCode's real runtime
+// treats hook registration as additive (both fire) or "last write wins" (the
+// second registration silently replaces the first) could only be inferred
+// from the plugin API's type signatures, not verified, since the runtime
+// dispatch implementation ships compiled into the opencode2 binary. This
+// prompt is deliberately capturable (classify() recognizes "we decided") so
+// firing the capture hook is independently observable in remem.candidate_memories,
+// alongside the re-embed hook's effect on a pre-seeded stale row.
+const HOOKS_PROMPT = "Decision: we decided to use blue-green deployments for the Phoenix rollout."
 // Issue #11 regression coverage: after the native "read" tool loop completes,
 // call the Remem-registered memory_status tool by its bare name to verify it
 // is actually invocable (not just present in the advertised tool schema) now
@@ -353,6 +364,67 @@ async function createWorkspace(root, name, plugin, modelURL, includeMemory, unav
   return workspace
 }
 
+function hooksPluginOptions(connectionString) {
+  return {
+    providers: [
+      {
+        type: "postgres",
+        id: "hooks-postgres",
+        connectionString,
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 10,
+      },
+    ],
+    providerTimeoutMs: 5_000,
+    capture: { enabled: true },
+  }
+}
+
+async function createHooksWorkspace(root, plugin, modelURL, connectionString) {
+  const workspace = path.join(root, "hooks")
+  await mkdir(workspace, { recursive: true })
+  await writeFile(
+    path.join(workspace, "opencode.json"),
+    `${JSON.stringify(
+      {
+        model: "mock/mock-1",
+        providers: {
+          mock: {
+            env: ["REMEM_E2E_MOCK_KEY"],
+            package: "@opencode-ai/ai/providers/openai-compatible",
+            settings: { baseURL: modelURL },
+            models: {
+              "mock-1": {
+                name: "Remem E2E mock",
+                modelID: "mock-1",
+                limit: { context: 16_384, output: 1_024 },
+              },
+            },
+          },
+        },
+        plugins: [
+          { package: pathToFileURL(plugin).href, options: hooksPluginOptions(connectionString) },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+  )
+  return workspace
+}
+
+async function pollUntil(description, check, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs
+  let lastResult
+  while (Date.now() < deadline) {
+    lastResult = await check()
+    if (lastResult) return lastResult
+    await delay(200)
+  }
+  throw new Error(`timed out waiting for: ${description}`)
+}
+
 async function startOpenCodeServer(executable, workspace, environment, attempts = 3) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const port = await unusedPort()
@@ -440,6 +512,7 @@ async function main() {
   let model
   let unavailable
   let opencode
+  let hooksPool
   let completed = false
   try {
     await command("npm", ["run", "build"], { cwd: repository, env: npmEnvironment })
@@ -638,11 +711,76 @@ async function main() {
     if (unavailable.attempts() <= outageAttempts) {
       throw new Error("the controlled PostgreSQL outage was not attempted")
     }
+
+    const databaseUrl = process.env.REMEM_TEST_DATABASE_URL
+    if (databaseUrl) {
+      const { Pool } = await import("pg")
+      const { runMigrations } = await import(
+        pathToFileURL(path.join(repository, "dist", "storage", "migrations.js")).href
+      )
+      const { PostgresMemoryProvider } = await import(
+        pathToFileURL(path.join(repository, "dist", "providers", "postgres.js")).href
+      )
+      hooksPool = new Pool({ connectionString: databaseUrl })
+      await hooksPool.query("DROP SCHEMA IF EXISTS remem CASCADE")
+      await runMigrations(hooksPool)
+
+      const seedProvider = new PostgresMemoryProvider(
+        {
+          type: "postgres",
+          id: "hooks-postgres",
+          connectionString: databaseUrl,
+          primary: true,
+          maxConnections: 2,
+          catalogLimit: 10,
+        },
+        { pool: hooksPool },
+      )
+      const seeded = await seedProvider.write({
+        title: "Reembed hook target",
+        content: "Content re-embedded once the hook-triggered trigger fires.",
+        scope: { kind: "workspace", id: "hooks" },
+        type: "decision",
+      })
+      await hooksPool.query(
+        "UPDATE remem.memory_embeddings SET model = 'e2e-stale-marker' WHERE memory_id = $1",
+        [seeded.id],
+      )
+
+      const hooksWorkspace = await createHooksWorkspace(temporary, plugin, model.url, databaseUrl)
+      const hooksSession = await createSession(serverURL, hooksWorkspace)
+      await prompt(serverURL, hooksSession, HOOKS_PROMPT)
+
+      // Both hooks run fire-and-forget from the "prompt" hook callback, so
+      // their effects may land slightly after /wait returns -- poll rather
+      // than asserting immediately.
+      await pollUntil("the capture hook to enqueue a candidate memory", async () => {
+        const result = await hooksPool.query(
+          "SELECT count(*)::int AS count FROM remem.candidate_memories",
+        )
+        return result.rows[0]?.count > 0
+      })
+      await pollUntil("the re-embed hook to reembed the pre-seeded stale row", async () => {
+        const result = await hooksPool.query(
+          "SELECT model FROM remem.memory_embeddings WHERE memory_id = $1",
+          [seeded.id],
+        )
+        return result.rows[0]?.model !== "e2e-stale-marker"
+      })
+    } else {
+      process.stderr.write(
+        "REMEM_TEST_DATABASE_URL not set; skipping the independent-hook-registration " +
+          'scenario (issue #13) -- both the capture and re-embed "prompt" hooks require a ' +
+          "real, reachable PostgreSQL provider to produce an observable effect.\n",
+      )
+    }
+
     completed = true
   } finally {
     if (opencode) await stop(opencode.child)
     if (model) await model.close()
     if (unavailable) await unavailable.close()
+    if (hooksPool) await hooksPool.end()
     // Keep the workspace on failure by default so CI/local runs can be triaged after the fact;
     // REMEM_E2E_KEEP additionally forces retention even on success, for local debugging.
     if (completed && !process.env.REMEM_E2E_KEEP) {

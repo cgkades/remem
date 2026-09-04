@@ -164,8 +164,15 @@ The v1 compatibility contract is pinned to the official OpenCode `v1.18.26` rele
   `@opencode-ai/cli@0.0.0-beta-18743` runtime, and drives its HTTP API against a local deterministic
   OpenAI-compatible mock. It verifies plugin loading, dispatch injection, tool-loop continuity,
   transcript isolation, unrelated-prompt isolation, and fail-open behavior with an unavailable
-  PostgreSQL provider. Run it locally with `npm run test:opencode-v2`, or in a Linux container
-  (native arm64 on Apple Silicon, no emulation needed — the beta runtime ships
-  `@opencode-ai/cli-linux-arm64`) with `npm run test:opencode-v2:docker`.
+  PostgreSQL provider. When `REMEM_TEST_DATABASE_URL` is set (CI always sets it; local runs can
+  point it at `npm run test:postgres:up`'s instance), it also settles issue #13's open
+  question empirically: it seeds a stale embedding, sends one prompt against a real, reachable
+  PostgreSQL provider with capture enabled, and confirms both of `RememPlugin.setup()`'s
+  independently-registered `"prompt"` hooks (the capture-enqueue hook and the re-embed trigger)
+  actually fire against the real runtime — a candidate memory is enqueued and the stale row is
+  re-embedded — rather than the second registration silently replacing the first. Run it locally
+  with `npm run test:opencode-v2`, or in a Linux container (native arm64 on Apple Silicon, no
+  emulation needed — the beta runtime ships `@opencode-ai/cli-linux-arm64`) with
+  `npm run test:opencode-v2:docker`.
 - Hook mismatches fail open and surface a diagnostic without memory content.
 - No adapter automatically reads or writes historical sessions.
