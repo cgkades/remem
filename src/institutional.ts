@@ -1,11 +1,12 @@
 import type {
+  ApplicabilityCondition,
   InstitutionalMemory,
   InstitutionalPosition,
   InstitutionalProcedure,
   MemoryContext,
   MemoryWrite,
 } from "./types.js"
-import { tokenize } from "./text.js"
+import { containsPhrase } from "./text.js"
 
 export type InstitutionalValidationCode =
   | "duplicate_id"
@@ -122,18 +123,39 @@ export function institutionalReviewStatus(
   return timestamp <= asOf ? "expired" : "current"
 }
 
+/**
+ * The single source of truth for whether one applicability condition is
+ * satisfied, shared by `institutionalApplies` and by planner diagnostics
+ * (`DeterministicRetrievalPlanner.plan`'s `ApplicabilityDecision.reason`) so
+ * both always agree on which condition actually failed. A `topic` condition
+ * matches via `containsPhrase` -- a normalized (case/punctuation-insensitive)
+ * substring match against the whole condition value -- rather than checking
+ * for a single token, so multi-word topics like "production rollout" match
+ * as a phrase instead of never matching at all. `containsPhrase` pads both
+ * sides with spaces before comparing, so "cat" still never matches inside
+ * "category": partial word matches are rejected the same way single-word
+ * topics always were.
+ */
+export function applicabilityConditionSatisfied(
+  condition: ApplicabilityCondition,
+  context: MemoryContext,
+  prompt?: string,
+): boolean {
+  if (condition.kind === "topic") {
+    return prompt !== undefined && containsPhrase(prompt, condition.value)
+  }
+  return context[condition.field] === condition.value
+}
+
 export function institutionalApplies(
   institutional: unknown,
   context: MemoryContext,
   prompt?: string,
 ): boolean {
   if (!isInstitutionalMemory(institutional)) return false
-  const matches = institutional.applicability.conditions.map((condition) => {
-    if (condition.kind === "topic") {
-      return prompt !== undefined && tokenize(prompt).includes(condition.value.toLowerCase())
-    }
-    return context[condition.field] === condition.value
-  })
+  const matches = institutional.applicability.conditions.map((condition) =>
+    applicabilityConditionSatisfied(condition, context, prompt),
+  )
   return institutional.applicability.match === "all"
     ? matches.every(Boolean)
     : matches.some(Boolean)

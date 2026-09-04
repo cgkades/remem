@@ -83,6 +83,72 @@ describe("DeterministicRetrievalPlanner", () => {
     ])
   })
 
+  it("matches a multi-word topic applicability condition as a phrase, not a single token", () => {
+    const gated: CatalogEntry = {
+      ...phoenix,
+      institutional: {
+        role: "procedure",
+        id: "procedure.production-rollback",
+        steps: [{ id: "plan", instruction: "Prepare the plan." }],
+        positionIds: ["position.rollback"],
+        requiredEvidence: ["approval"],
+        completionCriteria: ["plan approved"],
+        escalationConditions: ["no approval"],
+        applicability: {
+          match: "all",
+          conditions: [{ id: "topic", kind: "topic", value: "production rollout" }],
+        },
+        review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: null },
+      },
+    }
+    const [decision] =
+      planner.plan(
+        "Can we skip the production rollout rollback plan?",
+        [gated],
+        ["notes"],
+        memoryContext,
+      ).applicability ?? []
+
+    expect(decision).toMatchObject({
+      applicable: true,
+      reason: "deterministic applicability conditions passed",
+    })
+  })
+
+  it("reports the actual failed condition for an unmatched multi-word topic", () => {
+    const gated: CatalogEntry = {
+      ...phoenix,
+      institutional: {
+        role: "procedure",
+        id: "procedure.production-rollback",
+        steps: [{ id: "plan", instruction: "Prepare the plan." }],
+        positionIds: ["position.rollback"],
+        requiredEvidence: ["approval"],
+        completionCriteria: ["plan approved"],
+        escalationConditions: ["no approval"],
+        applicability: {
+          match: "all",
+          conditions: [
+            { id: "production-rollout-topic", kind: "topic", value: "production rollout" },
+          ],
+        },
+        review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: null },
+      },
+    }
+    const [decision] =
+      planner.plan(
+        "The rollout of the production database is done",
+        [gated],
+        ["notes"],
+        memoryContext,
+      ).applicability ?? []
+
+    expect(decision).toMatchObject({
+      applicable: false,
+      reason: "failed deterministic gate production-rollout-topic",
+    })
+  })
+
   it("records an applicable any-gate without claiming every condition passed", () => {
     const gated: CatalogEntry = {
       ...phoenix,
