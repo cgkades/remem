@@ -276,6 +276,7 @@ export class RememOrchestrator {
       ]
       const trace: MemoryTrace = {
         sessionId: context.sessionId ?? "unknown",
+        prompt,
         timestamp: new Date().toISOString(),
         catalogEntries: catalog.entries.length,
         catalogMatches: plan.matches.slice(0, this.config.planner.maxTopics).map((match) => ({
@@ -326,6 +327,7 @@ export class RememOrchestrator {
       const diagnostic = error instanceof Error ? error.name : "unknown error"
       const trace: MemoryTrace = {
         sessionId: context.sessionId ?? "unknown",
+        prompt,
         timestamp: new Date().toISOString(),
         catalogEntries: catalog.entries.length,
         catalogMatches: [],
@@ -388,6 +390,7 @@ export class RememOrchestrator {
     const synthesis = await this.synthesize(plan.topics, recall.memories, [])
     const trace: MemoryTrace = {
       sessionId: context.sessionId ?? "unknown",
+      prompt: query,
       timestamp: new Date().toISOString(),
       catalogEntries: (await this.catalog.get(context)).entries.length,
       catalogMatches: [],

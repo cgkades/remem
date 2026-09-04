@@ -163,14 +163,7 @@ export class TargetedReplayGate implements ReplayGate {
     if (!candidate.mutation) {
       return { passed: false, caseIds: [], failures: ["no mutation to replay"] }
     }
-    const existing = await this.loadInstitutionalWrites(candidate.correction.context)
-    const overlaid = applyMutationToInstitutionalSet(candidate.mutation, existing)
-    const orchestrator = new RememOrchestrator(
-      [new OverlayMemoryProvider(overlaid)],
-      this.config,
-      undefined,
-      this.embeddingModel ? { embeddingModel: this.embeddingModel } : {},
-    )
+    const mutation = candidate.mutation
 
     const priorApplied = await this.listPriorApplied()
     const scenarios = [
@@ -180,6 +173,24 @@ export class TargetedReplayGate implements ReplayGate {
 
     const failures: string[] = []
     for (const scenario of scenarios) {
+      // Load and overlay per scenario, scoped to *that scenario's own*
+      // context -- not the candidate's. A regression scenario from a
+      // different project/workspace/session has its own institutional
+      // corpus; reusing the candidate's corpus for it would either miss
+      // records it actually depends on or fail to filter records that
+      // shouldn't be visible there, causing an unrelated candidate to
+      // spuriously fail replay. Applying `mutation` to a corpus where its
+      // target/proposed scope doesn't match is a safe no-op: scope
+      // filtering in OverlayMemoryProvider keeps it invisible to a scenario
+      // it doesn't apply to.
+      const existing = await this.loadInstitutionalWrites(scenario.context)
+      const overlaid = applyMutationToInstitutionalSet(mutation, existing)
+      const orchestrator = new RememOrchestrator(
+        [new OverlayMemoryProvider(overlaid)],
+        this.config,
+        undefined,
+        this.embeddingModel ? { embeddingModel: this.embeddingModel } : {},
+      )
       const injection = await orchestrator.processPrompt(scenario.prompt, scenario.context)
       if (!injection.text.includes(scenario.expectedOutcome)) {
         failures.push(

@@ -65,16 +65,22 @@ reference the mutation's target via `dependsOnPositionIds`/`positionIds`/
 `procedureIds`, for reviewer visibility before approving a supersede/retire.
 
 A candidate only reaches `validated` after a `ReplayGate` passes.
-`TargetedReplayGate` (the shipped implementation) applies the mutation to
-the current institutional corpus in memory, serves the result through an
+`TargetedReplayGate` (the shipped implementation) checks two things: does
+the correction's own prompt now surface the expected outcome, and does
+every previously _applied_ candidate's own prompt still surface its
+expected outcome (the regression check, capped to the 20 most recently
+applied candidates). For **each** scenario it independently loads the
+institutional corpus scoped to _that scenario's own context_ (not the
+candidate's), applies the mutation to it, serves the result through an
 ephemeral read-only provider, and runs a throwaway orchestrator -- built
 with the same embedding model production uses, so semantic recognition
-during replay matches what will actually serve the corrected memory -- to
-check two things: does the correction's own prompt now surface the expected
-outcome, and does every previously _applied_ candidate's own prompt still
-surface its expected outcome (the regression check, capped to the 20 most
-recently applied candidates). Nothing here touches a real provider or
-persists anything.
+during replay matches what will actually serve the corrected memory. Loading
+per scenario matters once applied candidates span multiple
+projects/workspaces/sessions: a project-scoped mutation is naturally
+invisible (via scope filtering) to a regression scenario outside that scope,
+and a regression scenario retains its own institutional memory regardless of
+what the candidate under test happens to touch. Nothing here touches a real
+provider or persists anything.
 
 ## Persistence
 
@@ -102,7 +108,15 @@ rejected — there is nothing for a provider to write.
 
 - **`memory_submit_correction`** (OpenCode v2 tool, agent-facing): submits a
   correction for the current session. Requires a retrieval trace to already
-  exist for the session, since diagnosis needs one.
+  exist for the session, since diagnosis needs one. The correction's
+  `prompt` is always `trace.prompt` -- the exact request that trace was
+  computed for -- never a caller-supplied replacement, so a correction can
+  never be diagnosed against a retrieval manifest that doesn't actually
+  belong to it. `correctionText`/`expectedOutcome` are capped at 8000
+  characters and `disputedMemoryIds` at 100 entries of 512 characters each,
+  enforced in `CorrectionReviewQueue.submit()` itself (not just the tool's
+  input schema), since these values are persisted to and later read back
+  from durable storage regardless of caller.
 - **`memory_review_status`** (OpenCode v2 tool, agent-facing, read-only):
   returns a _redacted_ summary (state, root cause, pass/fail flags, audit
   events without free-text detail) — never the untrusted correction text or

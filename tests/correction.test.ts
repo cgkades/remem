@@ -28,6 +28,7 @@ const context: MemoryContext = {
 function baseTrace(overrides: Partial<MemoryTrace> = {}): MemoryTrace {
   return {
     sessionId: "session-1",
+    prompt: "Can we skip the rollback plan for this hotfix?",
     timestamp: "2026-09-04T00:00:00.000Z",
     catalogEntries: 1,
     catalogMatches: [],
@@ -714,6 +715,29 @@ describe("CorrectionReviewQueue", () => {
     const first = await q.submit(correction({ id: "fixed-id" }))
     await expect(q.submit(correction({ id: "fixed-id" }))).rejects.toThrow(/already exists/)
     expect((await q.get(first.id))?.audit).toHaveLength(1)
+  })
+
+  it("rejects oversized correctionText/expectedOutcome/actor before persisting, regardless of caller (tool schema is not the only enforcement point)", async () => {
+    const { q } = queue(passingGate)
+    await expect(q.submit(correction({ correctionText: "x".repeat(8_001) }))).rejects.toThrow(
+      /correctionText must be at most 8000 characters/,
+    )
+    await expect(q.submit(correction({ expectedOutcome: "x".repeat(8_001) }))).rejects.toThrow(
+      /expectedOutcome must be at most 8000 characters/,
+    )
+    await expect(q.submit(correction({ actor: "x".repeat(256) }))).rejects.toThrow(
+      /actor must be at most 255 characters/,
+    )
+  })
+
+  it("rejects too many or too-long disputedMemoryIds", async () => {
+    const { q } = queue(passingGate)
+    await expect(
+      q.submit(correction({ disputedMemoryIds: Array.from({ length: 101 }, (_, i) => `id-${i}`) })),
+    ).rejects.toThrow(/disputedMemoryIds must have at most 100 entries/)
+    await expect(q.submit(correction({ disputedMemoryIds: ["x".repeat(513)] }))).rejects.toThrow(
+      /each correction.disputedMemoryIds entry must be at most 512 characters/,
+    )
   })
 
   it("terminal states reject further transitions: revalidate, reject, and requestChanges after apply", async () => {

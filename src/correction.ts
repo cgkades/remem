@@ -527,6 +527,46 @@ function assertTransitionAllowed(candidate: CorrectionCandidate, action: string)
 }
 
 /**
+ * Caps on `CorrectionInput` free-text/array fields, enforced in `submit()`.
+ * A tool schema (e.g. the OpenCode `memory_submit_correction` input schema)
+ * is the first line of defense but not the only one: any caller that
+ * bypasses or misconfigures that schema would otherwise be able to enqueue
+ * unbounded strings/arrays into durable JSONB storage, where they are later
+ * read back by diagnosis, replay, and every `list()`/`get()` caller.
+ */
+export const CORRECTION_INPUT_LIMITS = {
+  maxTextLength: 8_000,
+  maxActorLength: 255,
+  maxDisputedMemoryIds: 100,
+  maxMemoryIdLength: 512,
+} as const
+
+function assertCorrectionInputBounds(correction: CorrectionInput): void {
+  const { maxTextLength, maxActorLength, maxDisputedMemoryIds, maxMemoryIdLength } =
+    CORRECTION_INPUT_LIMITS
+  if (correction.correctionText.length > maxTextLength) {
+    throw new Error(`correction.correctionText must be at most ${maxTextLength} characters`)
+  }
+  if (correction.expectedOutcome.length > maxTextLength) {
+    throw new Error(`correction.expectedOutcome must be at most ${maxTextLength} characters`)
+  }
+  if (correction.actor.length > maxActorLength) {
+    throw new Error(`correction.actor must be at most ${maxActorLength} characters`)
+  }
+  const disputed = correction.disputedMemoryIds ?? []
+  if (disputed.length > maxDisputedMemoryIds) {
+    throw new Error(
+      `correction.disputedMemoryIds must have at most ${maxDisputedMemoryIds} entries`,
+    )
+  }
+  if (disputed.some((id) => id.length > maxMemoryIdLength)) {
+    throw new Error(
+      `each correction.disputedMemoryIds entry must be at most ${maxMemoryIdLength} characters`,
+    )
+  }
+}
+
+/**
  * In-process, non-durable `CorrectionCandidateStore`. Suitable for tests and
  * for hosts that have not configured persistent storage; state is lost on
  * process exit and is not visible to other processes.
@@ -611,6 +651,7 @@ export class CorrectionReviewQueue {
   ) {}
 
   async submit(correction: CorrectionInput): Promise<CorrectionCandidate> {
+    assertCorrectionInputBounds(correction)
     const now = new Date().toISOString()
     // Clone the input on ingestion: the caller's original CorrectionInput
     // object must not be able to change what this candidate diagnoses,

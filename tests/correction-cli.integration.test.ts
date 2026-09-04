@@ -24,6 +24,7 @@ const context: MemoryContext = {
 
 const trace: MemoryTrace = {
   sessionId: "session-1",
+  prompt: "Can we skip the rollback plan?",
   timestamp: "2026-09-04T00:00:00.000Z",
   catalogEntries: 0,
   catalogMatches: [],

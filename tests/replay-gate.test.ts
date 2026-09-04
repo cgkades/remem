@@ -14,6 +14,7 @@ const context: MemoryContext = {
 
 const trace: MemoryTrace = {
   sessionId: "session-1",
+  prompt: "Can we skip the rollback plan requirement for this hotfix?",
   timestamp: "2026-09-04T00:00:00.000Z",
   catalogEntries: 0,
   catalogMatches: [],
@@ -150,5 +151,45 @@ describe("TargetedReplayGate", () => {
     )
     expect(result.passed).toBe(true)
     expect(result.caseIds).toEqual(["candidate-1", "prior-applied"])
+  })
+
+  it("loads each regression scenario's own corpus, so a prior candidate in a different project is unaffected by this candidate's mutation and evaluated against its own institutional memory", async () => {
+    const mercuryContext: MemoryContext = {
+      directory: "/repo-mercury",
+      worktree: "/repo-mercury",
+      projectId: "mercury",
+      sessionId: "session-mercury",
+    }
+    const mercuryRecord: MemoryWrite = {
+      title: "mercury deployment window",
+      content: "Mercury deployments only run during the Tuesday maintenance window.",
+      scope: { kind: "project", id: "mercury" },
+      type: "decision",
+    }
+    // Context-aware loader: each project has its own, disjoint corpus. The
+    // old (buggy) implementation loaded this once using the candidate's own
+    // (phoenix) context and reused it for every scenario, so the mercury
+    // scenario would never see mercuryRecord at all.
+    const loadInstitutionalWrites = (ctx: MemoryContext) =>
+      ctx.projectId === "mercury" ? [mercuryRecord] : []
+
+    const priorAppliedInMercury = candidate({
+      id: "prior-applied-mercury",
+      state: "applied",
+      correction: {
+        ...candidate().correction,
+        context: mercuryContext,
+        prompt: "What's the mercury deployment window?",
+        expectedOutcome: "Tuesday maintenance window",
+      },
+    })
+    const gate = new TargetedReplayGate(config, loadInstitutionalWrites, () =>
+      Promise.resolve([priorAppliedInMercury]),
+    )
+    const result = await gate.run(
+      candidate({ mutation: { kind: "create", proposed: proposedWrite() } }),
+    )
+    expect(result.passed).toBe(true)
+    expect(result.caseIds).toEqual(["candidate-1", "prior-applied-mercury"])
   })
 })

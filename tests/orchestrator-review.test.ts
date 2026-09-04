@@ -22,6 +22,7 @@ function correction() {
     context: memoryContext,
     trace: {
       sessionId: memoryContext.sessionId ?? "session-1",
+      prompt: "Can we skip the rollback plan?",
       timestamp: new Date().toISOString(),
       catalogEntries: 0,
       catalogMatches: [],

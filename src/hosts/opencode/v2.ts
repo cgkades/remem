@@ -227,26 +227,28 @@ async function registerTools(
     draft.add({
       name: "memory_submit_correction",
       description:
-        "Submit an expert correction for a prior response as a review candidate. This " +
-        "only queues the correction for diagnosis, structural validation, and a replay " +
-        "gate -- it never writes to memory and cannot approve, reject, or otherwise " +
-        "mutate active memory. An explicit human action elsewhere is required before " +
-        "anything from this correction is applied.",
+        "Submit an expert correction for the session's most recent retrieval decision as a " +
+        "review candidate. This only queues the correction for diagnosis, structural " +
+        "validation, and a replay gate -- it never writes to memory and cannot approve, " +
+        "reject, or otherwise mutate active memory. An explicit human action elsewhere is " +
+        "required before anything from this correction is applied.",
       options: BARE_CALLABLE_TOOL_OPTIONS,
       input: {
         type: "object",
         properties: {
-          prompt: { type: "string", minLength: 1 },
-          correctionText: { type: "string", minLength: 1 },
-          expectedOutcome: { type: "string", minLength: 1 },
-          disputedMemoryIds: { type: "array", items: { type: "string", minLength: 1 } },
+          correctionText: { type: "string", minLength: 1, maxLength: 8_000 },
+          expectedOutcome: { type: "string", minLength: 1, maxLength: 8_000 },
+          disputedMemoryIds: {
+            type: "array",
+            items: { type: "string", minLength: 1, maxLength: 512 },
+            maxItems: 100,
+          },
         },
-        required: ["prompt", "correctionText", "expectedOutcome"],
+        required: ["correctionText", "expectedOutcome"],
         additionalProperties: false,
       },
       async execute(input, toolContext) {
         const args = input as {
-          prompt: string
           correctionText: string
           expectedOutcome: string
           disputedMemoryIds?: string[]
@@ -259,16 +261,27 @@ async function registerTools(
               "triggers memory retrieval before submitting a correction.",
           }
         }
-        const submitted = await orchestrator.submitCorrection({
-          sessionId: toolContext.sessionID,
-          prompt: args.prompt,
-          correctionText: args.correctionText,
-          expectedOutcome: args.expectedOutcome,
-          actor: `opencode-session:${toolContext.sessionID}`,
-          context: memoryContext(location, toolContext.sessionID),
-          trace,
-          ...(args.disputedMemoryIds ? { disputedMemoryIds: args.disputedMemoryIds } : {}),
-        })
+        let submitted
+        try {
+          submitted = await orchestrator.submitCorrection({
+            sessionId: toolContext.sessionID,
+            // Bound to the exact prompt this trace was computed for --
+            // never a caller-supplied replacement -- so diagnosis is always
+            // evaluated against the retrieval manifest for the request it
+            // actually describes.
+            prompt: trace.prompt,
+            correctionText: args.correctionText,
+            expectedOutcome: args.expectedOutcome,
+            actor: `opencode-session:${toolContext.sessionID}`,
+            context: memoryContext(location, toolContext.sessionID),
+            trace,
+            ...(args.disputedMemoryIds ? { disputedMemoryIds: args.disputedMemoryIds } : {}),
+          })
+        } catch (error) {
+          return {
+            content: `Correction was not accepted: ${error instanceof Error ? error.message : "unknown error"}`,
+          }
+        }
         if ("status" in submitted) {
           return { content: "Correction review is not configured for this workspace." }
         }

@@ -314,6 +314,8 @@ export interface SynthesisResult {
 
 export interface MemoryTrace {
   sessionId: string
+  /** The exact request text (dispatch prompt, or explicit memory_search query) this trace was computed for -- binds a trace to the request it belongs to, so a caller cannot pair one request's retrieval manifest with a different, unrelated request. */
+  prompt: string
   timestamp: string
   catalogEntries: number
   catalogMatches: Array<{ id: string; title: string; score: number }>
