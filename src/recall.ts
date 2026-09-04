@@ -85,7 +85,8 @@ function normalizeResult(
         !institutionalApplies(record.institutional, context, query))) ||
     (record.metadata?.institutional !== undefined &&
       (!isInstitutionalMemory(record.metadata.institutional) ||
-        institutionalReviewStatus(record.metadata.institutional) !== "current"))
+        institutionalReviewStatus(record.metadata.institutional) !== "current" ||
+        !institutionalApplies(record.metadata.institutional, context, query)))
   ) {
     return undefined
   }

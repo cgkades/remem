@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto"
+import { spawn } from "node:child_process"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
+import process from "node:process"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { RememOrchestrator } from "../src/orchestrator.js"
@@ -72,6 +74,30 @@ interface ReplayFixture {
 
 interface ReplayJudge {
   judge(input: { rubric: string; prompt: string; memoryText: string }): Promise<string>
+}
+
+function commandJudge(command: string | undefined): ReplayJudge | undefined {
+  if (!command) return undefined
+  return {
+    judge: (input) =>
+      new Promise<string>((resolve, reject) => {
+        const child = spawn(command, [], { stdio: ["pipe", "pipe", "pipe"] })
+        let stdout = ""
+        let stderr = ""
+        child.stdout.on("data", (chunk: Buffer) => {
+          stdout += chunk.toString()
+        })
+        child.stderr.on("data", (chunk: Buffer) => {
+          stderr += chunk.toString()
+        })
+        child.on("error", reject)
+        child.on("close", (code) => {
+          if (code === 0) resolve(stdout.trim())
+          else reject(new Error(stderr.trim() || `judge exited with status ${code}`))
+        })
+        child.stdin.end(JSON.stringify(input))
+      }),
+  }
 }
 
 interface ReplayCheck {
@@ -440,7 +466,10 @@ describe("curated guidance behavioral replay", () => {
       new URL("./fixtures/replay/curated-guidance.v1.json", import.meta.url),
     )
     const fixture = JSON.parse(await readFile(fixturePath, "utf8")) as ReplayFixture
-    const results = await runReplayFixture(fixture)
+    const results = await runReplayFixture(
+      fixture,
+      commandJudge(process.env.REMEM_REPLAY_JUDGE_COMMAND),
+    )
     const outputPath = process.env.REMEM_REPLAY_RESULTS_PATH
     if (outputPath) await writeReplayResults(results, outputPath)
 

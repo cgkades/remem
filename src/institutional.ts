@@ -130,7 +130,7 @@ export function institutionalApplies(
   if (!isInstitutionalMemory(institutional)) return false
   const matches = institutional.applicability.conditions.map((condition) => {
     if (condition.kind === "topic") {
-      return prompt === undefined || tokenize(prompt).includes(condition.value.toLowerCase())
+      return prompt !== undefined && tokenize(prompt).includes(condition.value.toLowerCase())
     }
     return context[condition.field] === condition.value
   })

@@ -66,9 +66,10 @@ provider results, including continuity fallback.
 4. Run `npm run test:replay` and inspect the result artifact. Commit the fixture and deterministic
    assertions with the correction; do not accept a model judge as the only regression signal.
 
-An optional judge can receive the prompt, injected memory, and an explicit fixture-derived rubric. Its
-input and output are retained in the machine-readable result, but the runner's pass/fail result always
-comes from deterministic assertions.
+Set `REMEM_REPLAY_JUDGE_COMMAND` to an executable that accepts one JSON judge request on standard input
+and writes its judgement to standard output. The request includes the fixture-derived rubric, prompt,
+and injected memory. The output (or invocation error) is retained in the machine-readable result, but
+the runner's pass/fail result always comes from deterministic assertions.
 
 ## Required Thresholds
 
