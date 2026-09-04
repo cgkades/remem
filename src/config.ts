@@ -1,4 +1,5 @@
 import path from "node:path"
+import { DEFAULT_REEMBED_COOLDOWN_MS } from "./reembedding.js"
 import type { MemoryScopeKind } from "./types.js"
 
 export interface TokenBudgets {
@@ -331,7 +332,12 @@ export function parseConfig(options: unknown): ParsedConfig {
         timeoutMs: finiteNumber(captureOptions.timeoutMs, 1_000, 50, 10_000),
       },
       embedding: parseEmbedding(root.embedding, diagnostics),
-      reembedCooldownMs: finiteNumber(root.reembedCooldownMs, 5 * 60_000, 0, 60 * 60_000),
+      reembedCooldownMs: finiteNumber(
+        root.reembedCooldownMs,
+        DEFAULT_REEMBED_COOLDOWN_MS,
+        0,
+        60 * 60_000,
+      ),
     },
     diagnostics,
   }

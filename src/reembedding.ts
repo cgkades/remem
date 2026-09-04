@@ -22,6 +22,9 @@ export interface ReembedRunResult {
   errors: string[]
 }
 
+/** Default cooldown, overridable via `RememConfig.reembedCooldownMs` (see `config.ts`). */
+export const DEFAULT_REEMBED_COOLDOWN_MS = 5 * 60_000
+
 /**
  * Cooldown gate for opportunistic hook-triggered re-embedding: avoids
  * hammering the database with a reembedStale() attempt on every prompt.
@@ -29,7 +32,7 @@ export interface ReembedRunResult {
 export function shouldAttemptReembed(
   lastAttemptMs: number | undefined,
   now: () => number = Date.now,
-  cooldownMs = 5 * 60_000,
+  cooldownMs: number = DEFAULT_REEMBED_COOLDOWN_MS,
 ): boolean {
   return lastAttemptMs === undefined || now() - lastAttemptMs >= cooldownMs
 }
