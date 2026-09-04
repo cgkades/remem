@@ -30,6 +30,7 @@ interface CorrectionCandidateRow {
   audit: CandidateAuditEntry[]
   created_at: Date
   updated_at: Date
+  revision: number
 }
 
 function rowToCandidate(row: CorrectionCandidateRow): CorrectionCandidate {
@@ -49,6 +50,7 @@ function rowToCandidate(row: CorrectionCandidateRow): CorrectionCandidate {
     audit: row.audit,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+    revision: row.revision,
   }
 }
 
@@ -72,8 +74,8 @@ export class PostgresCorrectionCandidateStore implements CorrectionCandidateStor
       `INSERT INTO remem.correction_candidates
          (id, provider_id, state, correction, root_cause, root_cause_reason,
           affected_memory_ids, impacted_memory_ids, mutation, structural_validation,
-          replay, reviewer_decision, applied_memory_id, audit, created_at, updated_at)
-       VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14::jsonb,$15,$16)`,
+          replay, reviewer_decision, applied_memory_id, audit, created_at, updated_at, revision)
+       VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13,$14::jsonb,$15,$16,$17)`,
       [
         candidate.id,
         this.providerId,
@@ -91,6 +93,7 @@ export class PostgresCorrectionCandidateStore implements CorrectionCandidateStor
         JSON.stringify(candidate.audit),
         candidate.createdAt,
         candidate.updatedAt,
+        candidate.revision,
       ],
     )
   }
@@ -100,7 +103,7 @@ export class PostgresCorrectionCandidateStore implements CorrectionCandidateStor
     const result = await this.pool.query<CorrectionCandidateRow>(
       `SELECT id, state, correction, root_cause, root_cause_reason, affected_memory_ids,
               impacted_memory_ids, mutation, structural_validation, replay,
-              reviewer_decision, applied_memory_id, audit, created_at, updated_at
+              reviewer_decision, applied_memory_id, audit, created_at, updated_at, revision
        FROM remem.correction_candidates
        WHERE id = $1 AND provider_id = $2`,
       [candidateId, this.providerId],
@@ -113,7 +116,7 @@ export class PostgresCorrectionCandidateStore implements CorrectionCandidateStor
     const result = await this.pool.query<CorrectionCandidateRow>(
       `SELECT id, state, correction, root_cause, root_cause_reason, affected_memory_ids,
               impacted_memory_ids, mutation, structural_validation, replay,
-              reviewer_decision, applied_memory_id, audit, created_at, updated_at
+              reviewer_decision, applied_memory_id, audit, created_at, updated_at, revision
        FROM remem.correction_candidates
        WHERE provider_id = $1 AND ($2::text IS NULL OR state = $2)
        ORDER BY updated_at DESC
@@ -136,7 +139,7 @@ export class PostgresCorrectionCandidateStore implements CorrectionCandidateStor
       const result = await client.query<CorrectionCandidateRow>(
         `SELECT id, state, correction, root_cause, root_cause_reason, affected_memory_ids,
                 impacted_memory_ids, mutation, structural_validation, replay,
-                reviewer_decision, applied_memory_id, audit, created_at, updated_at
+                reviewer_decision, applied_memory_id, audit, created_at, updated_at, revision
          FROM remem.correction_candidates
          WHERE id = $1 AND provider_id = $2
          FOR UPDATE`,
@@ -155,7 +158,7 @@ export class PostgresCorrectionCandidateStore implements CorrectionCandidateStor
              affected_memory_ids = $7, impacted_memory_ids = $8, mutation = $9::jsonb,
              structural_validation = $10::jsonb, replay = $11::jsonb,
              reviewer_decision = $12::jsonb, applied_memory_id = $13, audit = $14::jsonb,
-             updated_at = $15
+             updated_at = $15, revision = $16
          WHERE id = $1 AND provider_id = $2`,
         [
           candidateId,
@@ -173,6 +176,7 @@ export class PostgresCorrectionCandidateStore implements CorrectionCandidateStor
           updated.appliedMemoryId ?? null,
           JSON.stringify(updated.audit),
           updated.updatedAt,
+          updated.revision,
         ],
       )
       await client.query("COMMIT")

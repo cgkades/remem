@@ -228,11 +228,12 @@ async function registerTools(
     draft.add({
       name: "memory_submit_correction",
       description:
-        "Submit an expert correction for the session's most recent retrieval decision as a " +
-        "review candidate. This immediately runs diagnosis, structural validation, and a " +
-        "replay gate against it, but never writes to memory and cannot approve, reject, or " +
-        "otherwise mutate active memory. An explicit human action elsewhere is required " +
-        "before anything from this correction is applied.",
+        "Submit an expert correction for the retrieval decision behind the assistant's most " +
+        "recent response (the turn before this one -- not this correction message's own " +
+        "retrieval) as a review candidate. This immediately runs diagnosis, structural " +
+        "validation, and a replay gate against it, but never writes to memory and cannot " +
+        "approve, reject, or otherwise mutate active memory. An explicit human action " +
+        "elsewhere is required before anything from this correction is applied.",
       options: BARE_CALLABLE_TOOL_OPTIONS,
       input: {
         type: "object",
@@ -266,12 +267,19 @@ async function registerTools(
           expectedOutcome: string
           disputedMemoryIds?: string[]
         }
-        const trace = orchestrator.explain(toolContext.sessionID)
+        // Deliberately the trace from the turn BEFORE this one, not
+        // orchestrator.explain()'s "latest" trace: this correction message
+        // itself already triggered a fresh dispatch trace for the current
+        // turn (via the "context" hook), so "latest" would bind the
+        // correction to its own retrieval instead of to the disputed
+        // response's. See RememOrchestrator.explainPreviousTurn.
+        const trace = orchestrator.explainPreviousTurn(toolContext.sessionID)
         if ("status" in trace) {
           return {
             content:
-              "No retrieval trace is available for this session yet; ask a question that " +
-              "triggers memory retrieval before submitting a correction.",
+              "No prior retrieval trace is available for this session yet; ask a question " +
+              "that triggers memory retrieval, let it respond, and then submit a correction " +
+              "about that response.",
           }
         }
         let submitted

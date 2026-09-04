@@ -77,6 +77,7 @@ function validatedCandidate(id: string): CorrectionCandidate {
     audit: [{ at: now, actor: "reviewer@example.test", event: "submitted" }],
     createdAt: now,
     updatedAt: now,
+    revision: 1,
   }
 }
 

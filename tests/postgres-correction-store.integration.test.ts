@@ -59,6 +59,7 @@ function candidate(overrides: Partial<CorrectionCandidate> = {}): CorrectionCand
     audit: [{ at: now, actor: "reviewer@example.test", event: "submitted" }],
     createdAt: now,
     updatedAt: now,
+    revision: 1,
     ...overrides,
   }
 }
@@ -124,6 +125,7 @@ integration("PostgresCorrectionCandidateStore", () => {
     const validated = await store.update(seeded.id, (current) => ({
       ...current,
       state: "validated",
+      revision: current.revision + 1,
       audit: [
         ...current.audit,
         { at: new Date().toISOString(), actor: "system", event: "validated" },
@@ -131,10 +133,12 @@ integration("PostgresCorrectionCandidateStore", () => {
     }))
     expect(validated.state).toBe("validated")
     expect(validated.audit).toHaveLength(2)
+    expect(validated.revision).toBe(2)
 
     const fetched = await store.get(seeded.id)
     expect(fetched?.state).toBe("validated")
     expect(fetched?.audit).toHaveLength(2)
+    expect(fetched?.revision).toBe(2)
   })
 
   it("update() rolls back and rejects when the mutate callback throws, leaving the row unchanged", async () => {

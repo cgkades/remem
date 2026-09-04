@@ -63,6 +63,65 @@ function createOrchestrator(reviewQueue?: CorrectionReviewQueue) {
   )
 }
 
+describe("RememOrchestrator.explainPreviousTurn", () => {
+  it("returns 'no-trace' before any dispatch has happened for the session", () => {
+    const orchestrator = createOrchestrator()
+    expect(orchestrator.explainPreviousTurn("session-x")).toEqual({ status: "no-trace" })
+  })
+
+  it("returns 'no-trace' after only a single turn -- there is no prior response yet to correct", async () => {
+    const orchestrator = createOrchestrator()
+    await orchestrator.processPrompt("Continue the Phoenix database migration", memoryContext)
+    expect(orchestrator.explainPreviousTurn(memoryContext.sessionId ?? "")).toEqual({
+      status: "no-trace",
+    })
+  })
+
+  it("returns the trace for the turn before the current one, not the current turn's own trace", async () => {
+    const orchestrator = createOrchestrator()
+    const original = await orchestrator.processPrompt(
+      "Continue the Phoenix database migration",
+      memoryContext,
+    )
+    // The user's correction message is itself a new dispatch, which -- per
+    // the bug this test guards against -- must not be mistaken for the
+    // trace behind the response being corrected.
+    const correctionTurn = await orchestrator.processPrompt(
+      "That answer was wrong; rollback plans are required",
+      memoryContext,
+    )
+    expect(correctionTurn.trace.prompt).not.toBe(original.trace.prompt)
+
+    const previous = orchestrator.explainPreviousTurn(memoryContext.sessionId ?? "")
+    expect("status" in previous).toBe(false)
+    if ("status" in previous) throw new Error("expected a trace")
+    expect(previous.prompt).toBe(original.trace.prompt)
+    expect(previous).not.toBe(correctionTurn.trace)
+
+    // The latest trace overall is still the current turn's, distinct from
+    // what explainPreviousTurn must return.
+    expect(orchestrator.explain(memoryContext.sessionId)).toEqual(correctionTurn.trace)
+  })
+
+  it("ignores an intervening memory_search call when finding the prior dispatch trace", async () => {
+    const orchestrator = createOrchestrator()
+    const original = await orchestrator.processPrompt(
+      "Continue the Phoenix database migration",
+      memoryContext,
+    )
+    await orchestrator.search("rollback plan policy", memoryContext)
+    const correctionTurn = await orchestrator.processPrompt(
+      "That answer was wrong; rollback plans are required",
+      memoryContext,
+    )
+
+    const previous = orchestrator.explainPreviousTurn(memoryContext.sessionId ?? "")
+    if ("status" in previous) throw new Error("expected a trace")
+    expect(previous.prompt).toBe(original.trace.prompt)
+    expect(previous).not.toBe(correctionTurn.trace)
+  })
+})
+
 describe("RememOrchestrator correction review surface", () => {
   it("reports unavailable when no review queue is configured", async () => {
     const orchestrator = createOrchestrator()

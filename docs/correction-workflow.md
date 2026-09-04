@@ -95,6 +95,18 @@ process, against the same row. Without a configured Postgres provider, the
 queue falls back to `InMemoryCorrectionCandidateStore`, which is not durable
 and not visible across processes.
 
+Every candidate also carries a `revision` counter, bumped on every write.
+`runValidation` reads a candidate, does asynchronous work (institutional
+loading, structural validation, the replay gate) against that snapshot, then
+writes a result back; `assertTransitionAllowed` alone cannot detect a human
+decision (e.g. `requestChanges`) that landed on the row while that
+computation was still in flight, since `needs_changes` is itself a
+legitimate state to start revalidation from. The finalize write compares
+`revision` against the snapshot's and aborts instead of overwriting the
+intervening decision if it changed -- `updatedAt` alone is not reliable for
+this, since two writes within the same millisecond produce an identical ISO
+timestamp.
+
 ## Applying an approval
 
 `createProviderApplyMutation` dispatches an approved mutation to the
@@ -110,12 +122,23 @@ rejected — there is nothing for a provider to write.
   correction for the current session, then immediately runs
   diagnosis/mutation-proposal/structural-validation/replay via
   `RememOrchestrator.submitCorrection`, since validation is a fully automatic
-  pipeline with no human judgment involved. Requires a retrieval trace to
-  already exist for the session, since diagnosis needs one. The correction's
-  `prompt` is always `trace.prompt` -- the exact request that trace was
-  computed for -- never a caller-supplied replacement, so a correction can
-  never be diagnosed against a retrieval manifest that doesn't actually
-  belong to it. `correctionText`/`expectedOutcome`/`prompt` are capped at
+  pipeline with no human judgment involved. Requires a _prior_ retrieval
+  trace to exist for the session -- specifically
+  `RememOrchestrator.explainPreviousTurn`, the dispatch trace for the turn
+  before the current one, not `explain()`'s "latest" trace. A single
+  "latest trace per session" cannot identify the response being corrected:
+  the correction message itself ("that answer was wrong; X is required") is
+  a new user turn, so the "context" hook already records a fresh dispatch
+  trace for it before this tool can run, and an intervening `memory_search`
+  call would shift "latest" again. `MemoryDiagnostics` instead keeps a
+  bounded per-session trace history tagged by kind (`dispatch` vs.
+  `search`), and `explainPreviousTurn` returns the second-most-recent
+  _dispatch_ trace, ignoring any `search` traces recorded in between -- the
+  trace behind the actual disputed response, not whatever retrieval the
+  correction message or an ad hoc search triggered. The correction's
+  `prompt` is always that trace's own `prompt` -- never a caller-supplied
+  replacement, so a correction can never be diagnosed against a retrieval
+  manifest that doesn't actually belong to it. `correctionText`/`expectedOutcome`/`prompt` are capped at
   8000 characters and `disputedMemoryIds` at 100 entries of 512 characters
   each (`CORRECTION_INPUT_LIMITS`), enforced in
   `CorrectionReviewQueue.submit()` itself (not just the tool's input

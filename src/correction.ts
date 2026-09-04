@@ -125,6 +125,14 @@ export interface CorrectionCandidate {
   audit: CandidateAuditEntry[]
   readonly createdAt: string
   updatedAt: string
+  /**
+   * Monotonically incremented by every `touch()`. Exists solely for
+   * optimistic-concurrency checks (`assertNotModifiedConcurrently`):
+   * `updatedAt` alone is not reliable for that, since two writes within the
+   * same millisecond produce an identical ISO timestamp and would silently
+   * defeat a string-equality staleness check.
+   */
+  revision: number
 }
 
 function isDefined<T>(value: T | undefined): value is T {
@@ -527,6 +535,32 @@ function assertTransitionAllowed(candidate: CorrectionCandidate, action: string)
 }
 
 /**
+ * Guards a long-running computation (e.g. `runValidation`'s diagnosis/
+ * replay pass) that reads a candidate, does asynchronous work against that
+ * snapshot, then writes a result back. `assertTransitionAllowed` alone does
+ * not close this window for any state pair where the finalize's starting
+ * state is itself a legitimate state to start the same operation from
+ * (e.g. `needs_changes` for revalidation): a decision recorded on the row
+ * while the computation was in flight would otherwise be silently replaced
+ * by a finalize based on stale data. Compares `revision`, not `updatedAt`:
+ * two writes within the same millisecond produce an identical ISO
+ * timestamp, which would silently defeat a string-equality staleness check.
+ */
+function assertNotModifiedConcurrently(
+  candidate: CorrectionCandidate,
+  before: CorrectionCandidate,
+  candidateId: string,
+): void {
+  if (candidate.revision !== before.revision) {
+    throw new Error(
+      `candidate ${candidateId} was modified concurrently (now at revision ${candidate.revision}, ` +
+        `was ${before.revision} when this computation started); the computed result is stale -- ` +
+        `retry against the current state instead of overwriting the intervening change`,
+    )
+  }
+}
+
+/**
  * Caps on `CorrectionInput` free-text/array fields, enforced in `submit()`.
  * A tool schema (e.g. the OpenCode `memory_submit_correction` input schema)
  * is the first line of defense but not the only one: any caller that
@@ -540,6 +574,8 @@ export const CORRECTION_INPUT_LIMITS = {
   maxDisputedMemoryIds: 100,
   maxMemoryIdLength: 512,
   maxPromptLength: 8_000,
+  maxEvidenceEntries: 100,
+  maxEvidenceEntryLength: 2_000,
 } as const
 
 function assertCorrectionInputBounds(correction: CorrectionInput): void {
@@ -549,6 +585,8 @@ function assertCorrectionInputBounds(correction: CorrectionInput): void {
     maxDisputedMemoryIds,
     maxMemoryIdLength,
     maxPromptLength,
+    maxEvidenceEntries,
+    maxEvidenceEntryLength,
   } = CORRECTION_INPUT_LIMITS
   if (correction.prompt.length > maxPromptLength) {
     throw new Error(`correction.prompt must be at most ${maxPromptLength} characters`)
@@ -571,6 +609,15 @@ function assertCorrectionInputBounds(correction: CorrectionInput): void {
   if (disputed.some((id) => id.length > maxMemoryIdLength)) {
     throw new Error(
       `each correction.disputedMemoryIds entry must be at most ${maxMemoryIdLength} characters`,
+    )
+  }
+  const evidence = correction.evidence ?? []
+  if (evidence.length > maxEvidenceEntries) {
+    throw new Error(`correction.evidence must have at most ${maxEvidenceEntries} entries`)
+  }
+  if (evidence.some((entry) => entry.length > maxEvidenceEntryLength)) {
+    throw new Error(
+      `each correction.evidence entry must be at most ${maxEvidenceEntryLength} characters`,
     )
   }
 }
@@ -646,6 +693,7 @@ function touch(
   return {
     ...candidate,
     updatedAt: at,
+    revision: candidate.revision + 1,
     audit: [...candidate.audit, { ...entry, at }],
   }
 }
@@ -674,6 +722,7 @@ export class CorrectionReviewQueue {
       audit: [{ at: now, actor: storedCorrection.actor, event: "submitted" }],
       createdAt: now,
       updatedAt: now,
+      revision: 1,
     }
     await this.store.insert(candidate)
     return candidate
@@ -693,7 +742,14 @@ export class CorrectionReviewQueue {
    * is not itself atomic with the write -- the final `store.update` re-runs
    * the terminal/locked-state check against the freshest row, so a
    * concurrent reject/approve that completed while this was computing
-   * causes this call to abort instead of clobbering that decision.
+   * causes this call to abort instead of clobbering that decision. That
+   * check alone is not enough for `needs_changes`/`requestChanges`, though:
+   * revalidation is legitimately allowed to start FROM `needs_changes`, so a
+   * `requestChanges()` call that lands while this computation is still in
+   * flight would otherwise be silently overwritten by a finalize based on a
+   * stale snapshot. `assertNotModifiedConcurrently` closes that gap by
+   * requiring the row's `updatedAt` to still match what it was when this
+   * call started.
    */
   async runValidation(candidateId: string): Promise<CorrectionCandidate> {
     const before = await this.store.get(candidateId)
@@ -705,6 +761,7 @@ export class CorrectionReviewQueue {
 
     if (diagnosis.rootCause === "ambiguous") {
       return this.store.update(candidateId, (candidate) => {
+        assertNotModifiedConcurrently(candidate, before, candidateId)
         assertTransitionAllowed(candidate, "be revalidated")
         let next: CorrectionCandidate = {
           ...candidate,
@@ -752,6 +809,7 @@ export class CorrectionReviewQueue {
     }
 
     return this.store.update(candidateId, (candidate) => {
+      assertNotModifiedConcurrently(candidate, before, candidateId)
       assertTransitionAllowed(candidate, "be revalidated")
       let next: CorrectionCandidate = {
         ...candidate,
@@ -875,7 +933,10 @@ export class CorrectionReviewQueue {
           `candidate ${candidateId} cannot be approved from state "${candidate.state}"; it must pass validation first`,
         )
       }
-      return { ...candidate, state: "applying" }
+      // Bump revision (not a full touch(): this transient claim is not a
+      // reviewer decision and deliberately isn't its own audit entry) so
+      // assertNotModifiedConcurrently in runValidation sees this write too.
+      return { ...candidate, state: "applying", revision: candidate.revision + 1 }
     })
     const mutation = claimed.mutation
     if (!mutation) throw new Error(`candidate ${candidateId} was claimed without a mutation`)
@@ -885,7 +946,9 @@ export class CorrectionReviewQueue {
       result = await this.applyMutation(mutation, claimed.correction.context)
     } catch (error) {
       await this.store.update(candidateId, (candidate) =>
-        candidate.state === "applying" ? { ...candidate, state: "validated" } : candidate,
+        candidate.state === "applying"
+          ? { ...candidate, state: "validated", revision: candidate.revision + 1 }
+          : candidate,
       )
       throw error
     }

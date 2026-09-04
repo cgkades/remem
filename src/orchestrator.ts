@@ -409,7 +409,7 @@ export class RememOrchestrator {
         .filter((attempt) => attempt.status !== "ok")
         .map((attempt) => `provider ${attempt.providerId} ${attempt.status}`),
     }
-    this.diagnostics.record(trace)
+    this.diagnostics.record(trace, "search")
     this.logTrace(trace)
     return {
       text: synthesis.text || "No relevant memories were found in the selected providers.",
@@ -495,6 +495,22 @@ export class RememOrchestrator {
 
   explain(sessionId?: string): MemoryTrace | { status: "no-trace" } {
     return this.diagnostics.latest(sessionId) ?? { status: "no-trace" }
+  }
+
+  /**
+   * The dispatch trace for the turn before the current one, for callers
+   * (e.g. `memory_submit_correction`) that need the retrieval decision
+   * behind an already-delivered response, not whatever the current turn's
+   * own message happens to be. A single "latest trace" per session cannot
+   * disambiguate these: when the current turn's message is itself a
+   * correction ("that answer was wrong; X is required"), the "context" hook
+   * running for that turn records a fresh dispatch trace for the
+   * correction message before any tool call in that same turn can run, so
+   * `explain()`'s "latest" would return the trace for the correction text,
+   * not for the disputed response. See `MemoryDiagnostics.priorDispatch`.
+   */
+  explainPreviousTurn(sessionId: string): MemoryTrace | { status: "no-trace" } {
+    return this.diagnostics.priorDispatch(sessionId) ?? { status: "no-trace" }
   }
 
   /**

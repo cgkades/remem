@@ -34,8 +34,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for. This binds a trace to the request it belongs to so `memory_submit_correction` can derive its
   `prompt` from the trace itself rather than accepting a caller-supplied value. Any code constructing
   a `MemoryTrace` directly (rather than through the orchestrator) must now supply `prompt`.
+- `CorrectionCandidate` gained a new required `revision` field, an optimistic-concurrency counter
+  bumped on every write. Any code constructing a `CorrectionCandidate` directly (test fixtures,
+  custom `CorrectionCandidateStore` implementations) must now supply `revision`.
 
 ### Fixed
+
+- `memory_submit_correction` now binds a correction to the retrieval trace of the turn _before_ the
+  current one (`RememOrchestrator.explainPreviousTurn`) instead of the session's single "latest"
+  trace. A single latest-trace slot could not distinguish the disputed response's own trace from the
+  trace the correction message itself (or an intervening `memory_search` call) generated, so a
+  correction could silently bind to the wrong retrieval decision.
+- `CorrectionReviewQueue.runValidation`'s finalize write now aborts if the candidate was modified
+  concurrently (e.g. a human `requestChanges()` call landing while validation's replay gate was still
+  running), instead of silently overwriting that decision. `needs_changes` is a legitimate state to
+  start revalidation from, so the existing terminal-state check did not catch this.
+- `CorrectionInput.evidence` is now bounded (100 entries of 2000 characters each, `CORRECTION_INPUT_LIMITS`)
+  in `CorrectionReviewQueue.submit()`, matching every other free-text/array field persisted to durable
+  JSONB storage.
 
 - The OpenCode plugin now correctly reads the neural embedding backend `remem init` writes to the
   application config; previously `parseEmbedding` only recognized the plugin-options config shape

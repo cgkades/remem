@@ -72,6 +72,7 @@ describe("createCorrectionReviewQueue", () => {
       audit: [],
       createdAt: "2026-09-04T00:00:00.000Z",
       updatedAt: "2026-09-04T00:00:00.000Z",
+      revision: 1,
     }
     await store.insert(applied)
     await expect(listPriorApplied?.()).resolves.toEqual([applied])

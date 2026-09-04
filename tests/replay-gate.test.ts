@@ -66,6 +66,7 @@ function candidate(overrides: Partial<CorrectionCandidate> = {}): CorrectionCand
     audit: [],
     createdAt: now,
     updatedAt: now,
+    revision: 1,
     ...overrides,
   }
 }

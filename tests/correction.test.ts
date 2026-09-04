@@ -628,10 +628,66 @@ describe("CorrectionReviewQueue", () => {
     expect(rejected.state).toBe("rejected")
     resolveGate()
     // The in-flight validation must not clobber the rejection once the
-    // gate finally resolves; it aborts against the fresher, locked state.
-    await expect(validation).rejects.toThrow(/state "rejected"/)
+    // gate finally resolves; it aborts because the row changed underneath
+    // it (assertNotModifiedConcurrently fires before the terminal-state
+    // check even gets a chance to name "rejected" specifically).
+    await expect(validation).rejects.toThrow(/modified concurrently/)
     const stored = await q.get(candidate.id)
     expect(stored?.state).toBe("rejected")
+  })
+
+  it("requestChanges made while validation is still awaiting the replay gate wins, even though needs_changes is not a locked state", async () => {
+    let resolveGate: (() => void) | undefined
+    const blockingGate: ReplayGate = {
+      run: () =>
+        new Promise((resolve) => {
+          resolveGate = () => resolve({ passed: true, caseIds: [], failures: [] })
+        }),
+    }
+    const { q } = queue(blockingGate)
+    const candidate = await q.submit(correction())
+    const validation = q.runValidation(candidate.id)
+    // Wait until validation has actually reached the (blocking) replay gate,
+    // so this exercises the race against the finalize write, not against
+    // runValidation's own pre-replay bookkeeping.
+    while (!resolveGate) await Promise.resolve()
+    const changed = await q.requestChanges(candidate.id, "reviewer@example.test", "too fast")
+    expect(changed.state).toBe("needs_changes")
+    resolveGate()
+    // needs_changes is a legitimate state to start revalidation from (that's
+    // how a fixed-up correction gets re-checked), so assertTransitionAllowed
+    // alone would let the stale finalize proceed and silently overwrite the
+    // reviewer's decision. It must instead abort because the row changed
+    // since this computation started.
+    await expect(validation).rejects.toThrow(/modified concurrently/)
+    const stored = await q.get(candidate.id)
+    expect(stored?.state).toBe("needs_changes")
+    expect(stored?.reviewerDecision?.decision).toBe("changes_requested")
+    expect(stored?.reviewerDecision?.reason).toBe("too fast")
+  })
+
+  it("requestChanges made while an ambiguous diagnosis is still loading institutional memory also wins", async () => {
+    let resolveLoad: (() => void) | undefined
+    const store = new InMemoryCorrectionCandidateStore()
+    const q = new CorrectionReviewQueue(
+      store,
+      () =>
+        new Promise((resolve) => {
+          resolveLoad = () => resolve([])
+        }),
+      () => [],
+      () => Promise.resolve({ memoryId: "new-memory-id" }),
+      passingGate,
+    )
+    const candidate = await q.submit(correction({ disputedMemoryIds: ["missing.id"] }))
+    const validation = q.runValidation(candidate.id)
+    while (!resolveLoad) await Promise.resolve()
+    const changed = await q.requestChanges(candidate.id, "reviewer@example.test", "too fast")
+    expect(changed.state).toBe("needs_changes")
+    resolveLoad()
+    await expect(validation).rejects.toThrow(/modified concurrently/)
+    const stored = await store.get(candidate.id)
+    expect(stored?.reviewerDecision?.reason).toBe("too fast")
   })
 
   it("requestChanges preserves the candidate and audit trail without mutating memory", async () => {
@@ -657,7 +713,7 @@ describe("CorrectionReviewQueue", () => {
       passingGate,
     )
     const candidate = await q.submit(correction())
-    await q.runValidation(candidate.id)
+    const validated = await q.runValidation(candidate.id)
     await expect(q.approve(candidate.id, "reviewer@example.test")).rejects.toThrow(
       "database unavailable",
     )
@@ -665,6 +721,13 @@ describe("CorrectionReviewQueue", () => {
     expect(stored?.state).toBe("validated")
     expect(stored?.reviewerDecision).toBeUndefined()
     expect(stored?.audit.some((entry) => entry.event === "approved")).toBe(false)
+    // Reverting from "applying" back to "validated" is still a write and
+    // must still bump revision, even though it isn't its own audit entry --
+    // otherwise a concurrent runValidation snapshotting "before" the claim
+    // could pass assertNotModifiedConcurrently against a candidate that
+    // actually changed twice (validated -> applying -> validated) in between.
+    // Two writes happened: the "applying" claim, then the revert.
+    expect(stored?.revision).toBe(validated.revision + 2)
   })
 
   it("does not revert to validated when applyMutation succeeds but finalizing the approval fails, to avoid a double-apply on retry", async () => {
@@ -855,6 +918,16 @@ describe("CorrectionReviewQueue", () => {
     expect(stored?.correction.actor).toBe("reviewer@example.test")
   })
 
+  it("bumps revision on every touch, distinct from updatedAt", async () => {
+    const { q } = queue(passingGate)
+    const submitted = await q.submit(correction())
+    expect(submitted.revision).toBe(1)
+    const validated = await q.runValidation(submitted.id)
+    expect(validated.revision).toBeGreaterThan(submitted.revision)
+    const approved = await q.approve(submitted.id, "reviewer@example.test")
+    expect(approved.revision).toBeGreaterThan(validated.revision)
+  })
+
   it("clones the correction on ingestion so mutating the caller's original object after submit has no effect", async () => {
     const { q } = queue(passingGate)
     const original = correction()
@@ -935,6 +1008,16 @@ describe("CorrectionReviewQueue", () => {
     )
   })
 
+  it("rejects too many or too-long evidence entries", async () => {
+    const { q } = queue(passingGate)
+    await expect(
+      q.submit(correction({ evidence: Array.from({ length: 101 }, (_, i) => `e-${i}`) })),
+    ).rejects.toThrow(/evidence must have at most 100 entries/)
+    await expect(q.submit(correction({ evidence: ["x".repeat(2_001)] }))).rejects.toThrow(
+      /each correction.evidence entry must be at most 2000 characters/,
+    )
+  })
+
   it("rejects an oversized prompt before persisting", async () => {
     const { q } = queue(passingGate)
     await expect(q.submit(correction({ prompt: "x".repeat(8_001) }))).rejects.toThrow(
@@ -942,7 +1025,7 @@ describe("CorrectionReviewQueue", () => {
     )
   })
 
-  it("accepts correctionText/expectedOutcome/actor/prompt/disputedMemoryIds exactly at their bounds", async () => {
+  it("accepts correctionText/expectedOutcome/actor/prompt/disputedMemoryIds/evidence exactly at their bounds", async () => {
     const { q } = queue(passingGate)
     const candidate = await q.submit(
       correction({
@@ -951,6 +1034,7 @@ describe("CorrectionReviewQueue", () => {
         actor: "x".repeat(255),
         prompt: "x".repeat(8_000),
         disputedMemoryIds: Array.from({ length: 100 }, () => "x".repeat(512)),
+        evidence: Array.from({ length: 100 }, () => "x".repeat(2_000)),
       }),
     )
     expect(candidate.correction.correctionText).toHaveLength(8_000)
@@ -958,6 +1042,7 @@ describe("CorrectionReviewQueue", () => {
     expect(candidate.correction.actor).toHaveLength(255)
     expect(candidate.correction.prompt).toHaveLength(8_000)
     expect(candidate.correction.disputedMemoryIds).toHaveLength(100)
+    expect(candidate.correction.evidence).toHaveLength(100)
   })
 
   it("terminal states reject further transitions: revalidate, reject, and requestChanges after apply", async () => {
