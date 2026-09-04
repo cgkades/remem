@@ -5,7 +5,12 @@ import { createProviders } from "../providers/factory.js"
 import { PostgresMemoryProvider } from "../providers/postgres.js"
 import { createEmbeddingModel } from "../storage/embedding-neural.js"
 import { migrationStatus } from "../storage/migrations.js"
-import { openCodeConfigPath, type RememPaths } from "../storage/paths.js"
+import {
+  openCodeConfigPath,
+  packageRoot,
+  piSettingsPath,
+  type RememPaths,
+} from "../storage/paths.js"
 import type { RememAppConfig } from "../storage/config-file.js"
 import { managedCommand } from "./managed.js"
 import type { ProcessRunner } from "./process.js"
@@ -39,6 +44,45 @@ async function checkPermissions(file: string, name: string): Promise<DoctorCheck
       : { name, status: "ok", detail: `permissions ${mode.toString(8)}` }
   } catch {
     return { name, status: "error", detail: "file is missing or unreadable" }
+  }
+}
+
+/**
+ * Checks whether this installed package's own root directory is present in
+ * Pi's `packages` setting at `piPath`. Parses the settings JSON and checks
+ * array membership rather than a raw substring match on the file text:
+ * `JSON.stringify` escapes path separators (e.g. `\` on Windows becomes
+ * `\\`), so a `text.includes(root)` substring check would never match a
+ * correctly configured settings file on Windows. Exported standalone so it
+ * is unit-testable without a live PostgreSQL connection, unlike the rest of
+ * `runDoctor`.
+ */
+export async function piIntegrationCheck(piPath: string): Promise<DoctorCheck> {
+  const root = packageRoot(import.meta.url)
+  try {
+    const text = await readFile(piPath, "utf8")
+    let configured = false
+    try {
+      const parsed: unknown = JSON.parse(text)
+      const packages =
+        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>).packages
+          : undefined
+      configured = Array.isArray(packages) && packages.includes(root)
+    } catch {
+      configured = false
+    }
+    return {
+      name: "Pi integration",
+      status: configured ? "ok" : "warn",
+      detail: configured ? `configured in ${piPath}` : `add ${root} to packages in ${piPath}`,
+    }
+  } catch {
+    return {
+      name: "Pi integration",
+      status: "warn",
+      detail: "run remem init --pi or configure the extension manually",
+    }
   }
 }
 
@@ -251,6 +295,9 @@ export async function runDoctor(
       detail: "run remem init --opencode or configure the plugin manually",
     })
   }
+
+  const piPath = config.pi?.settingsPath ?? piSettingsPath()
+  checks.push(await piIntegrationCheck(piPath))
 
   return { healthy: checks.every((check) => check.status !== "error"), checks }
 }

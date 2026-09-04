@@ -4,7 +4,8 @@
   <img src="docs/assets/remem-logo.png" alt="ReMem — Remember What Matters" width="720" />
 </p>
 
-Remem is a local-first memory orchestration plugin for [OpenCode](https://opencode.ai). It recognizes
+Remem is a local-first memory orchestration plugin for [OpenCode](https://opencode.ai) and
+[Pi](https://github.com/earendil-works/pi-coding-agent). It recognizes
 when prior work may matter, routes bounded recall across memory providers, and injects attributed
 working context instead of dumping an entire search result into the model prompt.
 
@@ -13,8 +14,8 @@ provides a control plane over those stores and uses a managed PostgreSQL provide
 Remem-native memory.
 
 This project is not affiliated with the unrelated Rust project
-[`majiayu000/remem`](https://github.com/majiayu000/remem). The npm package identity for this OpenCode
-plugin is `opencode-remem`.
+[`majiayu000/remem`](https://github.com/majiayu000/remem). The npm package identity for this
+OpenCode/Pi plugin is `opencode-remem`.
 
 ```text
 recognition -> retrieval planning -> recall -> synthesis -> context injection
@@ -41,7 +42,8 @@ What works now:
   conflict preservation, supersession, and restart-safe PostgreSQL run records;
 - opt-in bounded, deterministic capture of explicit user corrections, decisions, and preferences into
   reviewable pending candidates;
-- OpenCode tools `memory_search`, `memory_status`, and `memory_explain`;
+- OpenCode and Pi tools `memory_search`, `memory_status`, and `memory_explain`, plus Pi's
+  `before_agent_start` memory injection and optional compaction-context injection;
 - logical backup and guarded restore/reset commands; and
 - an executable evaluation corpus plus PostgreSQL integration tests in CI on Node.js 22 and 24.
 
@@ -88,6 +90,14 @@ The package root and `./opencode/v2` are v2 entries. OpenCode `1.18.26` compatib
 `./server` or `./opencode/v1`; it uses the older `chat.message` boundary. See
 [OpenCode integration](docs/opencode-integration.md) and [the examples](examples/).
 
+## Pi
+
+`remem init --pi` registers this package as a local [Pi package](https://github.com/earendil-works/pi-coding-agent/blob/main/docs/packages.md)
+in Pi's global settings, so Pi auto-discovers the extension declared at `package.json#pi.extensions`
+(`./dist/hosts/pi/index.js`). Restart Pi, or run `/reload`, after changing its settings. See
+[Pi integration](docs/pi-integration.md) for the event mapping, tool parity with OpenCode, and how
+`projectId`/`worktree` are derived without Pi's own project concept.
+
 ## Storage Modes
 
 Managed mode creates protected configuration, starts a dedicated Docker volume, and applies schema
@@ -113,7 +123,7 @@ installation. See [Storage architecture](docs/storage-architecture.md) and
 ## CLI
 
 ```text
-remem init [--mode managed|external] [--database-url URL] [--opencode]
+remem init [--mode managed|external] [--database-url URL] [--opencode] [--pi]
 remem start
 remem stop
 remem status
@@ -170,6 +180,7 @@ be visible in every context that configures the provider.
 - [Retrieval pipeline](docs/retrieval-pipeline.md)
 - [Provider interface](docs/provider-interface.md)
 - [OpenCode integration](docs/opencode-integration.md)
+- [Pi integration](docs/pi-integration.md)
 - [Security model](docs/security-model.md)
 - [Evaluation](docs/evaluation.md)
 - [MVP boundary](docs/mvp.md)

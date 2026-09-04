@@ -13,7 +13,7 @@ import { withTimeout } from "./timeout.js"
 import type { MemoryContext, MemoryProvider, RememLogger } from "./types.js"
 
 export interface UserPromptCapture {
-  host: "opencode-v1" | "opencode-v2"
+  host: "opencode-v1" | "opencode-v2" | "pi"
   context: MemoryContext
   sessionId: string
   messageId?: string

@@ -48,6 +48,10 @@
       "types": "./dist/hosts/opencode/v2.d.ts",
       "import": "./dist/hosts/opencode/v2.js"
     },
+    "./pi": {
+      "types": "./dist/hosts/pi/index.d.ts",
+      "import": "./dist/hosts/pi/index.js"
+    },
     "./core": {
       "types": "./dist/core.d.ts",
       "import": "./dist/core.js"
@@ -73,6 +77,9 @@
     "test:replay": "node scripts/run-replay-tests.mjs",
     "test:opencode-v2": "node tests/opencode-v2.e2e.mjs",
     "test:opencode-v2:docker": "docker build -f docker/opencode-v2-e2e.Dockerfile -t remem-opencode-v2-e2e . && docker run --rm remem-opencode-v2-e2e",
+    "test:pi": "vitest run tests/pi-integration.test.ts",
+    "test:pi:e2e": "node tests/pi.e2e.mjs",
+    "test:pi:e2e:docker": "docker build -f docker/pi-e2e.Dockerfile -t remem-pi-e2e . && docker run --rm remem-pi-e2e",
     "test:postgres": "REMEM_TEST_DATABASE_URL=postgresql://remem_test:remem_test@127.0.0.1:54330/remem_test vitest run tests/postgres-provider.integration.test.ts",
     "test:postgres:down": "docker compose -f compose.test.yaml down --volumes",
     "test:postgres:up": "docker compose -f compose.test.yaml up --detach --wait",
@@ -80,6 +87,8 @@
   },
   "keywords": [
     "opencode",
+    "pi",
+    "pi-package",
     "plugin",
     "memory",
     "local-first",
@@ -90,6 +99,11 @@
     "llm",
     "agent"
   ],
+  "pi": {
+    "extensions": [
+      "./dist/hosts/pi/index.js"
+    ]
+  },
   "overrides": {
     "sharp": "^0.35.4"
   },
@@ -102,11 +116,25 @@
     "pg": "^8.23.0",
     "undici": "^7.29.0"
   },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.85.0",
+    "typebox": "^1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.85.0",
     "@eslint/js": "^10.0.1",
     "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^10.9.1",
     "prettier": "^3.9.6",
+    "typebox": "^1.3.25",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.69.0",
     "vitest": "^4.1.11"
