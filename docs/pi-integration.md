@@ -34,15 +34,15 @@ handler below no-ops if that state is unset (before the first `session_start`, o
 `/new`, `/resume`, and `/fork` flows, which re-fire `session_shutdown` then `session_start` against
 the same long-lived extension instance.
 
-| Concern                                                    | Pi event                 | Behavior                                                                                                                                                                                           |
-| ---------------------------------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Build orchestrator, providers, embedding model             | `session_start`          | Reads Remem's own installed app configuration (see [Plugin Configuration](#plugin-configuration) below); logs and no-ops on failure rather than blocking Pi startup.                               |
-| Inject recalled memory before the agent runs               | `before_agent_start`     | Calls `orchestrator.processPrompt(...)`, returning an injected `message` with the same untrusted-memory attribution used by the OpenCode adapters (`TRUSTED_REMEM_INSTRUCTION`).                   |
-| `memory_search` / `memory_status` / `memory_explain` tools | `pi.registerTool(...)`   | Registered once at extension load; each handler reads current session state through the closure and fails open when state is unset or the orchestrator call throws.                                |
-| Capture explicit user statements                           | `input`                  | Fire-and-forget `CaptureCoordinator.enqueue(...)`, gated by the existing `capture.enabled` config flag (disabled by default, unchanged).                                                           |
-| Background reembed-on-input                                | `input`                  | Mirrors `src/hosts/opencode/v2.ts`'s `shouldAttemptReembed`/`reembedStale()` fire-and-forget pattern, using the same 5-minute cooldown.                                                            |
-| Compaction-time context injection                          | `session_before_compact` | Gated behind `config.compaction` (off by default), mirroring OpenCode v1's `experimental.session.compacting` hook; returns a `compaction` result built from `orchestrator.compactionContext(...)`. |
-| Lifecycle / teardown                                       | `session_shutdown`       | Disposes the capture coordinator and providers, then clears the session state.                                                                                                                     |
+| Concern                                                    | Pi event                 | Behavior                                                                                                                                                                                                                                                                                                          |
+| ---------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Build orchestrator, providers, embedding model             | `session_start`          | Reads Remem's own installed app configuration (see [Plugin Configuration](#plugin-configuration) below); logs and no-ops on failure rather than blocking Pi startup.                                                                                                                                              |
+| Inject recalled memory before the agent runs               | `before_agent_start`     | Calls `orchestrator.processPrompt(...)`, returning an injected `message` with the same untrusted-memory attribution used by the OpenCode adapters (`TRUSTED_REMEM_INSTRUCTION`).                                                                                                                                  |
+| `memory_search` / `memory_status` / `memory_explain` tools | `pi.registerTool(...)`   | Registered once at extension load; each handler reads current session state through the closure and fails open when state is unset or the orchestrator call throws.                                                                                                                                               |
+| Capture explicit user statements                           | `input`                  | Fire-and-forget `CaptureCoordinator.enqueue(...)`, gated by the existing `capture.enabled` config flag (disabled by default, unchanged) **and** by `event.source === "interactive"` -- see [Capture Provenance](#capture-provenance) below.                                                                       |
+| Background reembed-on-input                                | `input`                  | Mirrors `src/hosts/opencode/v2.ts`'s `shouldAttemptReembed`/`reembedStale()` fire-and-forget pattern, using the same 5-minute cooldown. Runs regardless of `event.source`: it is opportunistic maintenance, not an assertion about who produced the input.                                                        |
+| Compaction summarization                                   | `session_before_compact` | Gated behind `config.compaction` (off by default) -- see [Compaction](#compaction) below. This fully replaces Pi's own compaction summary, not just OpenCode v1's additive `experimental.session.compacting` context-push, so the adapter has to generate a real conversation summary, not just Remem continuity. |
+| Lifecycle / teardown                                       | `session_shutdown`       | Disposes the capture coordinator and providers, then clears the session state.                                                                                                                                                                                                                                    |
 
 ## Pi Tools
 
@@ -63,6 +63,48 @@ Unlike OpenCode's plugin-registered tools (see
 `src/hosts/opencode/v2.ts`), Pi tools registered via `pi.registerTool(...)` are directly callable by
 name with no equivalent `codemode` workaround -- there is only one tool-execution path in Pi's
 extension API.
+
+## Capture Provenance
+
+Pi's `InputEvent.source` distinguishes `"interactive"` (a human typing at the terminal),
+`"rpc"` (programmatic/API-driven input), and `"extension"` (another extension calling
+`sendUserMessage`). Only `"interactive"` input is eligible for `CaptureCoordinator` --
+`src/hosts/pi/index.ts`'s `isCaptureEligibleInputSource` is the single gate applied before
+`capture.enqueue(...)` is ever called.
+
+This matters because capture can classify certain phrasing (`"Always use ..."`, `"We decided
+..."`, `"Actually, ..."`) into a durable review candidate representing an explicit user
+preference, decision, or correction. If `"extension"`-sourced input reached capture, another
+extension could get its own generated text durably recorded as though a human had explicitly
+stated it -- letting generated content authorize its own persistence, the same class of problem
+`src/capture.ts`'s synthetic-text filtering already guards against for _content_. `"rpc"` input
+is conservatively treated the same way (excluded) until there is a reviewed trust policy for it;
+relaxing that later should only ever apply to `"rpc"` explicitly, never `"extension"`.
+
+Background reembed-on-input is not gated this way: it is opportunistic maintenance triggered by
+the fact that _some_ input happened, not an assertion about who produced it.
+
+## Compaction
+
+Pi's `session_before_compact` return value is a full _replacement_ for Pi's own compaction
+summary, unlike OpenCode v1's `experimental.session.compacting` hook, which only pushes
+additional context alongside Pi's normal summarization. If the adapter returned
+Remem-continuity-only text here, it would silently discard the actual conversation history being
+compacted the first time compaction ran.
+
+When `config.compaction` is enabled and a model is available (`ctx.model`), the adapter
+therefore generates a real conversation summary itself -- serializing
+`preparation.messagesToSummarize` and `preparation.turnPrefixMessages`, calling
+`ctx.modelRegistry.complete(...)` with the current model, and only then appending bounded Remem
+continuity (`orchestrator.compactionContext(...)`) after the real summary. This mirrors the
+pattern in Pi's own [`custom-compaction.ts`](https://github.com/earendil-works/pi-coding-agent/blob/main/examples/extensions/custom-compaction.ts)
+example. Enabling `config.compaction` for the Pi adapter is therefore a bigger behavioral change
+than for OpenCode v1: it takes over compaction summarization entirely (at the cost of one extra
+model call per compaction), not just adds a supplementary context block.
+
+The adapter falls back to Pi's own default compactor (returns `undefined`) whenever it cannot
+safely produce a real summary: no `ctx.model` configured, the summarizer call fails, or the
+summarizer returns empty text. It never returns a Remem-only summary in place of the real one.
 
 ## Host Location and `projectId` Derivation
 

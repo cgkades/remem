@@ -1,4 +1,5 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent"
+import { randomUUID } from "node:crypto"
+import type { ExtensionAPI, ExtensionContext, InputSource } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 import { createCaptureCoordinator, type CaptureCoordinator } from "../../capture.js"
 import { parseConfig, type RememConfig } from "../../config.js"
@@ -35,6 +36,69 @@ interface PiSessionState {
   capture?: CaptureCoordinator | undefined
   primaryPostgres?: PostgresMemoryProvider | undefined
   lastReembedAttempt?: number | undefined
+}
+
+/**
+ * Whether Pi input from `source` may be treated as an explicit user
+ * statement eligible for `CaptureCoordinator` (opt-in capture of
+ * corrections/preferences/decisions into durable review candidates).
+ *
+ * Only `"interactive"` (a human typing) qualifies. `"extension"` input is
+ * synthesized by another extension via `sendUserMessage` -- if it were
+ * captured, that extension could get its own generated text durably
+ * recorded as though a human had explicitly stated it, which would let
+ * generated content authorize its own persistence (the same class of
+ * problem `containsSensitiveCredential`/synthetic-text filtering in
+ * `src/capture.ts` already guards against for *content*, not provenance).
+ * `"rpc"` (API-driven, not necessarily a human at a keyboard) is
+ * conservatively treated the same way until a reviewed trust policy exists
+ * for it; this can be relaxed later, but only for `"rpc"` explicitly, not
+ * `"extension"`.
+ */
+export function isCaptureEligibleInputSource(source: InputSource): boolean {
+  return source === "interactive"
+}
+
+/**
+ * Minimal, dependency-free rendering of Pi `AgentMessage[]` into plain text
+ * for our own summarization prompt. Deliberately does not import Pi's own
+ * `convertToLlm`/`serializeConversation` helpers: those are only reachable
+ * through `@earendil-works/pi-coding-agent`'s top-level entry, which (as of
+ * 0.85.0) transitively imports `@earendil-works/pi-server` via
+ * `dist/experimental/server.js` without declaring it as a dependency --
+ * that import can fail to resolve depending on how a consumer's `npm
+ * install` happens to hoist packages. This rendering does not need to match
+ * Pi's internal format exactly; it only needs to give the summarizer model
+ * enough plain text to work with.
+ */
+function renderMessagesForSummary(messages: readonly unknown[]): string {
+  return messages
+    .map((message) => {
+      if (!message || typeof message !== "object") return ""
+      const role = "role" in message ? String(message.role) : "unknown"
+      const content = "content" in message ? message.content : undefined
+      const text = Array.isArray(content)
+        ? content
+            .map((part): string => {
+              if (!part || typeof part !== "object") return ""
+              if ("text" in part && typeof (part as { text: unknown }).text === "string") {
+                return (part as { text: string }).text
+              }
+              if ("type" in part && (part as { type: unknown }).type === "toolCall") {
+                const name = "name" in part ? String((part as { name: unknown }).name) : "tool"
+                return `[tool call: ${name}]`
+              }
+              return ""
+            })
+            .filter((part) => part.length > 0)
+            .join("\n")
+        : typeof content === "string"
+          ? content
+          : ""
+      return `[${role}]: ${text}`
+    })
+    .filter((line) => line.trim().length > 4)
+    .join("\n")
 }
 
 function piLogger(): RememLogger {
@@ -262,22 +326,26 @@ export default function remem(pi: ExtensionAPI): void {
   pi.on("input", (event, ctx) => {
     if (!state) return
     const sessionId = ctx.sessionManager.getSessionId()
-    try {
-      state.capture?.enqueue({
-        host: "pi",
-        context: contextFor(state, ctx),
-        sessionId,
-        text: event.text,
-      })
-    } catch (error) {
-      safeLoggerCall(logger, "warn", "capture.enqueue_failed", {
-        error: error instanceof Error ? error.name : "unknown error",
-      })
+    if (isCaptureEligibleInputSource(event.source)) {
+      try {
+        state.capture?.enqueue({
+          host: "pi",
+          context: contextFor(state, ctx),
+          sessionId,
+          text: event.text,
+        })
+      } catch (error) {
+        safeLoggerCall(logger, "warn", "capture.enqueue_failed", {
+          error: error instanceof Error ? error.name : "unknown error",
+        })
+      }
     }
     const primaryPostgres = state.primaryPostgres
     if (primaryPostgres && shouldAttemptReembed(state.lastReembedAttempt)) {
       state.lastReembedAttempt = Date.now()
-      // Fire-and-forget: must never delay or fail input handling.
+      // Fire-and-forget: must never delay or fail input handling. Reembedding
+      // is opportunistic maintenance, not an assertion about the input's
+      // provenance, so it runs regardless of `event.source`.
       void primaryPostgres.reembedStale().catch((error) => {
         safeLoggerCall(logger, "warn", "reembed.attempt_failed", {
           error: error instanceof Error ? error.name : "unknown error",
@@ -288,13 +356,68 @@ export default function remem(pi: ExtensionAPI): void {
 
   pi.on("session_before_compact", async (event, ctx) => {
     if (!state || !state.config.compaction) return
+    const { preparation, signal } = event
+    const model = ctx.model
+    // `{ compaction: {...} }` fully REPLACES Pi's own compaction summary --
+    // it is not additive the way OpenCode v1's `experimental.session
+    // .compacting` context-push is. Returning Remem-only continuity text
+    // here (as an earlier version of this adapter did) would silently
+    // discard the actual conversation history being compacted. Without a
+    // model to generate a real summary, fall back to Pi's default compactor
+    // entirely rather than risk that loss.
+    if (!model) return undefined
     try {
-      const summary = await state.orchestrator.compactionContext(contextFor(state, ctx))
+      const allMessages = [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages]
+      const conversationText = renderMessagesForSummary(allMessages)
+      const continuity = await state.orchestrator.compactionContext(contextFor(state, ctx))
+      const previousContext = preparation.previousSummary
+        ? `\n\nPrevious session summary for context:\n${preparation.previousSummary}`
+        : ""
+      const response = await ctx.modelRegistry.complete(
+        model,
+        {
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: [
+                    "You are a conversation summarizer. Create a comprehensive summary of this",
+                    "conversation that captures goals, decisions, technical details, current",
+                    "state, blockers, and next steps. Format as structured markdown. This",
+                    "summary REPLACES the summarized conversation history, so include",
+                    "everything needed to continue the work.",
+                    previousContext,
+                    "",
+                    "<conversation>",
+                    conversationText,
+                    "</conversation>",
+                  ].join("\n"),
+                },
+              ],
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        { maxTokens: 8192, signal, cacheRetention: "none", sessionId: randomUUID() },
+      )
+      const summaryText = response.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n")
+        .trim()
+      // Empty summary or any failure below falls back to Pi's default
+      // compactor (return undefined) rather than losing history.
+      if (!summaryText) return undefined
       return {
         compaction: {
-          summary,
-          firstKeptEntryId: event.preparation.firstKeptEntryId,
-          tokensBefore: event.preparation.tokensBefore,
+          // Remem continuity is appended to the real conversation summary,
+          // not substituted for it -- see the comment above.
+          summary: [summaryText, "", continuity].join("\n"),
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+          usage: response.usage,
         },
       }
     } catch (error) {

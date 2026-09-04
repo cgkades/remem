@@ -6,7 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { configurePi } from "../src/cli/index.js"
 import { piIntegrationCheck } from "../src/cli/doctor.js"
-import remem from "../src/hosts/pi/index.js"
+import remem, { isCaptureEligibleInputSource } from "../src/hosts/pi/index.js"
 import { deriveHostLocation } from "../src/hosts/pi/location.js"
 import { writeAppConfig, type RememAppConfig } from "../src/storage/config-file.js"
 import { packageRoot, piSettingsPath, rememPaths } from "../src/storage/paths.js"
@@ -65,8 +65,25 @@ class FakeExtensionAPI {
   }
 }
 
-function fakeContext(cwd: string, sessionId = "session-test") {
-  return { cwd, sessionManager: { getSessionId: () => sessionId } }
+function fakeContext(
+  cwd: string,
+  options: {
+    sessionId?: string
+    model?: unknown
+    complete?: (model: unknown, context: unknown, completeOptions: unknown) => Promise<unknown>
+  } = {},
+) {
+  const sessionId = options.sessionId ?? "session-test"
+  return {
+    cwd,
+    sessionManager: { getSessionId: () => sessionId },
+    model: options.model,
+    modelRegistry: {
+      complete:
+        options.complete ??
+        (() => Promise.reject(new Error("fakeContext: no model configured for this test"))),
+    },
+  }
 }
 
 async function writeAppConfigLikeSettings(settingsPath: string, value: unknown): Promise<void> {
@@ -209,6 +226,41 @@ describe("Pi host extension", () => {
     await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
   })
 
+  it("never enqueues capture for extension- or rpc-sourced input, only interactive", () => {
+    expect(isCaptureEligibleInputSource("interactive")).toBe(true)
+    expect(isCaptureEligibleInputSource("extension")).toBe(false)
+    expect(isCaptureEligibleInputSource("rpc")).toBe(false)
+  })
+
+  it("does not throw for extension-sourced input carrying preference/decision-shaped text", async () => {
+    const paths = await installedConfig()
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const ctx = fakeContext(fixtureDirectory)
+    await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
+
+    // Text shaped like an explicit user preference/decision, but attributed
+    // to another extension via sendUserMessage rather than a human typing.
+    // The regression this guards: such text must never reach
+    // CaptureCoordinator.enqueue (isCaptureEligibleInputSource above is the
+    // gate the "input" handler must apply before calling it).
+    await expect(
+      pi.fire(
+        "input",
+        {
+          type: "input",
+          text: "We decided: always use tabs. This is a permanent policy.",
+          source: "extension",
+        },
+        ctx,
+      ),
+    ).resolves.toBeUndefined()
+
+    await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
   it("skips compaction-context injection unless config.compaction is enabled", async () => {
     const paths = await installedConfig({ compaction: false })
     vi.stubEnv("REMEM_CONFIG", paths.configFile)
@@ -222,7 +274,12 @@ describe("Pi host extension", () => {
       "session_before_compact",
       {
         type: "session_before_compact",
-        preparation: { firstKeptEntryId: "entry-1", tokensBefore: 100 },
+        preparation: {
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 100,
+          messagesToSummarize: [],
+          turnPrefixMessages: [],
+        },
         branchEntries: [],
         reason: "manual",
         willRetry: false,
@@ -235,31 +292,134 @@ describe("Pi host extension", () => {
     await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
   })
 
-  it("injects compaction context when config.compaction is enabled", async () => {
+  it("falls back to Pi's default compaction when no model is configured, never discarding history", async () => {
     const paths = await installedConfig({ compaction: true })
     vi.stubEnv("REMEM_CONFIG", paths.configFile)
 
     const pi = new FakeExtensionAPI()
     remem(asExtensionAPI(pi))
+    // No `model`/`complete` supplied: fakeContext's default `complete` rejects,
+    // but the handler must check `ctx.model` first and bail out to `undefined`
+    // (Pi's own default compactor) without ever calling it.
     const ctx = fakeContext(fixtureDirectory)
     await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
 
-    const result = (await pi.fire(
+    const result = await pi.fire(
       "session_before_compact",
       {
         type: "session_before_compact",
-        preparation: { firstKeptEntryId: "entry-1", tokensBefore: 100 },
+        preparation: {
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 100,
+          messagesToSummarize: [],
+          turnPrefixMessages: [],
+        },
         branchEntries: [],
         reason: "manual",
         willRetry: false,
         signal: new AbortController().signal,
       },
       ctx,
-    )) as { compaction?: { summary: string; firstKeptEntryId: string; tokensBefore: number } }
+    )
+    expect(result).toBeUndefined()
 
+    await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
+  it("summarizes the actual conversation and appends Remem continuity when a model is available", async () => {
+    const paths = await installedConfig({ compaction: true })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+
+    const messagesToSummarize = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Migrate the billing service to the new schema." }],
+      },
+    ]
+    let receivedContext: { messages: Array<{ content: Array<{ text: string }> }> } | undefined
+    const complete = (_model: unknown, context: unknown) => {
+      receivedContext = context as typeof receivedContext & object
+      return Promise.resolve({
+        content: [{ type: "text", text: "## Goal\nMigrate the billing service." }],
+        usage: { input: 10, output: 5 },
+      })
+    }
+    const ctx = fakeContext(fixtureDirectory, { model: { id: "fake-model" }, complete })
+    await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
+
+    const result = (await pi.fire(
+      "session_before_compact",
+      {
+        type: "session_before_compact",
+        preparation: {
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 100,
+          messagesToSummarize,
+          turnPrefixMessages: [],
+        },
+        branchEntries: [],
+        reason: "manual",
+        willRetry: false,
+        signal: new AbortController().signal,
+      },
+      ctx,
+    )) as {
+      compaction?: {
+        summary: string
+        firstKeptEntryId: string
+        tokensBefore: number
+        usage?: unknown
+      }
+    }
+
+    // The real conversation content reached the summarizer call...
+    const sentText = JSON.stringify(receivedContext)
+    expect(sentText).toContain("Migrate the billing service to the new schema")
+    // ...and the actual generated summary -- not just Remem continuity -- is
+    // what gets returned as the compaction result, with continuity appended
+    // rather than substituted.
+    expect(result.compaction?.summary).toContain("Migrate the billing service.")
+    expect(result.compaction?.summary).toContain("Remem continuity")
     expect(result.compaction?.firstKeptEntryId).toBe("entry-1")
     expect(result.compaction?.tokensBefore).toBe(100)
-    expect(result.compaction?.summary).toContain("Remem continuity")
+    expect(result.compaction?.usage).toEqual({ input: 10, output: 5 })
+
+    await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
+  it("falls back to Pi's default compaction when the summarizer call fails", async () => {
+    const paths = await installedConfig({ compaction: true })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const ctx = fakeContext(fixtureDirectory, {
+      model: { id: "fake-model" },
+      complete: () => Promise.reject(new Error("model unavailable")),
+    })
+    await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
+
+    const result = await pi.fire(
+      "session_before_compact",
+      {
+        type: "session_before_compact",
+        preparation: {
+          firstKeptEntryId: "entry-1",
+          tokensBefore: 100,
+          messagesToSummarize: [],
+          turnPrefixMessages: [],
+        },
+        branchEntries: [],
+        reason: "manual",
+        willRetry: false,
+        signal: new AbortController().signal,
+      },
+      ctx,
+    )
+    expect(result).toBeUndefined()
 
     await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
   })
