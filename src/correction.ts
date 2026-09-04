@@ -8,6 +8,7 @@ import {
 } from "./institutional.js"
 import type {
   ApplicabilityDecision,
+  InstitutionalApplicability,
   InstitutionalMemory,
   MemoryContext,
   MemoryTrace,
@@ -99,6 +100,8 @@ export interface CorrectionCandidate {
   rootCauseReason?: string
   affectedMemoryIds: string[]
   mutation?: CandidateMutation
+  /** Institutional records that reference the mutation's target via #24's dependency fields (`dependsOnPositionIds`/`positionIds`/`procedureIds`) and would be impacted by applying it. */
+  impactedMemoryIds?: string[]
   structuralValidation?: StructuralValidationSummary
   replay?: ReplayGateResult
   reviewerDecision?: CandidateReviewerDecision
@@ -116,6 +119,17 @@ export interface CorrectionDiagnosis {
   rootCause: CorrectionRootCause
   reason: string
   affectedMemoryIds: string[]
+}
+
+function applicabilitySignature(applicability: InstitutionalApplicability): string {
+  const conditions = applicability.conditions
+    .map((condition) =>
+      condition.kind === "context"
+        ? `context:${condition.field}:${condition.value}`
+        : `topic:${condition.value}`,
+    )
+    .sort()
+  return `${applicability.match}|${conditions.join(",")}`
 }
 
 function institutionalApplicabilityFor(
@@ -201,19 +215,27 @@ export function diagnoseCorrection(
     }
   }
 
-  const scopedTogether = disputedRecords.every((record) =>
-    record.applicability.conditions.some((condition) =>
-      disputedRecords.every((other) =>
-        other.applicability.conditions.some(
-          (otherCondition) => otherCondition.value === condition.value,
-        ),
-      ),
-    ),
-  )
-  if (scopedTogether) {
+  // "Duplicate" requires identical role and an identical applicability
+  // signature (same match mode, same set of conditions by kind/field/value)
+  // -- not merely some condition sharing a string value, which would treat
+  // unrelated records (e.g. two positions that both happen to mention
+  // "phoenix" for different fields) as conflicting. Anything less than an
+  // exact scope match stays "ambiguous" for a human to resolve, since
+  // structural overlap alone doesn't establish that two records actually
+  // conflict.
+  const [first, ...rest] = disputedRecords
+  const identicalScope =
+    first !== undefined &&
+    rest.every(
+      (record) =>
+        record.role === first.role &&
+        applicabilitySignature(record.applicability) ===
+          applicabilitySignature(first.applicability),
+    )
+  if (identicalScope) {
     return {
       rootCause: "duplicate_conflict",
-      reason: `${disputedRecords.map((record) => record.id).join(", ")} share overlapping applicability and conflict`,
+      reason: `${disputedRecords.map((record) => record.id).join(", ")} share an identical role and applicability scope`,
       affectedMemoryIds: disputedRecords.map((record) => record.id),
     }
   }
@@ -334,6 +356,32 @@ export function proposeCandidateMutation(
   }
 }
 
+function institutionalReferences(memory: InstitutionalMemory): string[] {
+  return memory.role === "position"
+    ? (memory.dependsOnPositionIds ?? [])
+    : [...(memory.positionIds ?? []), ...(memory.procedureIds ?? [])]
+}
+
+/**
+ * Computes the #24 dependency-graph closure of records that reference the
+ * mutation's target, so a reviewer can see blast radius before approving a
+ * supersede/retire. `validateInstitutionalMemories` already rejects a
+ * mutation that would leave a dangling reference; this exists for review
+ * visibility into which records those references belong to, not safety.
+ */
+export function computeImpactedMemoryIds(
+  mutation: CandidateMutation,
+  existing: InstitutionalMemory[],
+): string[] {
+  if (mutation.kind === "create" || mutation.kind === "route_adjustment") return []
+  const targetId = mutation.targetMemoryId
+  return existing
+    .filter(
+      (record) => record.id !== targetId && institutionalReferences(record).includes(targetId),
+    )
+    .map((record) => record.id)
+}
+
 function applyMutationToInstitutionalSet(
   mutation: CandidateMutation,
   existing: InstitutionalWrite[],
@@ -400,6 +448,8 @@ function clone(candidate: CorrectionCandidate): CorrectionCandidate {
 
 const DEFAULT_MAX_CANDIDATES = 1_000
 
+const TERMINAL_STATES: ReadonlySet<CandidateLifecycleState> = new Set(["applied", "rejected"])
+
 export class CorrectionReviewQueue {
   private readonly candidates = new Map<string, CorrectionCandidate>()
   private readonly pending = new Set<string>()
@@ -413,23 +463,44 @@ export class CorrectionReviewQueue {
   ) {}
 
   submit(correction: CorrectionInput): CorrectionCandidate {
+    const id = correction.id ?? randomUUID()
+    if (this.candidates.has(id)) {
+      throw new Error(`a correction candidate with id ${id} already exists`)
+    }
+    if (this.candidates.size >= this.maxCandidates) {
+      this.evictOldestTerminal()
+      if (this.candidates.size >= this.maxCandidates) {
+        throw new Error(
+          `correction review queue is full (${this.maxCandidates} candidates); resolve pending reviews before submitting more`,
+        )
+      }
+    }
     const now = new Date().toISOString()
+    // Clone the input on ingestion: the caller's original CorrectionInput
+    // object must not be able to change what this candidate diagnoses,
+    // replays, or applies after submission.
+    const storedCorrection = structuredClone(correction)
     const candidate: CorrectionCandidate = {
-      id: correction.id ?? randomUUID(),
+      id,
       state: "pending_validation",
-      correction,
+      correction: storedCorrection,
       affectedMemoryIds: [],
-      audit: [{ at: now, actor: correction.actor, event: "submitted" }],
+      audit: [{ at: now, actor: storedCorrection.actor, event: "submitted" }],
       createdAt: now,
       updatedAt: now,
     }
     this.candidates.set(candidate.id, candidate)
-    while (this.candidates.size > this.maxCandidates) {
-      const oldest = this.candidates.keys().next().value
-      if (!oldest) break
-      this.candidates.delete(oldest)
-    }
     return clone(candidate)
+  }
+
+  /** Only removes a resolved (terminal) candidate, never one that is still under active review. */
+  private evictOldestTerminal(): void {
+    for (const [id, candidate] of this.candidates) {
+      if (TERMINAL_STATES.has(candidate.state)) {
+        this.candidates.delete(id)
+        return
+      }
+    }
   }
 
   get(candidateId: string): CorrectionCandidate | undefined {
@@ -464,6 +535,15 @@ export class CorrectionReviewQueue {
     return this.lookup(candidateId)
   }
 
+  /** applied/rejected are terminal: once a mutation has landed or a human has rejected it, no further transition is allowed. */
+  private assertNotTerminal(candidate: CorrectionCandidate, action: string): void {
+    if (TERMINAL_STATES.has(candidate.state)) {
+      throw new Error(
+        `candidate ${candidate.id} is in terminal state "${candidate.state}" and cannot ${action}`,
+      )
+    }
+  }
+
   /**
    * runValidation and approve both mutate the live candidate across an
    * `await`, which yields the event loop to any other call on the same
@@ -489,6 +569,7 @@ export class CorrectionReviewQueue {
 
   private async runValidationLocked(candidateId: string): Promise<CorrectionCandidate> {
     const candidate = this.lookup(candidateId)
+    this.assertNotTerminal(candidate, "be revalidated")
     const existing = this.loadInstitutional()
     const diagnosis = diagnoseCorrection(candidate.correction, existing)
     candidate.rootCause = diagnosis.rootCause
@@ -511,7 +592,10 @@ export class CorrectionReviewQueue {
     }
 
     const mutation = proposeCandidateMutation(candidate.correction, diagnosis, existing)
-    if (mutation) candidate.mutation = mutation
+    if (mutation) {
+      candidate.mutation = mutation
+      candidate.impactedMemoryIds = computeImpactedMemoryIds(mutation, existing)
+    }
     if (!mutation) {
       candidate.state = "needs_changes"
       this.touch(candidate, {
@@ -567,6 +651,7 @@ export class CorrectionReviewQueue {
 
   reject(candidateId: string, actor: string, reason: string): CorrectionCandidate {
     const candidate = this.require(candidateId)
+    this.assertNotTerminal(candidate, "be rejected")
     candidate.state = "rejected"
     candidate.reviewerDecision = {
       actor,
@@ -580,6 +665,7 @@ export class CorrectionReviewQueue {
 
   requestChanges(candidateId: string, actor: string, reason: string): CorrectionCandidate {
     const candidate = this.require(candidateId)
+    this.assertNotTerminal(candidate, "have changes requested")
     candidate.state = "needs_changes"
     candidate.reviewerDecision = {
       actor,

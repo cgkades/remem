@@ -181,12 +181,31 @@ describe("diagnoseCorrection", () => {
     expect(result.rootCause).toBe("stale_position")
   })
 
-  it("classifies a duplicate/conflict when two disputed records overlap in scope", () => {
+  it("classifies a duplicate/conflict when two disputed records share an identical applicability scope", () => {
     const a = position({ id: "position.a" })
     const b = position({ id: "position.b" })
     const result = diagnoseCorrection(correction({ disputedMemoryIds: [a.id, b.id] }), [a, b])
     expect(result.rootCause).toBe("duplicate_conflict")
     expect(result.affectedMemoryIds.sort()).toEqual([a.id, b.id].sort())
+  })
+
+  it("does not classify unrelated records as duplicate/conflict merely because a condition value matches", () => {
+    const a = position({
+      id: "position.a",
+      applicability: {
+        match: "all",
+        conditions: [{ id: "project", kind: "context", field: "projectId", value: "phoenix" }],
+      },
+    })
+    const b = position({
+      id: "position.b",
+      applicability: {
+        match: "all",
+        conditions: [{ id: "topic", kind: "topic", value: "phoenix" }],
+      },
+    })
+    const result = diagnoseCorrection(correction({ disputedMemoryIds: [a.id, b.id] }), [a, b])
+    expect(result.rootCause).toBe("ambiguous")
   })
 
   it("classifies ambiguous when disputed ids do not resolve to existing records", () => {
@@ -529,5 +548,127 @@ describe("CorrectionReviewQueue", () => {
     expect(stored?.state).toBe("pending_validation")
     expect(stored?.audit).toHaveLength(1)
     expect(stored?.correction.actor).toBe("reviewer@example.test")
+  })
+
+  it("clones the correction on ingestion so mutating the caller's original object after submit has no effect", async () => {
+    const { q } = queue(passingGate)
+    const original = correction()
+    const candidate = q.submit(original)
+    original.actor = "attacker"
+    original.correctionText = "attacker-controlled text"
+    original.expectedOutcome = "attacker-controlled outcome"
+    original.disputedMemoryIds = ["some.other.id"]
+
+    const stored = q.get(candidate.id)
+    expect(stored?.correction.actor).toBe("reviewer@example.test")
+    expect(stored?.correction.correctionText).toBe(
+      "The agent said rollback plans are optional; they are required for production.",
+    )
+    expect(stored?.correction.expectedOutcome).toBe(
+      "Production rollouts require an approved rollback plan.",
+    )
+    expect(stored?.correction.disputedMemoryIds).toBeUndefined()
+
+    const result = await q.runValidation(candidate.id)
+    // Diagnosis must reflect the state at submission time (a knowledge gap
+    // with no disputed ids), not the mutated disputedMemoryIds.
+    expect(result.rootCause).toBe("knowledge_gap")
+  })
+
+  it("rejects a duplicate candidate id instead of silently overwriting the existing candidate", () => {
+    const { q } = queue(passingGate)
+    const first = q.submit(correction({ id: "fixed-id" }))
+    expect(() => q.submit(correction({ id: "fixed-id" }))).toThrow(/already exists/)
+    expect(q.get(first.id)?.audit).toHaveLength(1)
+  })
+
+  it("terminal states reject further transitions: revalidate, reject, and requestChanges after apply", async () => {
+    const { q } = queue(passingGate)
+    const candidate = q.submit(correction())
+    await q.runValidation(candidate.id)
+    const applied = await q.approve(candidate.id, "reviewer@example.test")
+    expect(applied.state).toBe("applied")
+
+    await expect(q.runValidation(candidate.id)).rejects.toThrow(/terminal state "applied"/)
+    expect(() => q.reject(candidate.id, "reviewer@example.test", "too late")).toThrow(
+      /terminal state "applied"/,
+    )
+    expect(() => q.requestChanges(candidate.id, "reviewer@example.test", "too late")).toThrow(
+      /terminal state "applied"/,
+    )
+
+    // A second approve attempt must also fail, since state never left "applied".
+    await expect(q.approve(candidate.id, "reviewer@example.test")).rejects.toThrow(
+      /cannot be approved from state "applied"/,
+    )
+  })
+
+  it("a rejected candidate cannot be reopened via reject, requestChanges, or revalidation", async () => {
+    const { q } = queue(passingGate)
+    const candidate = q.submit(correction())
+    await q.runValidation(candidate.id)
+    q.reject(candidate.id, "reviewer@example.test", "not needed")
+
+    expect(() => q.reject(candidate.id, "reviewer@example.test", "again")).toThrow(
+      /terminal state "rejected"/,
+    )
+    expect(() => q.requestChanges(candidate.id, "reviewer@example.test", "reopen")).toThrow(
+      /terminal state "rejected"/,
+    )
+    await expect(q.runValidation(candidate.id)).rejects.toThrow(/terminal state "rejected"/)
+  })
+
+  it("evicts only resolved (terminal) candidates when at capacity, never one under active review", async () => {
+    const q = new CorrectionReviewQueue(
+      () => [],
+      () => [],
+      () => Promise.resolve({ memoryId: "new-id" }),
+      passingGate,
+      1,
+    )
+    const resolved = q.submit(correction({ id: "resolved" }))
+    await q.runValidation(resolved.id)
+    q.reject(resolved.id, "reviewer@example.test", "not needed")
+
+    const next = q.submit(correction({ id: "next" }))
+    expect(q.get(resolved.id)).toBeUndefined()
+    expect(q.get(next.id)?.id).toBe("next")
+  })
+
+  it("refuses to submit when the queue is full of non-terminal candidates rather than evicting one", () => {
+    const q = new CorrectionReviewQueue(
+      () => [],
+      () => [],
+      () => Promise.resolve({ memoryId: "new-id" }),
+      passingGate,
+      1,
+    )
+    q.submit(correction({ id: "active" }))
+    expect(() => q.submit(correction({ id: "overflow" }))).toThrow(/queue is full/)
+  })
+
+  it("computes the impacted-record closure for a retire mutation via #24 dependency references", async () => {
+    const older = position({
+      id: "position.older",
+      review: { reviewedAt: "2020-01-01T00:00:00.000Z", expiresAt: null },
+    })
+    const newer = position({
+      id: "position.newer",
+      review: { reviewedAt: "2026-01-01T00:00:00.000Z", expiresAt: null },
+    })
+    const dependent = position({
+      id: "position.dependent",
+      dependsOnPositionIds: [older.id],
+    })
+    const q = new CorrectionReviewQueue(
+      () => [older, newer, dependent],
+      () => [positionWrite(older), positionWrite(newer), positionWrite(dependent)],
+      () => Promise.resolve({ memoryId: "new-id" }),
+      passingGate,
+    )
+    const candidate = q.submit(correction({ disputedMemoryIds: [older.id, newer.id] }))
+    const result = await q.runValidation(candidate.id)
+    expect(result.mutation?.kind).toBe("retire")
+    expect(result.impactedMemoryIds).toEqual([dependent.id])
   })
 })
