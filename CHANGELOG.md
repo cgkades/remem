@@ -18,6 +18,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `remem reembed [--batch-size NUMBER]` CLI command.
 - `remem doctor` checks for embedding backlog size and embedding-settings persistence, so a
   model-identity mismatch or stuck backlog is visible without querying the database directly.
+- A correction-candidate review workflow: an expert correction is diagnosed, turned into a minimal
+  create/update/supersede/retire/route-adjustment mutation, structurally validated, and gated by a
+  behavioral replay before an explicit human can approve it. Adds the `memory_submit_correction`
+  and `memory_review_status` OpenCode v2 tools (submission and read-only redacted status; neither
+  can approve anything), the `remem correction-candidates` / `remem correction-review` CLI commands
+  for durable, cross-process human review, and `remem.correction_candidates`
+  (migration `0007`) for persistence. See
+  [Correction Candidate Review Workflow](docs/correction-workflow.md). Resolves
+  [#26](https://github.com/cgkades/remem/issues/26).
 
 ### Fixed
 

@@ -137,6 +137,10 @@ remem reset --confirm
 `restore` replaces objects in the Remem schema of the configured database. `reset --confirm` is destructive and is
 available only in managed mode. Read [Backup and restore](docs/backup-restore.md) first.
 
+`remem correction-candidates [--state STATE]` and `remem correction-review <ID> --approve|--reject|--request-changes`
+review and act on expert corrections an OpenCode session submitted. Read
+[Correction Candidate Review Workflow](docs/correction-workflow.md).
+
 ## Semantic Recognition
 
 The default `remem-local-hash-v1` model is a deterministic 384-dimensional feature hash over words,
