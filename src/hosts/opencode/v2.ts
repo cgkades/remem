@@ -7,6 +7,7 @@ import {
   type CorrectionCandidate,
   type CorrectionCandidateStore,
 } from "../../correction.js"
+import { CORRECTION_INPUT_LIMITS } from "../../correction.js"
 import { createCorrectionReviewQueue } from "../../correction-wiring.js"
 import { RememOrchestrator } from "../../orchestrator.js"
 import { PostgresMemoryProvider } from "../../providers/postgres.js"
@@ -228,20 +229,32 @@ async function registerTools(
       name: "memory_submit_correction",
       description:
         "Submit an expert correction for the session's most recent retrieval decision as a " +
-        "review candidate. This only queues the correction for diagnosis, structural " +
-        "validation, and a replay gate -- it never writes to memory and cannot approve, " +
-        "reject, or otherwise mutate active memory. An explicit human action elsewhere is " +
-        "required before anything from this correction is applied.",
+        "review candidate. This immediately runs diagnosis, structural validation, and a " +
+        "replay gate against it, but never writes to memory and cannot approve, reject, or " +
+        "otherwise mutate active memory. An explicit human action elsewhere is required " +
+        "before anything from this correction is applied.",
       options: BARE_CALLABLE_TOOL_OPTIONS,
       input: {
         type: "object",
         properties: {
-          correctionText: { type: "string", minLength: 1, maxLength: 8_000 },
-          expectedOutcome: { type: "string", minLength: 1, maxLength: 8_000 },
+          correctionText: {
+            type: "string",
+            minLength: 1,
+            maxLength: CORRECTION_INPUT_LIMITS.maxTextLength,
+          },
+          expectedOutcome: {
+            type: "string",
+            minLength: 1,
+            maxLength: CORRECTION_INPUT_LIMITS.maxTextLength,
+          },
           disputedMemoryIds: {
             type: "array",
-            items: { type: "string", minLength: 1, maxLength: 512 },
-            maxItems: 100,
+            items: {
+              type: "string",
+              minLength: 1,
+              maxLength: CORRECTION_INPUT_LIMITS.maxMemoryIdLength,
+            },
+            maxItems: CORRECTION_INPUT_LIMITS.maxDisputedMemoryIds,
           },
         },
         required: ["correctionText", "expectedOutcome"],

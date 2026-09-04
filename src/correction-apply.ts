@@ -59,11 +59,27 @@ export function createProviderApplyMutation(providers: MemoryProvider[]): ApplyM
       return { memoryId: mutation.targetMemoryId }
     }
 
-    // update | supersede
-    const record =
-      mutation.kind === "update"
-        ? await callOrThrow(owner, "update", mutation.targetMemoryId, mutation.proposed, context)
-        : await callOrThrow(owner, "supersede", mutation.targetMemoryId, mutation.proposed, context)
+    let record: { id: string }
+    if (mutation.kind === "update") {
+      record = await callOrThrow(
+        owner,
+        "update",
+        mutation.targetMemoryId,
+        mutation.proposed,
+        context,
+      )
+    } else if (mutation.kind === "supersede") {
+      record = await callOrThrow(
+        owner,
+        "supersede",
+        mutation.targetMemoryId,
+        mutation.proposed,
+        context,
+      )
+    } else {
+      const unknownKind: never = mutation.kind
+      throw new Error(`unrecognized mutation kind: ${JSON.stringify(unknownKind)}`)
+    }
     await owner.refresh?.()
     return { memoryId: record.id }
   }

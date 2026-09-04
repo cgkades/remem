@@ -28,6 +28,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   [Correction Candidate Review Workflow](docs/correction-workflow.md). Resolves
   [#26](https://github.com/cgkades/remem/issues/26).
 
+### Changed
+
+- `MemoryTrace` gained a new required `prompt` field: the exact request text the trace was computed
+  for. This binds a trace to the request it belongs to so `memory_submit_correction` can derive its
+  `prompt` from the trace itself rather than accepting a caller-supplied value. Any code constructing
+  a `MemoryTrace` directly (rather than through the orchestrator) must now supply `prompt`.
+
 ### Fixed
 
 - The OpenCode plugin now correctly reads the neural embedding backend `remem init` writes to the

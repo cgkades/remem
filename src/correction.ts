@@ -539,11 +539,20 @@ export const CORRECTION_INPUT_LIMITS = {
   maxActorLength: 255,
   maxDisputedMemoryIds: 100,
   maxMemoryIdLength: 512,
+  maxPromptLength: 8_000,
 } as const
 
 function assertCorrectionInputBounds(correction: CorrectionInput): void {
-  const { maxTextLength, maxActorLength, maxDisputedMemoryIds, maxMemoryIdLength } =
-    CORRECTION_INPUT_LIMITS
+  const {
+    maxTextLength,
+    maxActorLength,
+    maxDisputedMemoryIds,
+    maxMemoryIdLength,
+    maxPromptLength,
+  } = CORRECTION_INPUT_LIMITS
+  if (correction.prompt.length > maxPromptLength) {
+    throw new Error(`correction.prompt must be at most ${maxPromptLength} characters`)
+  }
   if (correction.correctionText.length > maxTextLength) {
     throw new Error(`correction.correctionText must be at most ${maxTextLength} characters`)
   }
@@ -883,6 +892,19 @@ export class CorrectionReviewQueue {
 
     try {
       return await this.store.update(candidateId, (candidate) => {
+        // Re-check the claim is still ours: if a concurrent
+        // recoverStuckApplying() call already moved this candidate out of
+        // "applying" (e.g. a human decided it while this apply was still in
+        // flight), finalizing here would silently overwrite that decision
+        // with a stale "applied", corrupting the audit trail.
+        if (candidate.state !== "applying") {
+          throw new Error(
+            `candidate ${candidateId} is in state "${candidate.state}", not "applying"; ` +
+              `it was likely resolved concurrently by recoverStuckApplying while the mutation ` +
+              `was applying. The mutation was applied as memory ${result.memoryId} -- verify ` +
+              `that outcome is reflected correctly rather than retrying.`,
+          )
+        }
         const at = new Date().toISOString()
         let next: CorrectionCandidate = {
           ...candidate,
@@ -921,6 +943,13 @@ export class CorrectionReviewQueue {
     reason: string,
     appliedMemoryId?: string,
   ): Promise<CorrectionCandidate> {
+    if (outcome === "applied" && !appliedMemoryId) {
+      throw new Error(
+        `recoverStuckApplying requires appliedMemoryId when outcome is "applied" -- without it, ` +
+          `the candidate would be recorded as applied with no record of which memory it produced`,
+      )
+    }
+    const confirmedAppliedMemoryId = appliedMemoryId
     return this.store.update(candidateId, (candidate) => {
       if (candidate.state !== "applying") {
         throw new Error(
@@ -932,7 +961,8 @@ export class CorrectionReviewQueue {
         next = {
           ...next,
           reviewerDecision: { actor, decision: "approved", at: new Date().toISOString() },
-          ...(appliedMemoryId ? { appliedMemoryId } : {}),
+          // validated non-empty above whenever outcome === "applied"
+          appliedMemoryId: confirmedAppliedMemoryId as string,
         }
       }
       return touch(next, {

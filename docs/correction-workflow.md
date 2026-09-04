@@ -107,16 +107,24 @@ rejected — there is nothing for a provider to write.
 ## Surfaces
 
 - **`memory_submit_correction`** (OpenCode v2 tool, agent-facing): submits a
-  correction for the current session. Requires a retrieval trace to already
-  exist for the session, since diagnosis needs one. The correction's
+  correction for the current session, then immediately runs
+  diagnosis/mutation-proposal/structural-validation/replay via
+  `RememOrchestrator.submitCorrection`, since validation is a fully automatic
+  pipeline with no human judgment involved. Requires a retrieval trace to
+  already exist for the session, since diagnosis needs one. The correction's
   `prompt` is always `trace.prompt` -- the exact request that trace was
   computed for -- never a caller-supplied replacement, so a correction can
   never be diagnosed against a retrieval manifest that doesn't actually
-  belong to it. `correctionText`/`expectedOutcome` are capped at 8000
-  characters and `disputedMemoryIds` at 100 entries of 512 characters each,
-  enforced in `CorrectionReviewQueue.submit()` itself (not just the tool's
-  input schema), since these values are persisted to and later read back
-  from durable storage regardless of caller.
+  belong to it. `correctionText`/`expectedOutcome`/`prompt` are capped at
+  8000 characters and `disputedMemoryIds` at 100 entries of 512 characters
+  each (`CORRECTION_INPUT_LIMITS`), enforced in
+  `CorrectionReviewQueue.submit()` itself (not just the tool's input
+  schema), since these values are persisted to and later read back from
+  durable storage regardless of caller. `RememOrchestrator.runCorrectionValidation`
+  re-runs the same pipeline for a candidate already in `pending_validation`
+  or `needs_changes` -- e.g. after a human fixes whatever caused
+  `needs_changes` -- and is not needed after a plain submission, which
+  already validates once.
 - **`memory_review_status`** (OpenCode v2 tool, agent-facing, read-only):
   returns a _redacted_ summary (state, root cause, pass/fail flags, audit
   events without free-text detail) — never the untrusted correction text or
@@ -126,11 +134,15 @@ rejected — there is nothing for a provider to write.
   `memory_review_status`: a human operator via CLI is a different trust
   boundary than an agent via a tool call.
 - **`remem correction-review <id> --approve|--reject|--request-changes|
---recover-validated|--recover-applied [--reason TEXT] [--actor NAME]
-[--memory-id ID]`** (CLI): records the human decision, or resolves a
-  candidate stuck in `applying`. `--actor` and `--reason` are capped at 255
-  and 4096 characters, since they're persisted and later echoed back
-  verbatim by `correction-candidates`.
+--recover-validated|--recover-applied|--validate [--reason TEXT]
+[--actor NAME] [--memory-id ID]`** (CLI): records the human decision,
+  resolves a candidate stuck in `applying`, or (`--validate`) re-runs the
+  automatic diagnosis/validation/replay pipeline that `memory_submit_correction`
+  already runs once at submission time -- useful after a human fixes
+  whatever caused `needs_changes`, or to retry if it never ran for some
+  other reason. `--actor` and `--reason` are capped at 255 and 4096
+  characters, since they're persisted and later echoed back verbatim by
+  `correction-candidates`.
 - Both CLI commands only see the primary PostgreSQL provider's institutional
   corpus and providers (matching every other candidate-related CLI command
   in this project). If institutional memory or a mutation's target lives in

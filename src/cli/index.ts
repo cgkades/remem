@@ -507,7 +507,7 @@ Commands:
   candidates [--status STATUS]
   review <CANDIDATE_ID> --approve|--reject
   correction-candidates [--state STATE]
-  correction-review <CANDIDATE_ID> --approve|--reject|--request-changes|--recover-validated|--recover-applied
+  correction-review <CANDIDATE_ID> --approve|--reject|--request-changes|--recover-validated|--recover-applied|--validate
     [--reason TEXT] [--actor NAME] [--memory-id ID (with --recover-applied)]
   consolidate [--batch-size NUMBER]
   reembed [--batch-size NUMBER]
@@ -629,21 +629,32 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
         const requestChanges = hasFlag(parsed, "request-changes")
         const recoverValidated = hasFlag(parsed, "recover-validated")
         const recoverApplied = hasFlag(parsed, "recover-applied")
+        const validate = hasFlag(parsed, "validate")
         const actionCount = [
           approve,
           reject,
           requestChanges,
           recoverValidated,
           recoverApplied,
+          validate,
         ].filter(Boolean).length
         if (actionCount !== 1) {
           throw new Error(
             "correction-review requires exactly one of --approve, --reject, --request-changes, " +
-              "--recover-validated, or --recover-applied",
+              "--recover-validated, --recover-applied, or --validate",
           )
         }
         const actor = boundedFlag(parsed, "actor", 255) ?? "cli"
         const reason = boundedFlag(parsed, "reason", 4_096) ?? ""
+        if (validate) {
+          // Re-runs the same automatic diagnosis/validation/replay pipeline
+          // memory_submit_correction already runs once at submission time --
+          // useful after a human fixes whatever caused "needs_changes", or
+          // to retry if it never ran for some other reason.
+          const result = await queue.runValidation(id)
+          output(`Correction candidate ${id} is now ${result.state}.`)
+          return 0
+        }
         if (approve) {
           const result = await queue.approve(id, actor)
           output(`Correction candidate ${id} applied as memory ${result.appliedMemoryId ?? ""}.`)

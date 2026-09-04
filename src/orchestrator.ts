@@ -498,16 +498,36 @@ export class RememOrchestrator {
   }
 
   /**
-   * Submits a correction to the review queue for diagnosis and validation.
-   * Read/write access to approve, reject, or request changes on the
-   * resulting candidate is intentionally not available through the
-   * orchestrator -- see `OrchestratorDependencies.reviewQueue`.
+   * Submits a correction to the review queue, then immediately runs
+   * diagnosis/mutation-proposal/structural-validation/replay -- validation
+   * is a deterministic, fully automatic pipeline with no human judgment
+   * involved, unlike approve/reject/requestChanges, so running it here
+   * (rather than requiring a second call nothing in this codebase's shipped
+   * surfaces would ever make) is what gets a candidate to "validated" or
+   * "needs_changes" at all. Read/write access to approve, reject, or
+   * request changes on the resulting candidate is intentionally not
+   * available through the orchestrator -- see
+   * `OrchestratorDependencies.reviewQueue`.
    */
   async submitCorrection(
     correction: CorrectionInput,
   ): Promise<CorrectionCandidate | { status: "unavailable" }> {
     if (!this.reviewQueue) return { status: "unavailable" }
-    return this.reviewQueue.submit(correction)
+    const submitted = await this.reviewQueue.submit(correction)
+    return this.reviewQueue.runValidation(submitted.id)
+  }
+
+  /**
+   * Re-runs validation for a candidate already in "pending_validation" or
+   * "needs_changes" -- e.g. after a human fixes whatever caused
+   * "needs_changes" the first time, or as an explicit retry. Not needed
+   * after a plain `submitCorrection` call, which already validates once.
+   */
+  async runCorrectionValidation(
+    candidateId: string,
+  ): Promise<CorrectionCandidate | { status: "unavailable" }> {
+    if (!this.reviewQueue) return { status: "unavailable" }
+    return this.reviewQueue.runValidation(candidateId)
   }
 
   async reviewCandidates(filter?: {

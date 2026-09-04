@@ -673,6 +673,73 @@ describe("CorrectionReviewQueue", () => {
     ).rejects.toThrow(/not "applying"; there is nothing to recover/)
   })
 
+  it("recoverStuckApplying requires appliedMemoryId when recording outcome 'applied'", async () => {
+    const inner = new InMemoryCorrectionCandidateStore()
+    const store: CorrectionCandidateStore = {
+      insert: (candidate) => inner.insert(candidate),
+      get: (id) => inner.get(id),
+      list: (filter) => inner.list(filter),
+      update: (id, mutate) => inner.update(id, mutate),
+    }
+    const q = new CorrectionReviewQueue(
+      store,
+      () => [],
+      () => [],
+      () => Promise.resolve({ memoryId: "new-memory-id" }),
+      passingGate,
+    )
+    const submitted = await q.submit(correction())
+    await q.runValidation(submitted.id)
+    await inner.update(submitted.id, (candidate) => ({ ...candidate, state: "applying" }))
+
+    await expect(
+      q.recoverStuckApplying(
+        submitted.id,
+        "operator@example.test",
+        "applied",
+        "confirmed via provider logs that the write landed",
+      ),
+    ).rejects.toThrow(/requires appliedMemoryId when outcome is "applied"/)
+    // The state must be left untouched by the rejected call.
+    expect((await inner.get(submitted.id))?.state).toBe("applying")
+  })
+
+  it("approve's finalize step refuses to overwrite a candidate recovered concurrently while the mutation was applying", async () => {
+    const inner = new InMemoryCorrectionCandidateStore()
+    let releaseApply: (() => void) | undefined
+    const applyGate = new Promise<void>((resolve) => {
+      releaseApply = resolve
+    })
+    const store: CorrectionCandidateStore = {
+      insert: (candidate) => inner.insert(candidate),
+      get: (id) => inner.get(id),
+      list: (filter) => inner.list(filter),
+      update: (id, mutate) => inner.update(id, mutate),
+    }
+    const q = new CorrectionReviewQueue(
+      store,
+      () => [],
+      () => [],
+      async () => {
+        await applyGate
+        return { memoryId: "new-memory-id" }
+      },
+      passingGate,
+    )
+    const submitted = await q.submit(correction())
+    await q.runValidation(submitted.id)
+
+    const approvePromise = q.approve(submitted.id, "reviewer@example.test")
+    // Simulate an operator concurrently recovering the candidate (e.g. after
+    // an operational timeout) while approve()'s applyMutation is still in
+    // flight, moving it out of "applying" before approve() can finalize.
+    await inner.update(submitted.id, (candidate) => ({ ...candidate, state: "validated" }))
+    releaseApply?.()
+
+    await expect(approvePromise).rejects.toThrow(/is in state "validated", not "applying"/)
+    expect((await inner.get(submitted.id))?.state).toBe("validated")
+  })
+
   it("returns defensive copies so callers cannot mutate queue-internal state", async () => {
     const { q } = queue(passingGate)
     const candidate = await q.submit(correction())
@@ -738,6 +805,31 @@ describe("CorrectionReviewQueue", () => {
     await expect(q.submit(correction({ disputedMemoryIds: ["x".repeat(513)] }))).rejects.toThrow(
       /each correction.disputedMemoryIds entry must be at most 512 characters/,
     )
+  })
+
+  it("rejects an oversized prompt before persisting", async () => {
+    const { q } = queue(passingGate)
+    await expect(q.submit(correction({ prompt: "x".repeat(8_001) }))).rejects.toThrow(
+      /prompt must be at most 8000 characters/,
+    )
+  })
+
+  it("accepts correctionText/expectedOutcome/actor/prompt/disputedMemoryIds exactly at their bounds", async () => {
+    const { q } = queue(passingGate)
+    const candidate = await q.submit(
+      correction({
+        correctionText: "x".repeat(8_000),
+        expectedOutcome: "x".repeat(8_000),
+        actor: "x".repeat(255),
+        prompt: "x".repeat(8_000),
+        disputedMemoryIds: Array.from({ length: 100 }, () => "x".repeat(512)),
+      }),
+    )
+    expect(candidate.correction.correctionText).toHaveLength(8_000)
+    expect(candidate.correction.expectedOutcome).toHaveLength(8_000)
+    expect(candidate.correction.actor).toHaveLength(255)
+    expect(candidate.correction.prompt).toHaveLength(8_000)
+    expect(candidate.correction.disputedMemoryIds).toHaveLength(100)
   })
 
   it("terminal states reject further transitions: revalidate, reject, and requestChanges after apply", async () => {
