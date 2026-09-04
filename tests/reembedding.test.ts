@@ -114,6 +114,20 @@ describe("describeError", () => {
     expect(description.length).toBeLessThanOrEqual(21)
     expect(description.startsWith("Error: xxxxxxxxxxxxx")).toBe(true)
   })
+
+  it("redacts a credential a library/driver error echoed back", () => {
+    const description = describeError(
+      new Error("connection failed: postgresql://remem:hunter2@db.internal:5432/remem"),
+    )
+    expect(description).not.toContain("hunter2")
+    expect(description).toContain("[redacted]")
+  })
+
+  it("strips control characters from the message", () => {
+    const description = describeError(new Error("bad input\x1b[31m injected\x07"))
+    // eslint-disable-next-line no-control-regex -- asserting control characters are gone.
+    expect(/[\x00-\x1f\x7f]/u.test(description)).toBe(false)
+  })
 })
 
 describe("shouldAttemptReembed", () => {
