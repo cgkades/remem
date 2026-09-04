@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest"
 import {
   CorrectionReviewQueue,
   InMemoryCorrectionCandidateStore,
+  applyMutationToInstitutionalSet,
   diagnoseCorrection,
   proposeCandidateMutation,
   validateCandidateStructure,
   type ApplyMutation,
+  type CandidateMutation,
   type CorrectionCandidateStore,
   type CorrectionInput,
   type ReplayGate,
@@ -217,6 +219,39 @@ describe("diagnoseCorrection", () => {
     expect(result.rootCause).toBe("ambiguous")
   })
 
+  it("classifies ambiguous when only some disputed ids resolve to existing records", () => {
+    const record = position()
+    const result = diagnoseCorrection(
+      correction({ disputedMemoryIds: [record.id, "missing.id"] }),
+      [record],
+    )
+    expect(result.rootCause).toBe("ambiguous")
+    expect(result.reason).toContain("missing.id")
+    expect(result.affectedMemoryIds).toEqual([record.id])
+  })
+
+  it("classifies stale_position when multiple disputed records expired but do not share an identical scope", () => {
+    const a = position({
+      id: "position.a",
+      review: { reviewedAt: "2020-01-01T00:00:00.000Z", expiresAt: "2020-06-01T00:00:00.000Z" },
+      applicability: {
+        match: "all",
+        conditions: [{ id: "project", kind: "context", field: "projectId", value: "phoenix" }],
+      },
+    })
+    const b = position({
+      id: "position.b",
+      review: { reviewedAt: "2020-01-01T00:00:00.000Z", expiresAt: "2020-06-01T00:00:00.000Z" },
+      applicability: {
+        match: "all",
+        conditions: [{ id: "topic", kind: "topic", value: "unrelated" }],
+      },
+    })
+    const result = diagnoseCorrection(correction({ disputedMemoryIds: [a.id, b.id] }), [a, b])
+    expect(result.rootCause).toBe("stale_position")
+    expect(result.affectedMemoryIds.sort()).toEqual([a.id, b.id].sort())
+  })
+
   it("classifies ambiguous when the record was current, applicable, and surfaced", () => {
     const record = position()
     const trace = baseTrace({
@@ -249,6 +284,52 @@ describe("proposeCandidateMutation", () => {
     const diagnosis = diagnoseCorrection(correction({ disputedMemoryIds: ["missing.id"] }), [])
     const mutation = proposeCandidateMutation(correction(), diagnosis, [])
     expect(mutation).toBeUndefined()
+  })
+
+  it("proposes no mutation when a stale_position diagnosis's affected id no longer resolves to a record", () => {
+    const diagnosis = {
+      rootCause: "stale_position" as const,
+      reason: "expired",
+      affectedMemoryIds: ["position.missing"],
+    }
+    const mutation = proposeCandidateMutation(correction(), diagnosis, [])
+    expect(mutation).toBeUndefined()
+  })
+
+  it("proposes no mutation when a duplicate_conflict diagnosis resolves to fewer than two records", () => {
+    const only = position({ id: "position.only" })
+    const diagnosis = {
+      rootCause: "duplicate_conflict" as const,
+      reason: "conflict",
+      affectedMemoryIds: [only.id],
+    }
+    const mutation = proposeCandidateMutation(correction(), diagnosis, [only])
+    expect(mutation).toBeUndefined()
+  })
+
+  it("proposes a route_adjustment with no target when a procedure_fault diagnosis has no affected memory id", () => {
+    const diagnosis = {
+      rootCause: "procedure_fault" as const,
+      reason: "excluded",
+      affectedMemoryIds: [],
+    }
+    const mutation = proposeCandidateMutation(correction(), diagnosis, [])
+    expect(mutation?.kind).toBe("route_adjustment")
+    if (mutation?.kind !== "route_adjustment") throw new Error("expected a route_adjustment")
+    expect(mutation.targetMemoryId).toBeUndefined()
+  })
+
+  it("proposes a route_adjustment with a target when a procedure_fault diagnosis has an affected memory id", () => {
+    const record = position()
+    const diagnosis = {
+      rootCause: "procedure_fault" as const,
+      reason: "excluded",
+      affectedMemoryIds: [record.id],
+    }
+    const mutation = proposeCandidateMutation(correction(), diagnosis, [record])
+    expect(mutation?.kind).toBe("route_adjustment")
+    if (mutation?.kind !== "route_adjustment") throw new Error("expected a route_adjustment")
+    expect(mutation.targetMemoryId).toBe(record.id)
   })
 
   it("proposes retiring the older of two conflicting records", () => {
@@ -300,6 +381,28 @@ describe("validateCandidateStructure", () => {
     const mutation = { kind: "retire" as const, targetMemoryId: record.id, note: "retired" }
     const result = validateCandidateStructure(mutation, correction(), [positionWrite(record)])
     expect(result.valid).toBe(true)
+  })
+
+  it("always accepts a route_adjustment mutation -- it changes no memory content", () => {
+    const mutation = { kind: "route_adjustment" as const, note: "fix the gate" }
+    const result = validateCandidateStructure(mutation, correction(), [])
+    expect(result).toEqual({ valid: true, issues: [] })
+  })
+})
+
+describe("applyMutationToInstitutionalSet", () => {
+  it("leaves the institutional set unchanged for a route_adjustment mutation", () => {
+    const record = position()
+    const existing = [positionWrite(record)]
+    const mutation = { kind: "route_adjustment" as const, note: "fix the gate" }
+    expect(applyMutationToInstitutionalSet(mutation, existing)).toBe(existing)
+  })
+
+  it("throws for an unrecognized mutation kind instead of silently ignoring it", () => {
+    const malformed = { kind: "delete_forever", note: "n/a" } as unknown as CandidateMutation
+    expect(() => applyMutationToInstitutionalSet(malformed, [])).toThrow(
+      /unknown correction mutation kind/,
+    )
   })
 })
 
@@ -775,6 +878,31 @@ describe("CorrectionReviewQueue", () => {
     // Diagnosis must reflect the state at submission time (a knowledge gap
     // with no disputed ids), not the mutated disputedMemoryIds.
     expect(result.rootCause).toBe("knowledge_gap")
+  })
+
+  it("runValidation rejects an unknown candidate id", async () => {
+    const { q } = queue(passingGate)
+    await expect(q.runValidation("does-not-exist")).rejects.toThrow(
+      /unknown correction candidate: does-not-exist/,
+    )
+  })
+
+  it("approve rejects an unknown candidate id", async () => {
+    const { q } = queue(passingGate)
+    await expect(q.approve("does-not-exist", "reviewer@example.test")).rejects.toThrow(
+      /unknown correction candidate: does-not-exist/,
+    )
+  })
+
+  it("list filters candidates by state", async () => {
+    const { q } = queue(passingGate)
+    const pending = await q.submit(correction({ id: "pending-1" }))
+    const validated = await q.submit(correction({ id: "validated-1" }))
+    await q.runValidation(validated.id)
+
+    expect((await q.list({ state: "pending_validation" })).map((c) => c.id)).toEqual([pending.id])
+    expect((await q.list({ state: "validated" })).map((c) => c.id)).toEqual([validated.id])
+    expect((await q.list()).map((c) => c.id).sort()).toEqual([pending.id, validated.id].sort())
   })
 
   it("rejects a duplicate candidate id instead of silently overwriting the existing candidate", async () => {

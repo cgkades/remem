@@ -149,6 +149,21 @@ describe("createProviderApplyMutation", () => {
     expect(other.refresh).not.toHaveBeenCalled()
   })
 
+  it("skips a provider with no get() method when resolving the owner of an update/supersede/retire target", async () => {
+    const existing = toRecord("target-1", proposed(), "owner")
+    const noGet: MemoryProvider = {
+      id: "no-get",
+      capabilities: () => capabilities(),
+      catalog: () => Promise.resolve([]),
+      search: () => Promise.resolve([]),
+    }
+    const owner = new FakeProvider("owner", capabilities({ delete: true }), [existing])
+    const apply = createProviderApplyMutation([noGet, owner])
+
+    const result = await apply({ kind: "retire", targetMemoryId: "target-1", note: "old" }, context)
+    expect(result.memoryId).toBe("target-1")
+  })
+
   it("throws when no configured provider owns the update/supersede/retire target", async () => {
     const provider = new FakeProvider("owner", capabilities())
     const apply = createProviderApplyMutation([provider])
@@ -188,5 +203,63 @@ describe("createProviderApplyMutation", () => {
     await expect(
       apply({ kind: "route_adjustment", note: "fix the gate" }, context),
     ).rejects.toThrow(/cannot be applied to a provider automatically/)
+  })
+
+  it("routes an update mutation to update on the owning provider", async () => {
+    const existing = toRecord("target-1", proposed(), "owner")
+    const owner = new FakeProvider("owner", capabilities({ update: true }), [existing])
+    const apply = createProviderApplyMutation([owner])
+
+    const mutation: CandidateMutation = {
+      kind: "update",
+      targetMemoryId: "target-1",
+      proposed: proposed(),
+    }
+    const result = await apply(mutation, context)
+    expect(result.memoryId).toBe("target-1")
+    expect(owner.refresh).toHaveBeenCalledOnce()
+  })
+
+  it("throws when the owning provider does not support update for an update mutation", async () => {
+    const existing = toRecord("target-1", proposed(), "owner")
+    const owner: MemoryProvider = {
+      id: "owner",
+      capabilities: () => capabilities(),
+      catalog: () => Promise.resolve([]),
+      search: () => Promise.resolve([]),
+      get: (id) => Promise.resolve(id === existing.id ? existing : undefined),
+    }
+    const apply = createProviderApplyMutation([owner])
+    await expect(
+      apply({ kind: "update", targetMemoryId: "target-1", proposed: proposed() }, context),
+    ).rejects.toThrow(/does not support update/)
+  })
+
+  it("throws when the owning provider does not support supersede for a supersede mutation", async () => {
+    const existing = toRecord("target-1", proposed(), "owner")
+    const owner: MemoryProvider = {
+      id: "owner",
+      capabilities: () => capabilities(),
+      catalog: () => Promise.resolve([]),
+      search: () => Promise.resolve([]),
+      get: (id) => Promise.resolve(id === existing.id ? existing : undefined),
+    }
+    const apply = createProviderApplyMutation([owner])
+    await expect(
+      apply({ kind: "supersede", targetMemoryId: "target-1", proposed: proposed() }, context),
+    ).rejects.toThrow(/does not support supersede/)
+  })
+
+  it("throws for an unrecognized mutation kind instead of silently defaulting to supersede", async () => {
+    const existing = toRecord("target-1", proposed(), "owner")
+    const owner = new FakeProvider("owner", capabilities({ update: true }), [existing])
+    const apply = createProviderApplyMutation([owner])
+
+    const malformed = {
+      kind: "delete_forever",
+      targetMemoryId: "target-1",
+      proposed: proposed(),
+    } as unknown as CandidateMutation
+    await expect(apply(malformed, context)).rejects.toThrow(/unrecognized mutation kind/)
   })
 })
