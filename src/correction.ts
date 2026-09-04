@@ -748,7 +748,7 @@ export class CorrectionReviewQueue {
    * `requestChanges()` call that lands while this computation is still in
    * flight would otherwise be silently overwritten by a finalize based on a
    * stale snapshot. `assertNotModifiedConcurrently` closes that gap by
-   * requiring the row's `updatedAt` to still match what it was when this
+   * requiring the row's `revision` to still match what it was when this
    * call started.
    */
   async runValidation(candidateId: string): Promise<CorrectionCandidate> {

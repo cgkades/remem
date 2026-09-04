@@ -99,6 +99,44 @@ describe("MemoryDiagnostics", () => {
     expect(diagnostics.latest("session-1")).toBe(c)
   })
 
+  it("priorDispatch() coalesces repeated dispatches within the same turnId, not just the same kind", () => {
+    const diagnostics = new MemoryDiagnostics()
+    const turn1 = trace("session-1", "original question")
+    const turn2First = trace("session-1", "correction message")
+    const turn2ToolLoop = trace("session-1", "correction message")
+    diagnostics.record(turn1, "dispatch", "1")
+    // A tool-calling loop re-dispatches to the model (and re-runs the
+    // "context" hook) multiple times within the same turn; all of these
+    // share the turn's id and must not be mistaken for an earlier turn.
+    diagnostics.record(turn2First, "dispatch", "2")
+    diagnostics.record(turn2ToolLoop, "dispatch", "2")
+    const prior = diagnostics.priorDispatch("session-1")
+    expect(prior).toBe(turn1)
+    expect(prior).not.toBe(turn2First)
+    expect(prior).not.toBe(turn2ToolLoop)
+  })
+
+  it("priorDispatch() falls back to the immediately preceding dispatch when no turnId is supplied", () => {
+    const diagnostics = new MemoryDiagnostics()
+    const a = trace("session-1", "first")
+    const b = trace("session-1", "second")
+    diagnostics.record(a)
+    diagnostics.record(b)
+    expect(diagnostics.priorDispatch("session-1")).toBe(a)
+  })
+
+  it("priorDispatch() ignores a search trace even between two same-turnId dispatches", () => {
+    const diagnostics = new MemoryDiagnostics()
+    const turn1 = trace("session-1", "original question")
+    const search = trace("session-1", "explicit search")
+    const turn2 = trace("session-1", "correction message")
+    diagnostics.record(turn1, "dispatch", "1")
+    diagnostics.record(search, "search")
+    diagnostics.record(turn2, "dispatch", "2")
+    diagnostics.record(trace("session-1", "correction message (tool loop)"), "dispatch", "2")
+    expect(diagnostics.priorDispatch("session-1")).toBe(turn1)
+  })
+
   it("evicts the oldest session beyond the configured session cap", () => {
     const diagnostics = new MemoryDiagnostics(1, 20)
     diagnostics.record(trace("session-1", "first"))

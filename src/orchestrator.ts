@@ -193,7 +193,16 @@ export class RememOrchestrator {
     return { ...rendered, diagnostics: [...catalog.diagnostics, ...rendered.diagnostics] }
   }
 
-  async processPrompt(prompt: string, context: MemoryContext): Promise<MemoryInjection> {
+  /**
+   * `turnId`, when supplied by the host, identifies the user turn this
+   * dispatch belongs to -- see `MemoryDiagnostics.priorDispatch`. Opaque to
+   * this method beyond being forwarded to `diagnostics.record`.
+   */
+  async processPrompt(
+    prompt: string,
+    context: MemoryContext,
+    turnId?: string,
+  ): Promise<MemoryInjection> {
     const started = performance.now()
     const fallbackCatalog = renderCatalog([], this.config.budgets.catalogTokens)
     let catalog = fallbackCatalog
@@ -314,7 +323,7 @@ export class RememOrchestrator {
           synthesisMs: Math.round(synthesisMs),
         },
       }
-      this.diagnostics.record(trace)
+      this.diagnostics.record(trace, "dispatch", turnId)
       this.logTrace(trace)
       return {
         text: synthesis.text ? `${catalog.text}\n\n${synthesis.text}` : catalog.text,
@@ -352,7 +361,7 @@ export class RememOrchestrator {
           synthesisMs: Math.round(synthesisMs),
         },
       }
-      this.diagnostics.record(trace)
+      this.diagnostics.record(trace, "dispatch", turnId)
       safeLog(this.logger, "warn", "orchestration.failed", { error: diagnostic })
       return {
         text: catalog.text,

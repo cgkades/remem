@@ -132,10 +132,19 @@ rejected — there is nothing for a provider to write.
   trace for it before this tool can run, and an intervening `memory_search`
   call would shift "latest" again. `MemoryDiagnostics` instead keeps a
   bounded per-session trace history tagged by kind (`dispatch` vs.
-  `search`), and `explainPreviousTurn` returns the second-most-recent
-  _dispatch_ trace, ignoring any `search` traces recorded in between -- the
-  trace behind the actual disputed response, not whatever retrieval the
-  correction message or an ad hoc search triggered. The correction's
+  `search`) and, when the host supplies one, a `turnId`. The OpenCode v2
+  host derives `turnId` from `currentTurnId` in `src/hosts/opencode/shared.ts`
+  -- the count of user-authored messages seen so far, excluding remem's own
+  ephemeral injected messages -- since a tool-calling loop re-dispatches to
+  the model (re-running the "context" hook) multiple times within a single
+  turn without adding a new user message; without coalescing by `turnId`,
+  the second of those re-dispatches would still be misidentified as an
+  earlier, separate turn. `explainPreviousTurn` returns the most recent
+  _dispatch_ trace whose `turnId` differs from the current dispatch's (or,
+  absent a `turnId`, the dispatch immediately before it), ignoring `search`
+  traces entirely -- the trace behind the actual disputed response, not
+  whatever retrieval the correction message, an ad hoc search, or a
+  same-turn tool-loop continuation triggered. The correction's
   `prompt` is always that trace's own `prompt` -- never a caller-supplied
   replacement, so a correction can never be diagnosed against a retrieval
   manifest that doesn't actually belong to it. `correctionText`/`expectedOutcome`/`prompt` are capped at

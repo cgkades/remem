@@ -19,6 +19,7 @@ import { createEmbeddingModel } from "../../storage/embedding-neural.js"
 import type { MemoryContext, MemoryProvider, RememLogger } from "../../types.js"
 import {
   TRUSTED_REMEM_INSTRUCTION,
+  currentTurnId,
   disposeProviders,
   latestUserPrompt,
   memoryContext,
@@ -40,7 +41,12 @@ export async function injectV2DispatchMemory(
   event: { readonly sessionID: string; system: unknown[]; messages: unknown[] },
   context: MemoryContext,
 ): Promise<void> {
-  const injection = await recallForDispatch(orchestrator, latestUserPrompt(event.messages), context)
+  const injection = await recallForDispatch(
+    orchestrator,
+    latestUserPrompt(event.messages),
+    context,
+    currentTurnId(event.messages),
+  )
   if (!injection.text) return
 
   event.system.push({ type: "text", text: TRUSTED_REMEM_INSTRUCTION })

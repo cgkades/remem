@@ -44,7 +44,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   current one (`RememOrchestrator.explainPreviousTurn`) instead of the session's single "latest"
   trace. A single latest-trace slot could not distinguish the disputed response's own trace from the
   trace the correction message itself (or an intervening `memory_search` call) generated, so a
-  correction could silently bind to the wrong retrieval decision.
+  correction could silently bind to the wrong retrieval decision. Dispatch traces recorded during a
+  tool-calling loop's repeated re-dispatches within one turn are now also coalesced (via a `turnId`
+  the OpenCode v2 host derives from the user-authored message count) so a same-turn continuation
+  dispatch isn't itself mistaken for an earlier, separate turn.
 - `CorrectionReviewQueue.runValidation`'s finalize write now aborts if the candidate was modified
   concurrently (e.g. a human `requestChanges()` call landing while validation's replay gate was still
   running), instead of silently overwriting that decision. `needs_changes` is a legitimate state to

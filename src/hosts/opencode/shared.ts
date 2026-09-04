@@ -38,6 +38,30 @@ export function textFromParts(parts: readonly unknown[]): string {
     .trim()
 }
 
+/**
+ * True for the ephemeral `{ role: "user", ... }` message `injectV2DispatchMemory`
+ * itself appends to carry injected memory content (see its `metadata: { source:
+ * "remem", ephemeral: true }`). Callers scanning `event.messages` for the
+ * actual user's own turns must exclude these -- they are role "user" only
+ * because that's the message role the injected content is attached to, not
+ * because a human wrote them, and if a host's conversation history retains
+ * them across dispatches, they would otherwise be miscounted as new user
+ * turns or returned as "the user's prompt".
+ */
+function isRememEphemeralMessage(message: unknown): boolean {
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    "metadata" in message &&
+    typeof message.metadata === "object" &&
+    message.metadata !== null &&
+    "source" in message.metadata &&
+    message.metadata.source === "remem" &&
+    "ephemeral" in message.metadata &&
+    message.metadata.ephemeral === true
+  )
+}
+
 export function latestUserPrompt(messages: readonly unknown[]): string {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]
@@ -47,7 +71,8 @@ export function latestUserPrompt(messages: readonly unknown[]): string {
       "role" in message &&
       message.role === "user" &&
       "content" in message &&
-      Array.isArray(message.content)
+      Array.isArray(message.content) &&
+      !isRememEphemeralMessage(message)
     ) {
       return textFromParts(message.content)
     }
@@ -55,12 +80,34 @@ export function latestUserPrompt(messages: readonly unknown[]): string {
   return ""
 }
 
+/**
+ * A turn identity derived purely from the conversation so far, for
+ * `RememOrchestrator.processPrompt`'s `turnId` -- the count of user-role
+ * messages, excluding remem's own ephemeral injections. A tool-calling loop
+ * re-dispatches to the model (and re-runs the "context" hook, so
+ * `recallForDispatch` runs again) without appending a new user message, so
+ * this count stays stable across those re-dispatches and only advances once
+ * a genuinely new user turn begins.
+ */
+export function currentTurnId(messages: readonly unknown[]): string {
+  const userMessageCount = messages.filter(
+    (message) =>
+      typeof message === "object" &&
+      message !== null &&
+      "role" in message &&
+      message.role === "user" &&
+      !isRememEphemeralMessage(message),
+  ).length
+  return String(userMessageCount)
+}
+
 export async function recallForDispatch(
   orchestrator: RememOrchestrator,
   prompt: string,
   context: MemoryContext,
+  turnId?: string,
 ): Promise<MemoryInjection> {
-  return orchestrator.processPrompt(prompt, context)
+  return orchestrator.processPrompt(prompt, context, turnId)
 }
 
 export function safeLoggerCall(
