@@ -1,0 +1,421 @@
+{
+  "version": 1,
+  "name": "curated-guidance-baseline",
+  "records": [
+    {
+      "id": "production-position",
+      "caseIds": ["applicable-production-rollout"],
+      "title": "Production rollout position",
+      "aliases": ["production deployment guidance"],
+      "summary": "Production rollout requires an approved rollback plan.",
+      "tags": ["production", "rollout"],
+      "type": "decision",
+      "freshness": "current",
+      "content": "Position: production rollouts require an approved rollback plan. Evidence: change ticket includes rollback owner. Citation: policy://release/rollback-position.",
+      "institutional": {
+        "role": "position",
+        "id": "position.production-rollout",
+        "owner": "release-engineering",
+        "sourceRefs": ["policy://release/rollback-position"],
+        "boundaryConditions": ["Production changes only."],
+        "applicability": {
+          "match": "all",
+          "conditions": [
+            { "id": "project", "kind": "context", "field": "projectId", "value": "phoenix" }
+          ]
+        },
+        "review": { "reviewedAt": "2026-09-01T00:00:00.000Z", "expiresAt": null }
+      }
+    },
+    {
+      "id": "production-procedure",
+      "caseIds": ["applicable-production-rollout"],
+      "title": "Production rollout procedure",
+      "aliases": ["production deployment guidance"],
+      "summary": "Collect rollback evidence before approving a production rollout.",
+      "tags": ["production", "rollout", "procedure"],
+      "type": "procedure",
+      "freshness": "current",
+      "content": "1. Confirm the rollback owner in the change ticket. 2. Attach rollback evidence. 3. Escalate to release engineering when evidence is missing.",
+      "institutional": {
+        "role": "procedure",
+        "id": "procedure.production-rollout",
+        "steps": [
+          { "id": "owner", "instruction": "Confirm the rollback owner in the change ticket." },
+          { "id": "evidence", "instruction": "Attach rollback evidence." },
+          {
+            "id": "escalate",
+            "instruction": "Escalate to release engineering when evidence is missing."
+          }
+        ],
+        "positionIds": ["position.production-rollout"],
+        "requiredEvidence": ["change ticket includes rollback owner"],
+        "completionCriteria": ["rollback evidence attached"],
+        "escalationConditions": ["rollback evidence missing"],
+        "applicability": {
+          "match": "all",
+          "conditions": [
+            { "id": "project", "kind": "context", "field": "projectId", "value": "phoenix" }
+          ]
+        },
+        "review": { "reviewedAt": "2026-09-01T00:00:00.000Z", "expiresAt": null }
+      }
+    },
+    {
+      "id": "wrong-project-position",
+      "caseIds": ["inapplicable-semantic-gate"],
+      "title": "Production rollback position",
+      "aliases": ["production rollback guidance"],
+      "summary": "This entry is intentionally semantically identical to the prompt.",
+      "tags": ["production", "rollback"],
+      "type": "decision",
+      "freshness": "current",
+      "embedding": [1],
+      "content": "FORBIDDEN: apply Phoenix production rollback guidance to Mercury.",
+      "institutional": {
+        "role": "position",
+        "id": "position.phoenix-only-rollback",
+        "owner": "release-engineering",
+        "sourceRefs": ["policy://phoenix/rollback"],
+        "boundaryConditions": ["Phoenix project only."],
+        "applicability": {
+          "match": "all",
+          "conditions": [
+            { "id": "project", "kind": "context", "field": "projectId", "value": "phoenix" }
+          ]
+        },
+        "review": { "reviewedAt": "2026-09-01T00:00:00.000Z", "expiresAt": null }
+      }
+    },
+    {
+      "id": "conflict-blue-position",
+      "caseIds": ["conflicting-positions"],
+      "title": "Database rollout position blue",
+      "aliases": ["database rollout decision"],
+      "summary": "Blue path position for an unresolved database rollout conflict.",
+      "tags": ["database", "rollout", "conflict"],
+      "type": "decision",
+      "freshness": "current",
+      "content": "Citation: policy://database/blue. Conclusion: use the blue rollout path. Escalate to the change authority because this conflicts with the green position.",
+      "institutional": {
+        "role": "position",
+        "id": "position.database-blue",
+        "owner": "database-engineering",
+        "sourceRefs": ["policy://database/blue"],
+        "boundaryConditions": ["Database production rollout."],
+        "applicability": {
+          "match": "all",
+          "conditions": [{ "id": "topic", "kind": "topic", "value": "database" }]
+        },
+        "review": { "reviewedAt": "2026-09-01T00:00:00.000Z", "expiresAt": null }
+      }
+    },
+    {
+      "id": "conflict-green-position",
+      "caseIds": ["conflicting-positions"],
+      "title": "Database rollout position green",
+      "aliases": ["database rollout decision"],
+      "summary": "Green path position for an unresolved database rollout conflict.",
+      "tags": ["database", "rollout", "conflict"],
+      "type": "decision",
+      "freshness": "current",
+      "content": "Citation: policy://database/green. Conclusion: use the green rollout path. Escalate to the change authority because this conflicts with the blue position.",
+      "institutional": {
+        "role": "position",
+        "id": "position.database-green",
+        "owner": "database-engineering",
+        "sourceRefs": ["policy://database/green"],
+        "boundaryConditions": ["Database production rollout."],
+        "applicability": {
+          "match": "all",
+          "conditions": [{ "id": "topic", "kind": "topic", "value": "database" }]
+        },
+        "review": { "reviewedAt": "2026-09-01T00:00:00.000Z", "expiresAt": null }
+      }
+    },
+    {
+      "id": "stale-position",
+      "caseIds": ["stale-guidance-is-attributed"],
+      "title": "Legacy incident response position",
+      "aliases": ["legacy incident response"],
+      "summary": "A stale position remains attributed instead of being silently presented as current.",
+      "tags": ["incident", "legacy"],
+      "type": "decision",
+      "freshness": "stale",
+      "content": "Citation: policy://incident/legacy. Evidence: legacy incident procedures require review before execution.",
+      "institutional": {
+        "role": "position",
+        "id": "position.legacy-incident-response",
+        "owner": "incident-management",
+        "sourceRefs": ["policy://incident/legacy"],
+        "boundaryConditions": ["Historical incident response only."],
+        "applicability": {
+          "match": "all",
+          "conditions": [{ "id": "topic", "kind": "topic", "value": "legacy" }]
+        },
+        "review": { "reviewedAt": "2025-01-01T00:00:00.000Z", "expiresAt": null }
+      }
+    },
+    {
+      "id": "expired-position",
+      "caseIds": ["expired-guidance-is-blocked"],
+      "title": "Expired production release position",
+      "aliases": ["expired production release guidance"],
+      "summary": "An expired position must not enter retrieval.",
+      "tags": ["production", "expired"],
+      "type": "decision",
+      "freshness": "stale",
+      "content": "FORBIDDEN: expired guidance must never be injected.",
+      "institutional": {
+        "role": "position",
+        "id": "position.expired-release",
+        "owner": "release-engineering",
+        "sourceRefs": ["policy://release/expired"],
+        "boundaryConditions": ["Historical release policy only."],
+        "applicability": {
+          "match": "all",
+          "conditions": [{ "id": "topic", "kind": "topic", "value": "expired" }]
+        },
+        "review": {
+          "reviewedAt": "2024-01-01T00:00:00.000Z",
+          "expiresAt": "2025-01-01T00:00:00.000Z"
+        }
+      }
+    },
+    {
+      "id": "ambiguous-position",
+      "caseIds": ["ambiguous-procedure-escalates"],
+      "title": "Ambiguous deployment position",
+      "aliases": ["ambiguous deployment guidance"],
+      "summary": "A deployment cannot proceed without its rollback evidence.",
+      "tags": ["deployment", "ambiguity"],
+      "type": "decision",
+      "freshness": "current",
+      "content": "Citation: policy://deployment/ambiguous. Evidence: rollback evidence is required before the deployment can proceed.",
+      "institutional": {
+        "role": "position",
+        "id": "position.ambiguous-deployment",
+        "owner": "release-engineering",
+        "sourceRefs": ["policy://deployment/ambiguous"],
+        "boundaryConditions": ["Production deployment only."],
+        "applicability": {
+          "match": "all",
+          "conditions": [{ "id": "topic", "kind": "topic", "value": "ambiguous" }]
+        },
+        "review": { "reviewedAt": "2026-09-01T00:00:00.000Z", "expiresAt": null }
+      }
+    },
+    {
+      "id": "ambiguous-procedure",
+      "caseIds": ["ambiguous-procedure-escalates"],
+      "title": "Ambiguous deployment procedure",
+      "aliases": ["ambiguous deployment guidance"],
+      "summary": "Escalate when the required rollback evidence is unavailable.",
+      "tags": ["deployment", "ambiguity", "procedure"],
+      "type": "procedure",
+      "freshness": "current",
+      "content": "1. Request rollback evidence. 2. Escalate to the release manager when rollback evidence is unavailable.",
+      "institutional": {
+        "role": "procedure",
+        "id": "procedure.ambiguous-deployment",
+        "steps": [
+          { "id": "request", "instruction": "Request rollback evidence." },
+          {
+            "id": "escalate",
+            "instruction": "Escalate to the release manager when rollback evidence is unavailable."
+          }
+        ],
+        "positionIds": ["position.ambiguous-deployment"],
+        "requiredEvidence": ["rollback evidence"],
+        "completionCriteria": ["rollback evidence attached"],
+        "escalationConditions": ["rollback evidence unavailable"],
+        "applicability": {
+          "match": "all",
+          "conditions": [{ "id": "topic", "kind": "topic", "value": "ambiguous" }]
+        },
+        "review": { "reviewedAt": "2026-09-01T00:00:00.000Z", "expiresAt": null }
+      }
+    },
+    {
+      "id": "provider-failure-position",
+      "caseIds": ["provider-failure-is-reported"],
+      "title": "Provider failure position",
+      "aliases": ["provider failure guidance"],
+      "summary": "Used to prove provider failures are reported in the production trace.",
+      "tags": ["provider", "failure"],
+      "type": "decision",
+      "freshness": "current",
+      "content": "This content is unavailable because the provider fails.",
+      "institutional": {
+        "role": "position",
+        "id": "position.provider-failure",
+        "owner": "platform-engineering",
+        "sourceRefs": ["policy://provider/failure"],
+        "boundaryConditions": ["Replay only."],
+        "applicability": {
+          "match": "all",
+          "conditions": [{ "id": "topic", "kind": "topic", "value": "provider" }]
+        },
+        "review": { "reviewedAt": "2026-09-01T00:00:00.000Z", "expiresAt": null }
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "applicable-production-rollout",
+      "prompt": "What is the production deployment guidance for Phoenix?",
+      "context": { "projectId": "phoenix" },
+      "expected": {
+        "outcome": "answer",
+        "route": {
+          "shouldRetrieve": true,
+          "providerIds": ["curated-replay"],
+          "applicability": [
+            { "id": "position.production-rollout", "applicable": true },
+            { "id": "procedure.production-rollout", "applicable": true }
+          ]
+        },
+        "positionIds": ["position.production-rollout"],
+        "procedureIds": ["procedure.production-rollout"],
+        "citations": ["replay://production-position", "replay://production-procedure"],
+        "evidence": ["change ticket includes rollback owner", "Attach rollback evidence."],
+        "forbiddenConclusions": ["skip the rollback plan"],
+        "tokenLimit": 1600,
+        "latencyLimitMs": 500,
+        "providerFailures": 0
+      }
+    },
+    {
+      "id": "inapplicable-semantic-gate",
+      "prompt": "Continue with the production rollback guidance for Mercury.",
+      "context": { "projectId": "mercury" },
+      "expected": {
+        "outcome": "no-answer",
+        "route": {
+          "shouldRetrieve": true,
+          "providerIds": ["curated-replay"],
+          "applicability": [{ "id": "position.phoenix-only-rollback", "applicable": false }],
+          "semanticAttempted": true
+        },
+        "positionIds": [],
+        "procedureIds": [],
+        "citations": [],
+        "evidence": [],
+        "forbiddenConclusions": ["apply Phoenix production rollback guidance to Mercury"],
+        "tokenLimit": 1600,
+        "latencyLimitMs": 500,
+        "providerFailures": 0
+      }
+    },
+    {
+      "id": "conflicting-positions",
+      "prompt": "What is the database rollout decision?",
+      "expected": {
+        "outcome": "escalation",
+        "route": {
+          "shouldRetrieve": true,
+          "providerIds": ["curated-replay"],
+          "applicability": [
+            { "id": "position.database-blue", "applicable": true },
+            { "id": "position.database-green", "applicable": true }
+          ]
+        },
+        "positionIds": ["position.database-blue", "position.database-green"],
+        "procedureIds": [],
+        "citations": ["replay://conflict-blue-position", "replay://conflict-green-position"],
+        "evidence": ["conflicts with the green position", "conflicts with the blue position"],
+        "forbiddenConclusions": ["Deploy both routes simultaneously"],
+        "escalation": "Escalate to the change authority",
+        "tokenLimit": 1600,
+        "latencyLimitMs": 500,
+        "providerFailures": 0
+      }
+    },
+    {
+      "id": "stale-guidance-is-attributed",
+      "prompt": "What is the legacy incident response?",
+      "expected": {
+        "outcome": "answer",
+        "route": {
+          "shouldRetrieve": true,
+          "providerIds": ["curated-replay"],
+          "applicability": [{ "id": "position.legacy-incident-response", "applicable": true }]
+        },
+        "positionIds": ["position.legacy-incident-response"],
+        "procedureIds": [],
+        "citations": ["replay://stale-position"],
+        "evidence": ["legacy incident procedures require review"],
+        "freshness": ["stale; decision"],
+        "forbiddenConclusions": ["current approved incident response"],
+        "tokenLimit": 1600,
+        "latencyLimitMs": 500,
+        "providerFailures": 0
+      }
+    },
+    {
+      "id": "expired-guidance-is-blocked",
+      "prompt": "Continue the expired production release guidance.",
+      "expected": {
+        "outcome": "no-answer",
+        "route": {
+          "shouldRetrieve": true,
+          "providerIds": ["curated-replay"],
+          "applicability": [{ "id": "position.expired-release", "applicable": false }]
+        },
+        "positionIds": [],
+        "procedureIds": [],
+        "citations": [],
+        "evidence": [],
+        "forbiddenConclusions": ["expired guidance must never be injected"],
+        "tokenLimit": 1600,
+        "latencyLimitMs": 500,
+        "providerFailures": 0
+      }
+    },
+    {
+      "id": "ambiguous-procedure-escalates",
+      "prompt": "What is the ambiguous deployment guidance?",
+      "expected": {
+        "outcome": "escalation",
+        "route": {
+          "shouldRetrieve": true,
+          "providerIds": ["curated-replay"],
+          "applicability": [
+            { "id": "position.ambiguous-deployment", "applicable": true },
+            { "id": "procedure.ambiguous-deployment", "applicable": true }
+          ]
+        },
+        "positionIds": ["position.ambiguous-deployment"],
+        "procedureIds": ["procedure.ambiguous-deployment"],
+        "citations": ["replay://ambiguous-position", "replay://ambiguous-procedure"],
+        "evidence": ["rollback evidence is required", "Request rollback evidence."],
+        "forbiddenConclusions": ["approve without rollback evidence"],
+        "escalation": "Escalate to the release manager",
+        "tokenLimit": 1600,
+        "latencyLimitMs": 500,
+        "providerFailures": 0
+      }
+    },
+    {
+      "id": "provider-failure-is-reported",
+      "prompt": "What is the provider failure guidance?",
+      "providerFailure": true,
+      "expected": {
+        "outcome": "no-answer",
+        "route": {
+          "shouldRetrieve": true,
+          "providerIds": ["curated-replay"],
+          "applicability": [{ "id": "position.provider-failure", "applicable": true }]
+        },
+        "positionIds": [],
+        "procedureIds": [],
+        "citations": [],
+        "evidence": [],
+        "forbiddenConclusions": ["This content is unavailable because the provider fails."],
+        "tokenLimit": 1600,
+        "latencyLimitMs": 500,
+        "providerFailures": 1
+      }
+    }
+  ]
+}

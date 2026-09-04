@@ -1,6 +1,7 @@
-import { MemoryCatalog, renderCatalog } from "./catalog.js"
+import { MemoryCatalog, renderCatalog, type CatalogSnapshot } from "./catalog.js"
 import type { OrchestratorConfig } from "./config.js"
 import { MemoryDiagnostics } from "./diagnostics.js"
+import { institutionalApplies, institutionalReviewStatus } from "./institutional.js"
 import { isObservationStore } from "./observation.js"
 import { DeterministicRetrievalPlanner } from "./planner.js"
 import { SemanticCatalogRecognizer, type SemanticRecognitionResult } from "./planning/semantic.js"
@@ -156,6 +157,26 @@ export class RememOrchestrator {
     this.providerIds = this.providers.map((provider) => provider.id)
   }
 
+  private renderActiveCatalog(
+    catalog: CatalogSnapshot,
+    context: MemoryContext,
+    prompt?: string,
+    blockedCatalogIds: ReadonlySet<string> = new Set(),
+  ): CatalogSnapshot {
+    const rendered = renderCatalog(
+      catalog.entries.filter(
+        (entry) =>
+          !blockedCatalogIds.has(entry.id) &&
+          (!entry.institutional ||
+            (institutionalReviewStatus(entry.institutional) === "current" &&
+              institutionalApplies(entry.institutional, context, prompt))),
+      ),
+      this.config.budgets.catalogTokens,
+      catalog.providers,
+    )
+    return { ...rendered, diagnostics: [...catalog.diagnostics, ...rendered.diagnostics] }
+  }
+
   async processPrompt(prompt: string, context: MemoryContext): Promise<MemoryInjection> {
     const started = performance.now()
     const fallbackCatalog = renderCatalog([], this.config.budgets.catalogTokens)
@@ -169,10 +190,10 @@ export class RememOrchestrator {
 
     try {
       const catalogStarted = performance.now()
-      catalog = await this.catalog.get(context)
+      const loadedCatalog = await this.catalog.get(context)
       catalogMs = performance.now() - catalogStarted
       const planningStarted = performance.now()
-      let plan = this.planner.plan(prompt, catalog.entries, this.providerIds, context)
+      let plan = this.planner.plan(prompt, loadedCatalog.entries, this.providerIds, context)
       const semanticConfig = this.config.semantic ?? {
         enabled: true,
         minimumSimilarity: 0.55,
@@ -187,7 +208,7 @@ export class RememOrchestrator {
         try {
           const recognized = await this.semantic.recognize(
             prompt,
-            catalog.entries.filter(
+            loadedCatalog.entries.filter(
               (entry) =>
                 !(plan.applicability ?? []).some(
                   ({ catalogEntryId, applicable }) => catalogEntryId === entry.id && !applicable,
@@ -213,6 +234,16 @@ export class RememOrchestrator {
           )
         }
       }
+      catalog = this.renderActiveCatalog(
+        loadedCatalog,
+        context,
+        prompt,
+        new Set(
+          (plan.applicability ?? [])
+            .filter(({ applicable }) => !applicable)
+            .map(({ catalogEntryId }) => catalogEntryId),
+        ),
+      )
       planningMs = performance.now() - planningStarted
       const recallStarted = performance.now()
       const recall = await this.recall.execute(plan, context)
@@ -368,7 +399,7 @@ export class RememOrchestrator {
   }
 
   async compactionContext(context: MemoryContext): Promise<string> {
-    const catalog = await this.catalog.get(context)
+    const catalog = this.renderActiveCatalog(await this.catalog.get(context), context)
     return [
       "## Remem continuity",
       "Preserve references to relevant external memory and unresolved work in the continuation summary.",

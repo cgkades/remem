@@ -2,8 +2,10 @@ import type {
   InstitutionalMemory,
   InstitutionalPosition,
   InstitutionalProcedure,
+  MemoryContext,
   MemoryWrite,
 } from "./types.js"
+import { tokenize } from "./text.js"
 
 export type InstitutionalValidationCode =
   | "duplicate_id"
@@ -33,6 +35,8 @@ export interface InstitutionalValidationOptions {
   asOf?: Date
 }
 
+export type InstitutionalReviewStatus = "current" | "expired" | "invalid"
+
 type InstitutionalWrite = Pick<
   MemoryWrite,
   "title" | "content" | "scope" | "type" | "provenance" | "institutional"
@@ -44,6 +48,95 @@ function hasText(value: unknown): value is string {
 
 function isValidDate(value: unknown): value is string {
   return hasText(value) && Number.isFinite(Date.parse(value))
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 0 && value.every(hasText)
+}
+
+export function isInstitutionalMemory(value: unknown): value is InstitutionalMemory {
+  if (!isRecord(value) || (value.role !== "position" && value.role !== "procedure")) return false
+  if (
+    typeof value.id !== "string" ||
+    !isRecord(value.applicability) ||
+    (value.applicability.match !== "all" && value.applicability.match !== "any") ||
+    !Array.isArray(value.applicability.conditions) ||
+    value.applicability.conditions.length === 0 ||
+    !value.applicability.conditions.every(
+      (condition) =>
+        isRecord(condition) &&
+        typeof condition.id === "string" &&
+        typeof condition.value === "string" &&
+        (condition.kind === "topic" ||
+          (condition.kind === "context" &&
+            (condition.field === "directory" ||
+              condition.field === "worktree" ||
+              condition.field === "projectId" ||
+              condition.field === "sessionId"))),
+    ) ||
+    !isRecord(value.review) ||
+    typeof value.review.reviewedAt !== "string" ||
+    !(typeof value.review.expiresAt === "string" || value.review.expiresAt === null)
+  ) {
+    return false
+  }
+  if (value.role === "position") {
+    return (
+      (hasText(value.owner) || hasText(value.authority)) &&
+      isStringArray(value.sourceRefs) &&
+      isStringArray(value.boundaryConditions)
+    )
+  }
+  return (
+    Array.isArray(value.steps) &&
+    value.steps.length > 0 &&
+    value.steps.every(
+      (step) =>
+        isRecord(step) && typeof step.id === "string" && typeof step.instruction === "string",
+    ) &&
+    isStringArray(value.positionIds) &&
+    isStringArray(value.requiredEvidence) &&
+    isStringArray(value.completionCriteria) &&
+    isStringArray(value.escalationConditions)
+  )
+}
+
+export function institutionalReviewStatus(
+  institutional: unknown,
+  asOf = Date.now(),
+): InstitutionalReviewStatus {
+  if (!isInstitutionalMemory(institutional)) return "invalid"
+  const review = (institutional as { review?: unknown }).review
+  if (typeof review !== "object" || review === null) return "invalid"
+  const { reviewedAt, expiresAt } = review as { reviewedAt?: unknown; expiresAt?: unknown }
+  const reviewedTimestamp = typeof reviewedAt === "string" ? Date.parse(reviewedAt) : Number.NaN
+  if (!Number.isFinite(reviewedTimestamp) || reviewedTimestamp > asOf) return "invalid"
+  if (expiresAt === null) return "current"
+  if (typeof expiresAt !== "string") return "invalid"
+  const timestamp = Date.parse(expiresAt)
+  if (!Number.isFinite(timestamp)) return "invalid"
+  return timestamp <= asOf ? "expired" : "current"
+}
+
+export function institutionalApplies(
+  institutional: unknown,
+  context: MemoryContext,
+  prompt?: string,
+): boolean {
+  if (!isInstitutionalMemory(institutional)) return false
+  const matches = institutional.applicability.conditions.map((condition) => {
+    if (condition.kind === "topic") {
+      return prompt !== undefined && tokenize(prompt).includes(condition.value.toLowerCase())
+    }
+    return context[condition.field] === condition.value
+  })
+  return institutional.applicability.match === "all"
+    ? matches.every(Boolean)
+    : matches.some(Boolean)
 }
 
 function nonEmptyStrings(values: unknown): values is string[] {
@@ -123,7 +216,7 @@ function validateReview(
     })
     return
   }
-  if (expiresAt !== null && Date.parse(expiresAt) < asOf.getTime()) {
+  if (expiresAt !== null && Date.parse(expiresAt) <= asOf.getTime()) {
     issues.push({ code: "expired", id: memory.id, message: "institutional memory has expired" })
   }
 }
@@ -267,6 +360,15 @@ function validateEntry(
     return
   }
   validateProcedure(memory, institutional, issues)
+}
+
+export function validateInstitutionalMemory(
+  memory: MemoryWrite,
+  options: InstitutionalValidationOptions = {},
+): InstitutionalValidationResult {
+  const issues: InstitutionalValidationIssue[] = []
+  if (memory.institutional) validateEntry(memory, options.asOf ?? new Date(), issues)
+  return { valid: issues.length === 0, issues }
 }
 
 function validateReferences(
