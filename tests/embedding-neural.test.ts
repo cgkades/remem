@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
+import * as transformers from "@huggingface/transformers"
 import * as undici from "undici"
 import { LocalHashEmbeddingModel } from "../src/storage/embedding.js"
 import {
@@ -17,7 +18,11 @@ vi.mock("undici", async (importOriginal) => {
 // Fakes the transformers.js module so we can inspect what defaultLoadPipeline
 // (the real, non-test loader) does to `env` when a modelPath is supplied,
 // without downloading real model weights or hitting the network.
-const fakeTransformersEnv: { localModelPath?: string; allowRemoteModels?: boolean } = {}
+const fakeTransformersEnv = vi.hoisted<{
+  cacheDir?: string
+  localModelPath?: string
+  allowRemoteModels?: boolean
+}>(() => ({}))
 vi.mock("@huggingface/transformers", () => ({
   env: fakeTransformersEnv,
   pipeline: vi.fn().mockResolvedValue(vi.fn().mockResolvedValue({ data: new Float32Array(384) })),
@@ -30,6 +35,8 @@ describe("createEmbeddingModel", () => {
     // a previous test's localModelPath/allowRemoteModels values.
     delete fakeTransformersEnv.localModelPath
     delete fakeTransformersEnv.allowRemoteModels
+    delete fakeTransformersEnv.cacheDir
+    vi.mocked(transformers.pipeline).mockClear()
   })
 
   it("returns LocalHashEmbeddingModel for backend 'hash'", async () => {
@@ -96,6 +103,23 @@ describe("createEmbeddingModel", () => {
     await createEmbeddingModel({ backend: "neural", modelPath: "/opt/models/bge-small" })
     expect(fakeTransformersEnv.localModelPath).toBe("/opt/models/bge-small")
     expect(fakeTransformersEnv.allowRemoteModels).toBe(false)
+  })
+
+  it("configures the explicit cache directory and pinned model revision", async () => {
+    const previousCacheDir = process.env.REMEM_TRANSFORMERS_CACHE_DIR
+    process.env.REMEM_TRANSFORMERS_CACHE_DIR = ".cache/test-transformers"
+    try {
+      await createEmbeddingModel({ backend: "neural" })
+      expect(fakeTransformersEnv.cacheDir).toBe(".cache/test-transformers")
+      expect(transformers.pipeline).toHaveBeenCalledWith(
+        "feature-extraction",
+        "Xenova/bge-small-en-v1.5",
+        expect.objectContaining({ revision: "ea104dacec62c0de699686887e3f920caeb4f3e3" }),
+      )
+    } finally {
+      if (previousCacheDir === undefined) delete process.env.REMEM_TRANSFORMERS_CACHE_DIR
+      else process.env.REMEM_TRANSFORMERS_CACHE_DIR = previousCacheDir
+    }
   })
 
   it("calls onFallback with the error when the neural loader throws", async () => {

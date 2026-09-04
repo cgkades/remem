@@ -76,7 +76,7 @@ jobs:
       - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: ${{ runner.temp }}/transformers-cache
-          key: neural-evaluation-${{ runner.os }}-ea104dacec62c0de699686887e3f920caeb4f3e3-${{ hashFiles('package-lock.json') }}
+          key: neural-evaluation-${{ runner.os }}-${{ hashFiles('src/storage/embedding-neural.ts', 'package-lock.json') }}
       - run: npm ci
       - run: npm run test:eval -- --reporter=json --outputFile=artifacts/neural-evaluation.json
         env:
