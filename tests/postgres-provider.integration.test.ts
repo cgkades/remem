@@ -964,6 +964,237 @@ integration("PostgreSQL managed provider", () => {
     expect(row.rows[0]?.model).toBe("remem-local-hash-v1")
   })
 
+  it("respects batchSize/LIMIT instead of reembedding every stale row in one run", async () => {
+    const provider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "reembed-batch-test",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 10,
+      },
+      { pool },
+    )
+    // Drain any backlog left by earlier tests in this shared-schema
+    // sequential suite first, so the batch-size assertions below only ever
+    // see the three rows this test controls.
+    const drain = await provider.reembedStale(10_000)
+    expect(drain.status).not.toBe("failed")
+
+    const ids = await Promise.all(
+      ["oldest", "middle", "newest"].map(
+        async (label) =>
+          (
+            await provider.write({
+              title: `Reembed batch target (${label})`,
+              content: `Batch-size regression content for the ${label} row.`,
+              scope: { kind: "workspace", id: "phoenix" },
+              type: "decision",
+            })
+          ).id,
+      ),
+    )
+    try {
+      // Force a deterministic claim order (oldest updated_at first, matching
+      // claimStaleRows' `ORDER BY me.updated_at`) so which two of the three
+      // rows get claimed by a batch size of 2 is not left to chance.
+      await pool.query(
+        `UPDATE remem.memory_embeddings
+           SET model = 'stale-batch-test', updated_at = now() - ($2 * interval '1 hour')
+         WHERE memory_id = $1`,
+        [ids[0], 3],
+      )
+      await pool.query(
+        `UPDATE remem.memory_embeddings
+           SET model = 'stale-batch-test', updated_at = now() - ($2 * interval '1 hour')
+         WHERE memory_id = $1`,
+        [ids[1], 2],
+      )
+      await pool.query(
+        `UPDATE remem.memory_embeddings
+           SET model = 'stale-batch-test', updated_at = now() - ($2 * interval '1 hour')
+         WHERE memory_id = $1`,
+        [ids[2], 1],
+      )
+
+      const firstBatch = await provider.reembedStale(2)
+      expect(firstBatch.status).toBe("completed")
+      expect(firstBatch.claimed).toBe(2)
+      expect(firstBatch.reembedded).toBe(2)
+
+      const modelsAfterFirstBatch = await pool.query<{ memory_id: string; model: string }>(
+        "SELECT memory_id, model FROM remem.memory_embeddings WHERE memory_id = ANY($1)",
+        [ids],
+      )
+      const modelById = new Map(modelsAfterFirstBatch.rows.map((row) => [row.memory_id, row.model]))
+      // The two oldest rows (by the updated_at we set above) must have been
+      // claimed; the newest must still be waiting. A regression that dropped
+      // the LIMIT clause would instead reembed all three in the first batch.
+      expect(modelById.get(ids[0]!)).toBe("remem-local-hash-v1")
+      expect(modelById.get(ids[1]!)).toBe("remem-local-hash-v1")
+      expect(modelById.get(ids[2]!)).toBe("stale-batch-test")
+
+      const secondBatch = await provider.reembedStale(2)
+      expect(secondBatch.status).toBe("completed")
+      expect(secondBatch.claimed).toBe(1)
+      expect(secondBatch.reembedded).toBe(1)
+      const finalRow = await pool.query<{ model: string }>(
+        "SELECT model FROM remem.memory_embeddings WHERE memory_id = $1",
+        [ids[2]],
+      )
+      expect(finalRow.rows[0]?.model).toBe("remem-local-hash-v1")
+    } finally {
+      // Defensive: if an assertion above threw before the second batch ran,
+      // don't leave any of these three rows behind at the 'stale-batch-test'
+      // marker for later tests in this shared, sequential-suite schema.
+      await provider.reembedStale(10_000)
+    }
+  })
+
+  it("recovers an interrupted reembed claim before reclaiming and completing it", async () => {
+    const provider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "reembed-recovery-test",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 10,
+      },
+      { pool },
+    )
+    const written = await provider.write({
+      title: "Reembed recovery target",
+      content: "This row's claim was interrupted before the process crashed.",
+      scope: { kind: "workspace", id: "phoenix" },
+      type: "decision",
+    })
+    const interruptedRunId = randomUUID()
+    await pool.query(
+      "UPDATE remem.memory_embeddings SET model = 'stale-recovery-test', reembed_claim_id = $2 WHERE memory_id = $1",
+      [written.id, interruptedRunId],
+    )
+    await pool.query(
+      `INSERT INTO remem.consolidation_records
+        (id, kind, status, input_memory_ids, started_at)
+       VALUES ($1, 'embedding-reembed', 'started', $2, now() - interval '1 hour')`,
+      [interruptedRunId, [written.id]],
+    )
+
+    try {
+      const recoveredRun = await provider.reembedStale(1_000)
+
+      expect(recoveredRun.status).toBe("completed")
+      expect(
+        (
+          await pool.query<{ status: string }>(
+            "SELECT status FROM remem.consolidation_records WHERE id = $1",
+            [interruptedRunId],
+          )
+        ).rows[0]?.status,
+      ).toBe("failed")
+      const row = await pool.query<{ model: string; reembed_claim_id: string | null }>(
+        "SELECT model, reembed_claim_id FROM remem.memory_embeddings WHERE memory_id = $1",
+        [written.id],
+      )
+      // The interrupted claim must be released (not left dangling, which would
+      // make the row permanently unclaimable) and the row actually reembedded
+      // in this same run.
+      expect(row.rows[0]?.reembed_claim_id).toBeNull()
+      expect(row.rows[0]?.model).toBe("remem-local-hash-v1")
+    } finally {
+      // Defensive: if an assertion above threw before reembedStale ran (or
+      // before it finished), don't leave this row's claim dangling or its
+      // model at the transient marker for later tests in this shared,
+      // sequential-suite schema.
+      await pool.query(
+        "UPDATE remem.memory_embeddings SET reembed_claim_id = NULL WHERE memory_id = $1",
+        [written.id],
+      )
+      await provider.reembedStale(10_000)
+    }
+  })
+
+  it("records a failed run instead of a false completion when every reembed attempt errors", async () => {
+    const seedProvider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "reembed-failure-seed",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 10,
+      },
+      { pool },
+    )
+    const written = await seedProvider.write({
+      title: "Reembed failure target",
+      content: "This row must remain untouched when reembedding fails.",
+      scope: { kind: "workspace", id: "phoenix" },
+      type: "decision",
+    })
+    const originalModel = (
+      await pool.query<{ model: string }>(
+        "SELECT model FROM remem.memory_embeddings WHERE memory_id = $1",
+        [written.id],
+      )
+    ).rows[0]?.model
+    await pool.query(
+      "UPDATE remem.memory_embeddings SET model = 'stale-failure-test' WHERE memory_id = $1",
+      [written.id],
+    )
+
+    const failingEmbedding: EmbeddingModel = {
+      id: "always-fails-integration-test-marker",
+      dimensions: 384,
+      embed: () => Promise.reject(new Error("embedding backend unavailable")),
+    }
+    const failingProvider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "reembed-failure-runner",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 10,
+      },
+      { pool, embeddingModel: failingEmbedding },
+    )
+    try {
+      // A large batch: every row not already at "always-fails-integration-test-marker"
+      // looks stale to this runner, so this must cover the whole current
+      // backlog to guarantee our row is included regardless of what else is
+      // in the shared schema at this point in the suite.
+      const result = await failingProvider.reembedStale(10_000)
+
+      expect(result.status).toBe("failed")
+      expect(result.reembedded).toBe(0)
+      expect(result.errors.length).toBeGreaterThan(0)
+      const row = await pool.query<{ model: string; reembed_claim_id: string | null }>(
+        "SELECT model, reembed_claim_id FROM remem.memory_embeddings WHERE memory_id = $1",
+        [written.id],
+      )
+      // Nothing was actually overwritten, and the claim was released rather
+      // than left dangling.
+      expect(row.rows[0]?.model).toBe("stale-failure-test")
+      expect(row.rows[0]?.reembed_claim_id).toBeNull()
+      const runRecord = await pool.query<{ status: string }>(
+        "SELECT status FROM remem.consolidation_records WHERE id = $1",
+        [result.id],
+      )
+      expect(runRecord.rows[0]?.status).toBe("failed")
+    } finally {
+      // Restore the row to a healthy state so it doesn't linger as permanent
+      // backlog noise for the rest of this sequential suite, even if an
+      // assertion above threw first.
+      await pool.query(
+        "UPDATE remem.memory_embeddings SET model = $2, reembed_claim_id = NULL WHERE memory_id = $1",
+        [written.id, originalModel],
+      )
+    }
+  })
+
   it("runs a manual reembed via the CLI", async () => {
     const seedProvider = new PostgresMemoryProvider(
       {
@@ -1056,6 +1287,16 @@ integration("PostgreSQL managed provider", () => {
       scope: { kind: "workspace", id: "phoenix" },
       type: "decision",
     })
+    // Snapshot every row's model BEFORE marking ours stale, so `finally`
+    // restores this row to its natural freshly-written state, and every
+    // other row in this shared schema to whatever it was before this test
+    // touched it -- not to whatever transient marker this test happened to
+    // set.
+    const originalEmbeddings = (
+      await pool.query<{ memory_id: string; model: string }>(
+        "SELECT memory_id, model FROM remem.memory_embeddings",
+      )
+    ).rows
     await pool.query(
       "UPDATE remem.memory_embeddings SET model = 'stale-model' WHERE memory_id = $1",
       [written.id],
@@ -1109,6 +1350,12 @@ integration("PostgreSQL managed provider", () => {
       // backend, exactly the bug this test guards against.
       expect(row.rows[0]?.model).toBe("bge-small-en-v1.5")
     } finally {
+      for (const original of originalEmbeddings) {
+        await pool.query("UPDATE remem.memory_embeddings SET model = $2 WHERE memory_id = $1", [
+          original.memory_id,
+          original.model,
+        ])
+      }
       await rm(root, { recursive: true, force: true })
     }
   })
