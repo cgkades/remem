@@ -417,12 +417,17 @@ async function createHooksWorkspace(root, plugin, modelURL, connectionString) {
 async function pollUntil(description, check, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs
   let lastResult
+  let attempts = 0
   while (Date.now() < deadline) {
     lastResult = await check()
+    attempts++
     if (lastResult) return lastResult
     await delay(200)
   }
-  throw new Error(`timed out waiting for: ${description}`)
+  throw new Error(
+    `timed out waiting for: ${description} (${attempts} attempts over ${timeoutMs}ms, ` +
+      `last result: ${JSON.stringify(lastResult)})`,
+  )
 }
 
 async function startOpenCodeServer(executable, workspace, environment, attempts = 3) {
@@ -742,10 +747,21 @@ async function main() {
         scope: { kind: "workspace", id: "hooks" },
         type: "decision",
       })
-      await hooksPool.query(
+      const staled = await hooksPool.query(
         "UPDATE remem.memory_embeddings SET model = 'e2e-stale-marker' WHERE memory_id = $1",
         [seeded.id],
       )
+      if (staled.rowCount !== 1) {
+        // Without this check, the re-embed poll below would pass spuriously:
+        // if seeding never produced an embeddings row, its SELECT would
+        // return no rows, and `undefined !== "e2e-stale-marker"` is true --
+        // silently "confirming" the re-embed hook fired when it was never
+        // actually exercised.
+        throw new Error(
+          `expected to mark exactly one embedding row stale for memory ${seeded.id}, ` +
+            `affected ${staled.rowCount}`,
+        )
+      }
 
       const hooksWorkspace = await createHooksWorkspace(temporary, plugin, model.url, databaseUrl)
       const hooksSession = await createSession(serverURL, hooksWorkspace)
@@ -755,6 +771,10 @@ async function main() {
       // their effects may land slightly after /wait returns -- poll rather
       // than asserting immediately.
       await pollUntil("the capture hook to enqueue a candidate memory", async () => {
+        // Unscoped by design, not an oversight: the schema was dropped and
+        // freshly migrated immediately above, and this is the only scenario
+        // that runs against hooksPool, so any row here can only have come
+        // from this scenario's own prompt.
         const result = await hooksPool.query(
           "SELECT count(*)::int AS count FROM remem.candidate_memories",
         )
@@ -765,7 +785,7 @@ async function main() {
           "SELECT model FROM remem.memory_embeddings WHERE memory_id = $1",
           [seeded.id],
         )
-        return result.rows[0]?.model !== "e2e-stale-marker"
+        return result.rows.length === 1 && result.rows[0].model !== "e2e-stale-marker"
       })
     } else {
       process.stderr.write(
