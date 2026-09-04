@@ -65,6 +65,28 @@ function result(id: string, source: string): MemoryResult {
   }
 }
 
+function topicGatedResult(id: string, source: string): MemoryResult {
+  const base = result(id, source)
+  return {
+    ...base,
+    record: {
+      ...base.record,
+      institutional: {
+        role: "position",
+        id: "position.production-rollout",
+        owner: "release-engineering",
+        sourceRefs: ["policy"],
+        boundaryConditions: ["Applies only to production rollouts."],
+        applicability: {
+          match: "all",
+          conditions: [{ id: "topic", kind: "topic", value: "production rollout" }],
+        },
+        review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: null },
+      },
+    },
+  }
+}
+
 const plan: RetrievalPlan = {
   shouldRetrieve: true,
   confidence: 0.9,
@@ -142,5 +164,38 @@ describe("RecallEngine", () => {
     expect(recall.memories).toHaveLength(1)
     expect(recall.memories[0]?.record.providerId).toBe("healthy")
     expect(recall.attempts[0]?.error).toContain("out-of-scope")
+  })
+
+  it("includes a record gated by a multi-word institutional topic when the query contains that phrase", async () => {
+    const engine = new RecallEngine(
+      [new FakeProvider("healthy", [topicGatedResult("gated", "gated.md")])],
+      testConfig(),
+    )
+    const matchingPlan: RetrievalPlan = {
+      ...plan,
+      requests: [{ ...plan.requests[0]!, query: "Can we skip the production rollout plan?" }],
+    }
+
+    const recall = await engine.execute(matchingPlan, memoryContext)
+
+    expect(recall.memories).toHaveLength(1)
+  })
+
+  it("excludes a record gated by a multi-word institutional topic when the query doesn't contain that phrase", async () => {
+    const engine = new RecallEngine(
+      [new FakeProvider("healthy", [topicGatedResult("gated", "gated.md")])],
+      testConfig(),
+    )
+    // Both words are present, but not adjacent as the phrase "production
+    // rollout" -- this must still be excluded, not just any prompt that
+    // happens to be missing both words entirely.
+    const nonMatchingPlan: RetrievalPlan = {
+      ...plan,
+      requests: [{ ...plan.requests[0]!, query: "The rollout of the production database is done" }],
+    }
+
+    const recall = await engine.execute(nonMatchingPlan, memoryContext)
+
+    expect(recall.memories).toHaveLength(0)
   })
 })
