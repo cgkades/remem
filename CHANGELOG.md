@@ -40,6 +40,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Institutional topic applicability conditions now match multi-word values (e.g. `production rollout`)
+  as a normalized phrase instead of checking whether a single tokenized word is present, which
+  previously meant a multi-word topic condition could never match and, since applicability is
+  fail-closed, silently excluded otherwise-valid curated guidance from catalog rendering and recall.
+  `institutionalApplies` and the planner's `ApplicabilityDecision` diagnostics now share the same
+  `applicabilityConditionSatisfied` matcher, so the reported failed condition always reflects the
+  actual matching logic. Resolves [#47](https://github.com/cgkades/remem/issues/47).
 - `memory_submit_correction` now binds a correction to the retrieval trace of the turn _before_ the
   current one (`RememOrchestrator.explainPreviousTurn`) instead of the session's single "latest"
   trace. A single latest-trace slot could not distinguish the disputed response's own trace from the
