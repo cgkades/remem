@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { CorrectionReviewQueue, type ReplayGate } from "../src/correction.js"
+import {
+  CorrectionReviewQueue,
+  InMemoryCorrectionCandidateStore,
+  type ReplayGate,
+} from "../src/correction.js"
 import { RememOrchestrator } from "../src/orchestrator.js"
 import { MarkdownMemoryProvider } from "../src/providers/markdown.js"
 import { fixtureDirectory, memoryContext, testConfig } from "./helpers.js"
@@ -59,36 +63,41 @@ function createOrchestrator(reviewQueue?: CorrectionReviewQueue) {
 }
 
 describe("RememOrchestrator correction review surface", () => {
-  it("reports unavailable when no review queue is configured", () => {
+  it("reports unavailable when no review queue is configured", async () => {
     const orchestrator = createOrchestrator()
-    expect(orchestrator.submitCorrection(correction())).toEqual({ status: "unavailable" })
-    expect(orchestrator.reviewCandidates()).toEqual({ status: "unavailable" })
-    expect(orchestrator.explainCorrectionCandidate("missing")).toEqual({ status: "unavailable" })
+    expect(await orchestrator.submitCorrection(correction())).toEqual({ status: "unavailable" })
+    expect(await orchestrator.reviewCandidates()).toEqual({ status: "unavailable" })
+    expect(await orchestrator.explainCorrectionCandidate("missing")).toEqual({
+      status: "unavailable",
+    })
   })
 
   it("exposes read-only submit/list/explain against an injected review queue", async () => {
     const reviewQueue = new CorrectionReviewQueue(
+      new InMemoryCorrectionCandidateStore(),
       () => [],
       () => [],
       () => Promise.resolve({ memoryId: "new-id" }),
       passingGate,
     )
     const orchestrator = createOrchestrator(reviewQueue)
-    const submitted = orchestrator.submitCorrection(correction())
+    const submitted = await orchestrator.submitCorrection(correction())
     if ("status" in submitted) throw new Error("expected a candidate")
     await reviewQueue.runValidation(submitted.id)
 
-    const listed = orchestrator.reviewCandidates()
+    const listed = await orchestrator.reviewCandidates()
     expect(Array.isArray(listed)).toBe(true)
     if (!Array.isArray(listed)) throw new Error("expected a candidate list")
     expect(listed).toHaveLength(1)
     expect(listed[0]?.state).toBe("validated")
 
-    const explained = orchestrator.explainCorrectionCandidate(submitted.id)
+    const explained = await orchestrator.explainCorrectionCandidate(submitted.id)
     if ("status" in explained) throw new Error("expected a candidate")
     expect(explained.id).toBe(submitted.id)
 
-    expect(orchestrator.explainCorrectionCandidate("missing")).toEqual({ status: "not-found" })
+    expect(await orchestrator.explainCorrectionCandidate("missing")).toEqual({
+      status: "not-found",
+    })
     expect((orchestrator as unknown as Record<string, unknown>).approve).toBeUndefined()
   })
 })

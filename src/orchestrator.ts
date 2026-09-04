@@ -500,23 +500,25 @@ export class RememOrchestrator {
    * resulting candidate is intentionally not available through the
    * orchestrator -- see `OrchestratorDependencies.reviewQueue`.
    */
-  submitCorrection(correction: CorrectionInput): CorrectionCandidate | { status: "unavailable" } {
+  async submitCorrection(
+    correction: CorrectionInput,
+  ): Promise<CorrectionCandidate | { status: "unavailable" }> {
     if (!this.reviewQueue) return { status: "unavailable" }
     return this.reviewQueue.submit(correction)
   }
 
-  reviewCandidates(filter?: {
+  async reviewCandidates(filter?: {
     state?: CandidateLifecycleState
-  }): CorrectionCandidate[] | { status: "unavailable" } {
+  }): Promise<CorrectionCandidate[] | { status: "unavailable" }> {
     if (!this.reviewQueue) return { status: "unavailable" }
     return this.reviewQueue.list(filter)
   }
 
-  explainCorrectionCandidate(
+  async explainCorrectionCandidate(
     candidateId: string,
-  ): CorrectionCandidate | { status: "unavailable" | "not-found" } {
+  ): Promise<CorrectionCandidate | { status: "unavailable" | "not-found" }> {
     if (!this.reviewQueue) return { status: "unavailable" }
-    return this.reviewQueue.get(candidateId) ?? { status: "not-found" }
+    return (await this.reviewQueue.get(candidateId)) ?? { status: "not-found" }
   }
 
   private async synthesize(

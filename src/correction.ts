@@ -27,7 +27,13 @@ export type CandidateMutation =
 export type CandidateMutationKind = CandidateMutation["kind"]
 
 export type CandidateLifecycleState =
-  "pending_validation" | "validated" | "needs_changes" | "rejected" | "applied"
+  | "pending_validation"
+  | "validated"
+  | "needs_changes"
+  | "rejected"
+  /** Transient: an approve() call has atomically claimed the candidate and is applying its mutation. Not itself terminal -- on apply failure it reverts to "validated" so the candidate stays retryable. */
+  | "applying"
+  | "applied"
 
 export interface CorrectionInput {
   id?: string
@@ -438,34 +444,77 @@ export interface ApplyMutationResult {
  * part of applying the mutation, so the approved change is immediately
  * visible to subsequent retrieval -- `CorrectionReviewQueue.approve` treats
  * this call as the single atomic apply step and does not refresh anything
- * itself.
+ * itself. `context` is the correction's own context, so the implementation
+ * can scope provider lookups the same way the original correction was.
  */
-export type ApplyMutation = (mutation: CandidateMutation) => Promise<ApplyMutationResult>
+export type ApplyMutation = (
+  mutation: CandidateMutation,
+  context: MemoryContext,
+) => Promise<ApplyMutationResult>
 
-function clone(candidate: CorrectionCandidate): CorrectionCandidate {
-  return structuredClone(candidate)
+/**
+ * A loader for the current institutional corpus, scoped to `context`. May
+ * be synchronous (an in-memory fixture) or asynchronous (a live provider
+ * query) -- `CorrectionReviewQueue` awaits it either way.
+ */
+export type InstitutionalLoader<T> = (context: MemoryContext) => T | Promise<T>
+
+/**
+ * Durable storage for correction candidates. `update` is the sole mutation
+ * entry point and must be atomic per id: it loads the current row, applies
+ * `mutate` to it, and persists the result as one unit, so a concurrent
+ * `update` on the same id either fully precedes or fully follows this one --
+ * never interleaves with it. A Postgres-backed implementation gets this for
+ * free via `SELECT ... FOR UPDATE`; an in-memory implementation gets it for
+ * free by keeping `mutate` synchronous, since JS never interleaves within a
+ * single synchronous callback. `mutate` must therefore never itself await
+ * anything -- all async work (loading the institutional corpus, running the
+ * replay gate) happens before calling `update`, and `mutate` only re-checks
+ * the freshest state and applies an already-computed transition.
+ */
+export interface CorrectionCandidateStore {
+  insert(candidate: CorrectionCandidate): Promise<void>
+  get(candidateId: string): Promise<CorrectionCandidate | undefined>
+  list(filter?: { state?: CandidateLifecycleState }): Promise<CorrectionCandidate[]>
+  update(
+    candidateId: string,
+    mutate: (candidate: CorrectionCandidate) => CorrectionCandidate,
+  ): Promise<CorrectionCandidate>
 }
 
 const DEFAULT_MAX_CANDIDATES = 1_000
 
 const TERMINAL_STATES: ReadonlySet<CandidateLifecycleState> = new Set(["applied", "rejected"])
 
-export class CorrectionReviewQueue {
+/** Terminal states plus "applying": a candidate mid-approval must not be reopened by a concurrent reject/requestChanges/revalidation. */
+const LOCKED_STATES: ReadonlySet<CandidateLifecycleState> = new Set([
+  "applied",
+  "rejected",
+  "applying",
+])
+
+function assertTransitionAllowed(candidate: CorrectionCandidate, action: string): void {
+  if (LOCKED_STATES.has(candidate.state)) {
+    throw new Error(
+      `candidate ${candidate.id} is in state "${candidate.state}" and cannot ${action}`,
+    )
+  }
+}
+
+/**
+ * In-process, non-durable `CorrectionCandidateStore`. Suitable for tests and
+ * for hosts that have not configured persistent storage; state is lost on
+ * process exit and is not visible to other processes.
+ */
+export class InMemoryCorrectionCandidateStore implements CorrectionCandidateStore {
   private readonly candidates = new Map<string, CorrectionCandidate>()
-  private readonly pending = new Set<string>()
 
-  constructor(
-    private readonly loadInstitutional: () => InstitutionalMemory[],
-    private readonly loadInstitutionalWrites: () => InstitutionalWrite[],
-    private readonly applyMutation: ApplyMutation,
-    private readonly replayGate: ReplayGate,
-    private readonly maxCandidates = DEFAULT_MAX_CANDIDATES,
-  ) {}
+  constructor(private readonly maxCandidates = DEFAULT_MAX_CANDIDATES) {}
 
-  submit(correction: CorrectionInput): CorrectionCandidate {
-    const id = correction.id ?? randomUUID()
-    if (this.candidates.has(id)) {
-      throw new Error(`a correction candidate with id ${id} already exists`)
+  // eslint-disable-next-line @typescript-eslint/require-await -- async so a synchronous throw becomes a rejected promise, not an escaping exception.
+  async insert(candidate: CorrectionCandidate): Promise<void> {
+    if (this.candidates.has(candidate.id)) {
+      throw new Error(`a correction candidate with id ${candidate.id} already exists`)
     }
     if (this.candidates.size >= this.maxCandidates) {
       this.evictOldestTerminal()
@@ -475,22 +524,33 @@ export class CorrectionReviewQueue {
         )
       }
     }
-    const now = new Date().toISOString()
-    // Clone the input on ingestion: the caller's original CorrectionInput
-    // object must not be able to change what this candidate diagnoses,
-    // replays, or applies after submission.
-    const storedCorrection = structuredClone(correction)
-    const candidate: CorrectionCandidate = {
-      id,
-      state: "pending_validation",
-      correction: storedCorrection,
-      affectedMemoryIds: [],
-      audit: [{ at: now, actor: storedCorrection.actor, event: "submitted" }],
-      createdAt: now,
-      updatedAt: now,
-    }
-    this.candidates.set(candidate.id, candidate)
-    return clone(candidate)
+    this.candidates.set(candidate.id, structuredClone(candidate))
+  }
+
+  get(candidateId: string): Promise<CorrectionCandidate | undefined> {
+    const candidate = this.candidates.get(candidateId)
+    return Promise.resolve(candidate ? structuredClone(candidate) : undefined)
+  }
+
+  list(filter?: { state?: CandidateLifecycleState }): Promise<CorrectionCandidate[]> {
+    const all = [...this.candidates.values()]
+    return Promise.resolve(
+      (filter?.state ? all.filter((candidate) => candidate.state === filter.state) : all).map(
+        (candidate) => structuredClone(candidate),
+      ),
+    )
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await -- async so a synchronous throw (from `mutate` or an unknown id) becomes a rejected promise, not an escaping exception.
+  async update(
+    candidateId: string,
+    mutate: (candidate: CorrectionCandidate) => CorrectionCandidate,
+  ): Promise<CorrectionCandidate> {
+    const current = this.candidates.get(candidateId)
+    if (!current) throw new Error(`unknown correction candidate: ${candidateId}`)
+    const updated = mutate(structuredClone(current))
+    this.candidates.set(candidateId, updated)
+    return structuredClone(updated)
   }
 
   /** Only removes a resolved (terminal) candidate, never one that is still under active review. */
@@ -502,201 +562,258 @@ export class CorrectionReviewQueue {
       }
     }
   }
+}
 
-  get(candidateId: string): CorrectionCandidate | undefined {
-    const candidate = this.candidates.get(candidateId)
-    return candidate ? clone(candidate) : undefined
+function touch(
+  candidate: CorrectionCandidate,
+  entry: Omit<CandidateAuditEntry, "at">,
+): CorrectionCandidate {
+  const at = new Date().toISOString()
+  return {
+    ...candidate,
+    updatedAt: at,
+    audit: [...candidate.audit, { ...entry, at }],
   }
+}
 
-  list(filter?: { state?: CandidateLifecycleState }): CorrectionCandidate[] {
-    const all = [...this.candidates.values()]
-    return (filter?.state ? all.filter((candidate) => candidate.state === filter.state) : all).map(
-      clone,
-    )
-  }
+export class CorrectionReviewQueue {
+  constructor(
+    private readonly store: CorrectionCandidateStore,
+    private readonly loadInstitutional: InstitutionalLoader<InstitutionalMemory[]>,
+    private readonly loadInstitutionalWrites: InstitutionalLoader<InstitutionalWrite[]>,
+    private readonly applyMutation: ApplyMutation,
+    private readonly replayGate: ReplayGate,
+  ) {}
 
-  private touch(candidate: CorrectionCandidate, entry: Omit<CandidateAuditEntry, "at">): void {
-    const at = new Date().toISOString()
-    candidate.audit.push({ ...entry, at })
-    candidate.updatedAt = at
-  }
-
-  /** Looks up a candidate without checking the in-flight lock -- only safe to call from within `withLock`. */
-  private lookup(candidateId: string): CorrectionCandidate {
-    const candidate = this.candidates.get(candidateId)
-    if (!candidate) throw new Error(`unknown correction candidate: ${candidateId}`)
+  async submit(correction: CorrectionInput): Promise<CorrectionCandidate> {
+    const now = new Date().toISOString()
+    // Clone the input on ingestion: the caller's original CorrectionInput
+    // object must not be able to change what this candidate diagnoses,
+    // replays, or applies after submission.
+    const storedCorrection = structuredClone(correction)
+    const candidate: CorrectionCandidate = {
+      id: storedCorrection.id ?? randomUUID(),
+      state: "pending_validation",
+      correction: storedCorrection,
+      affectedMemoryIds: [],
+      audit: [{ at: now, actor: storedCorrection.actor, event: "submitted" }],
+      createdAt: now,
+      updatedAt: now,
+    }
+    await this.store.insert(candidate)
     return candidate
   }
 
-  private require(candidateId: string): CorrectionCandidate {
-    if (this.pending.has(candidateId)) {
-      throw new Error(`candidate ${candidateId} has a review operation already in progress`)
-    }
-    return this.lookup(candidateId)
+  get(candidateId: string): Promise<CorrectionCandidate | undefined> {
+    return this.store.get(candidateId)
   }
 
-  /** applied/rejected are terminal: once a mutation has landed or a human has rejected it, no further transition is allowed. */
-  private assertNotTerminal(candidate: CorrectionCandidate, action: string): void {
-    if (TERMINAL_STATES.has(candidate.state)) {
-      throw new Error(
-        `candidate ${candidate.id} is in terminal state "${candidate.state}" and cannot ${action}`,
-      )
-    }
+  list(filter?: { state?: CandidateLifecycleState }): Promise<CorrectionCandidate[]> {
+    return this.store.list(filter)
   }
 
   /**
-   * runValidation and approve both mutate the live candidate across an
-   * `await`, which yields the event loop to any other call on the same
-   * candidateId. Without this guard, an interleaved reject/requestChanges/
-   * approve on the same id could silently overwrite a concurrent decision
-   * once the first call resumes.
+   * Runs diagnosis, mutation proposal, structural validation, and the
+   * replay gate. All of that work happens against a point-in-time read and
+   * is not itself atomic with the write -- the final `store.update` re-runs
+   * the terminal/locked-state check against the freshest row, so a
+   * concurrent reject/approve that completed while this was computing
+   * causes this call to abort instead of clobbering that decision.
    */
-  private async withLock<T>(candidateId: string, run: () => Promise<T>): Promise<T> {
-    if (this.pending.has(candidateId)) {
-      throw new Error(`candidate ${candidateId} has a review operation already in progress`)
-    }
-    this.pending.add(candidateId)
-    try {
-      return await run()
-    } finally {
-      this.pending.delete(candidateId)
-    }
-  }
-
   async runValidation(candidateId: string): Promise<CorrectionCandidate> {
-    return this.withLock(candidateId, () => this.runValidationLocked(candidateId))
-  }
+    const before = await this.store.get(candidateId)
+    if (!before) throw new Error(`unknown correction candidate: ${candidateId}`)
+    assertTransitionAllowed(before, "be revalidated")
 
-  private async runValidationLocked(candidateId: string): Promise<CorrectionCandidate> {
-    const candidate = this.lookup(candidateId)
-    this.assertNotTerminal(candidate, "be revalidated")
-    const existing = this.loadInstitutional()
-    const diagnosis = diagnoseCorrection(candidate.correction, existing)
-    candidate.rootCause = diagnosis.rootCause
-    candidate.rootCauseReason = diagnosis.reason
-    candidate.affectedMemoryIds = diagnosis.affectedMemoryIds
-    this.touch(candidate, {
-      actor: "system",
-      event: "diagnosed",
-      detail: `${diagnosis.rootCause}: ${diagnosis.reason}`,
-    })
+    const existing = await this.loadInstitutional(before.correction.context)
+    const diagnosis = diagnoseCorrection(before.correction, existing)
 
     if (diagnosis.rootCause === "ambiguous") {
-      candidate.state = "needs_changes"
-      this.touch(candidate, {
-        actor: "system",
-        event: "validation_failed",
-        detail: "ambiguous corrections require a human decision and cannot be auto-classified",
+      return this.store.update(candidateId, (candidate) => {
+        assertTransitionAllowed(candidate, "be revalidated")
+        let next: CorrectionCandidate = {
+          ...candidate,
+          rootCause: diagnosis.rootCause,
+          rootCauseReason: diagnosis.reason,
+          affectedMemoryIds: diagnosis.affectedMemoryIds,
+          state: "needs_changes",
+        }
+        next = touch(next, {
+          actor: "system",
+          event: "diagnosed",
+          detail: `${diagnosis.rootCause}: ${diagnosis.reason}`,
+        })
+        return touch(next, {
+          actor: "system",
+          event: "validation_failed",
+          detail: "ambiguous corrections require a human decision and cannot be auto-classified",
+        })
       })
-      return clone(candidate)
     }
 
-    const mutation = proposeCandidateMutation(candidate.correction, diagnosis, existing)
-    if (mutation) {
-      candidate.mutation = mutation
-      candidate.impactedMemoryIds = computeImpactedMemoryIds(mutation, existing)
-    }
-    if (!mutation) {
-      candidate.state = "needs_changes"
-      this.touch(candidate, {
-        actor: "system",
-        event: "validation_failed",
-        detail: "no mutation could be derived for the diagnosed root cause",
+    const mutation = proposeCandidateMutation(before.correction, diagnosis, existing)
+    const impactedMemoryIds = mutation ? computeImpactedMemoryIds(mutation, existing) : []
+    const structural = mutation
+      ? validateCandidateStructure(
+          mutation,
+          before.correction,
+          await this.loadInstitutionalWrites(before.correction.context),
+        )
+      : undefined
+
+    let replay: ReplayGateResult | undefined
+    if (mutation && structural?.valid) {
+      // Pass a plain object, not a live store-backed reference: the gate is
+      // caller-supplied and must not be able to mutate queue state.
+      replay = await this.replayGate.run({
+        ...before,
+        rootCause: diagnosis.rootCause,
+        rootCauseReason: diagnosis.reason,
+        affectedMemoryIds: diagnosis.affectedMemoryIds,
+        impactedMemoryIds,
+        mutation,
+        structuralValidation: structural,
       })
-      return clone(candidate)
     }
 
-    const structural = validateCandidateStructure(
-      mutation,
-      candidate.correction,
-      this.loadInstitutionalWrites(),
-    )
-    candidate.structuralValidation = structural
-    if (!structural.valid) {
-      candidate.state = "needs_changes"
-      this.touch(candidate, {
+    return this.store.update(candidateId, (candidate) => {
+      assertTransitionAllowed(candidate, "be revalidated")
+      let next: CorrectionCandidate = {
+        ...candidate,
+        rootCause: diagnosis.rootCause,
+        rootCauseReason: diagnosis.reason,
+        affectedMemoryIds: diagnosis.affectedMemoryIds,
+      }
+      next = touch(next, {
         actor: "system",
-        event: "validation_failed",
-        detail: structural.issues.map((issue) => `${issue.code}:${issue.id}`).join(", "),
+        event: "diagnosed",
+        detail: `${diagnosis.rootCause}: ${diagnosis.reason}`,
       })
-      return clone(candidate)
-    }
-    this.touch(candidate, {
-      actor: "system",
-      event: "validated",
-      detail: "structural validation passed",
+
+      if (!mutation) {
+        next.state = "needs_changes"
+        return touch(next, {
+          actor: "system",
+          event: "validation_failed",
+          detail: "no mutation could be derived for the diagnosed root cause",
+        })
+      }
+      next = {
+        ...next,
+        mutation,
+        impactedMemoryIds,
+        ...(structural ? { structuralValidation: structural } : {}),
+      }
+
+      if (!structural?.valid) {
+        next.state = "needs_changes"
+        return touch(next, {
+          actor: "system",
+          event: "validation_failed",
+          detail: (structural?.issues ?? []).map((issue) => `${issue.code}:${issue.id}`).join(", "),
+        })
+      }
+      next = touch(next, {
+        actor: "system",
+        event: "validated",
+        detail: "structural validation passed",
+      })
+
+      if (!replay) {
+        // Unreachable in practice (replay only stays undefined when
+        // structural validation failed, handled above), but keeps this
+        // function total without a non-null assertion.
+        next.state = "needs_changes"
+        return touch(next, {
+          actor: "system",
+          event: "validation_failed",
+          detail: "replay gate did not run",
+        })
+      }
+      next = { ...next, replay }
+      if (!replay.passed) {
+        next.state = "needs_changes"
+        return touch(next, {
+          actor: "system",
+          event: "replay_failed",
+          detail: replay.failures.join(", "),
+        })
+      }
+      next = touch(next, {
+        actor: "system",
+        event: "replay_passed",
+        detail: `cases: ${replay.caseIds.join(", ")}`,
+      })
+      next.state = "validated"
+      return next
     })
+  }
 
-    // Pass a clone: the gate is caller-supplied and must not be able to
-    // mutate live candidate state out from under this method.
-    const replay = await this.replayGate.run(clone(candidate))
-    candidate.replay = replay
-    if (!replay.passed) {
-      candidate.state = "needs_changes"
-      this.touch(candidate, {
-        actor: "system",
-        event: "replay_failed",
-        detail: replay.failures.join(", "),
-      })
-      return clone(candidate)
-    }
-    this.touch(candidate, {
-      actor: "system",
-      event: "replay_passed",
-      detail: `cases: ${replay.caseIds.join(", ")}`,
+  reject(candidateId: string, actor: string, reason: string): Promise<CorrectionCandidate> {
+    return this.store.update(candidateId, (candidate) => {
+      assertTransitionAllowed(candidate, "be rejected")
+      const at = new Date().toISOString()
+      let next: CorrectionCandidate = {
+        ...candidate,
+        state: "rejected",
+        reviewerDecision: { actor, decision: "rejected", reason, at },
+      }
+      next = touch(next, { actor, event: "rejected", detail: reason })
+      return next
     })
-    candidate.state = "validated"
-    return clone(candidate)
   }
 
-  reject(candidateId: string, actor: string, reason: string): CorrectionCandidate {
-    const candidate = this.require(candidateId)
-    this.assertNotTerminal(candidate, "be rejected")
-    candidate.state = "rejected"
-    candidate.reviewerDecision = {
-      actor,
-      decision: "rejected",
-      reason,
-      at: new Date().toISOString(),
-    }
-    this.touch(candidate, { actor, event: "rejected", detail: reason })
-    return clone(candidate)
+  requestChanges(candidateId: string, actor: string, reason: string): Promise<CorrectionCandidate> {
+    return this.store.update(candidateId, (candidate) => {
+      assertTransitionAllowed(candidate, "have changes requested")
+      const at = new Date().toISOString()
+      let next: CorrectionCandidate = {
+        ...candidate,
+        state: "needs_changes",
+        reviewerDecision: { actor, decision: "changes_requested", reason, at },
+      }
+      next = touch(next, { actor, event: "changes_requested", detail: reason })
+      return next
+    })
   }
 
-  requestChanges(candidateId: string, actor: string, reason: string): CorrectionCandidate {
-    const candidate = this.require(candidateId)
-    this.assertNotTerminal(candidate, "have changes requested")
-    candidate.state = "needs_changes"
-    candidate.reviewerDecision = {
-      actor,
-      decision: "changes_requested",
-      reason,
-      at: new Date().toISOString(),
-    }
-    this.touch(candidate, { actor, event: "changes_requested", detail: reason })
-    return clone(candidate)
-  }
-
+  /**
+   * Claims the candidate for approval (atomic; fails immediately if it is
+   * not "validated"), applies its mutation outside the store lock since a
+   * provider write may be slow, then finalizes to "applied". On apply
+   * failure the claim is rolled back to "validated" so the candidate stays
+   * retryable, with no misleading "approved" audit entry.
+   */
   async approve(candidateId: string, actor: string): Promise<CorrectionCandidate> {
-    return this.withLock(candidateId, () => this.approveLocked(candidateId, actor))
-  }
+    const claimed = await this.store.update(candidateId, (candidate) => {
+      if (candidate.state !== "validated" || !candidate.mutation) {
+        throw new Error(
+          `candidate ${candidateId} cannot be approved from state "${candidate.state}"; it must pass validation first`,
+        )
+      }
+      return { ...candidate, state: "applying" }
+    })
+    const mutation = claimed.mutation
+    if (!mutation) throw new Error(`candidate ${candidateId} was claimed without a mutation`)
 
-  private async approveLocked(candidateId: string, actor: string): Promise<CorrectionCandidate> {
-    const candidate = this.lookup(candidateId)
-    if (candidate.state !== "validated" || !candidate.mutation) {
-      throw new Error(
-        `candidate ${candidateId} cannot be approved from state "${candidate.state}"; it must pass validation first`,
+    try {
+      const result = await this.applyMutation(mutation, claimed.correction.context)
+      return await this.store.update(candidateId, (candidate) => {
+        const at = new Date().toISOString()
+        let next: CorrectionCandidate = {
+          ...candidate,
+          state: "applied",
+          reviewerDecision: { actor, decision: "approved", at },
+          appliedMemoryId: result.memoryId,
+        }
+        next = touch(next, { actor, event: "approved" })
+        return touch(next, { actor: "system", event: "applied", detail: result.memoryId })
+      })
+    } catch (error) {
+      await this.store.update(candidateId, (candidate) =>
+        candidate.state === "applying" ? { ...candidate, state: "validated" } : candidate,
       )
+      throw error
     }
-    // Apply first and only record the approval/applied audit trail once the
-    // mutation has actually landed, so a failed apply leaves the candidate
-    // in "validated" with no misleading "approved" entry to retry from.
-    const result = await this.applyMutation(candidate.mutation)
-    candidate.reviewerDecision = { actor, decision: "approved", at: new Date().toISOString() }
-    candidate.appliedMemoryId = result.memoryId
-    candidate.state = "applied"
-    this.touch(candidate, { actor, event: "approved" })
-    this.touch(candidate, { actor: "system", event: "applied", detail: result.memoryId })
-    return clone(candidate)
   }
 }

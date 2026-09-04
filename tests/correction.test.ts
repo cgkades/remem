@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest"
 import {
   CorrectionReviewQueue,
+  InMemoryCorrectionCandidateStore,
   diagnoseCorrection,
   proposeCandidateMutation,
   validateCandidateStructure,
+  type ApplyMutation,
   type CorrectionInput,
   type ReplayGate,
 } from "../src/correction.js"
@@ -307,25 +309,37 @@ const failingGate: ReplayGate = {
     Promise.resolve({ passed: false, caseIds: ["case-1"], failures: ["outcome mismatch"] }),
 }
 
-function queue(replayGate: ReplayGate, existing: InstitutionalPosition[] = []) {
+function recordingApplyMutation(): { applyMutation: ApplyMutation; applied: unknown[] } {
   const applied: unknown[] = []
+  const applyMutation: ApplyMutation = (mutation) => {
+    applied.push(mutation)
+    const memoryId = "targetMemoryId" in mutation ? mutation.targetMemoryId : undefined
+    return Promise.resolve({ memoryId: memoryId ?? "new-memory-id" })
+  }
+  return { applyMutation, applied }
+}
+
+function queue(
+  replayGate: ReplayGate,
+  existing: InstitutionalPosition[] = [],
+  maxCandidates?: number,
+) {
+  const store = new InMemoryCorrectionCandidateStore(maxCandidates)
+  const { applyMutation, applied } = recordingApplyMutation()
   const q = new CorrectionReviewQueue(
+    store,
     () => existing,
     () => existing.map(positionWrite),
-    (mutation) => {
-      applied.push(mutation)
-      const memoryId = "targetMemoryId" in mutation ? mutation.targetMemoryId : undefined
-      return Promise.resolve({ memoryId: memoryId ?? "new-memory-id" })
-    },
+    applyMutation,
     replayGate,
   )
-  return { q, applied }
+  return { q, store, applied }
 }
 
 describe("CorrectionReviewQueue", () => {
   it("accepted: validates and approves a knowledge-gap candidate end to end", async () => {
     const { q, applied } = queue(passingGate)
-    const candidate = q.submit(correction())
+    const candidate = await q.submit(correction())
     const validated = await q.runValidation(candidate.id)
     expect(validated.state).toBe("validated")
     const applied2 = await q.approve(candidate.id, "reviewer@example.test")
@@ -344,9 +358,9 @@ describe("CorrectionReviewQueue", () => {
 
   it("rejected: a human can reject a validated candidate without applying it", async () => {
     const { q, applied } = queue(passingGate)
-    const candidate = q.submit(correction())
+    const candidate = await q.submit(correction())
     await q.runValidation(candidate.id)
-    const rejected = q.reject(candidate.id, "reviewer@example.test", "not needed")
+    const rejected = await q.reject(candidate.id, "reviewer@example.test", "not needed")
     expect(rejected.state).toBe("rejected")
     expect(applied).toHaveLength(0)
     await expect(q.approve(candidate.id, "reviewer@example.test")).rejects.toThrow(
@@ -359,7 +373,7 @@ describe("CorrectionReviewQueue", () => {
       review: { reviewedAt: "2020-01-01T00:00:00.000Z", expiresAt: "2020-06-01T00:00:00.000Z" },
     })
     const { q, applied } = queue(passingGate, [record])
-    const candidate = q.submit(
+    const candidate = await q.submit(
       correction({
         actor: "",
         disputedMemoryIds: [record.id],
@@ -391,7 +405,7 @@ describe("CorrectionReviewQueue", () => {
       review: { reviewedAt: "2020-01-01T00:00:00.000Z", expiresAt: "2020-06-01T00:00:00.000Z" },
     })
     const { q } = queue(passingGate, [record])
-    const candidate = q.submit(
+    const candidate = await q.submit(
       correction({
         disputedMemoryIds: [record.id],
         trace: baseTrace({
@@ -418,6 +432,7 @@ describe("CorrectionReviewQueue", () => {
     })
     const referencedPosition = position()
     const q = new CorrectionReviewQueue(
+      new InMemoryCorrectionCandidateStore(),
       () => [record, referencedPosition],
       () => [procedureWrite(record), positionWrite(referencedPosition)],
       (mutation) =>
@@ -426,7 +441,7 @@ describe("CorrectionReviewQueue", () => {
         }),
       passingGate,
     )
-    const candidate = q.submit(
+    const candidate = await q.submit(
       correction({
         disputedMemoryIds: [record.id],
         trace: baseTrace({
@@ -461,7 +476,7 @@ describe("CorrectionReviewQueue", () => {
       review: { reviewedAt: "2026-01-01T00:00:00.000Z", expiresAt: null },
     })
     const { q } = queue(passingGate, [older, newer])
-    const candidate = q.submit(correction({ disputedMemoryIds: [older.id, newer.id] }))
+    const candidate = await q.submit(correction({ disputedMemoryIds: [older.id, newer.id] }))
     const result = await q.runValidation(candidate.id)
     expect(result.rootCause).toBe("duplicate_conflict")
     expect(result.mutation?.kind).toBe("retire")
@@ -472,7 +487,7 @@ describe("CorrectionReviewQueue", () => {
 
   it("replay-failed: a failing replay gate blocks approval", async () => {
     const { q } = queue(failingGate)
-    const candidate = q.submit(correction())
+    const candidate = await q.submit(correction())
     const result = await q.runValidation(candidate.id)
     expect(result.state).toBe("needs_changes")
     expect(result.replay?.passed).toBe(false)
@@ -481,7 +496,7 @@ describe("CorrectionReviewQueue", () => {
 
   it("ambiguous: an unresolved ambiguity is queued for a human decision without a mutation", async () => {
     const { q } = queue(passingGate)
-    const candidate = q.submit(correction({ disputedMemoryIds: ["missing.id"] }))
+    const candidate = await q.submit(correction({ disputedMemoryIds: ["missing.id"] }))
     const result = await q.runValidation(candidate.id)
     expect(result.rootCause).toBe("ambiguous")
     expect(result.mutation).toBeUndefined()
@@ -489,7 +504,7 @@ describe("CorrectionReviewQueue", () => {
     await expect(q.approve(candidate.id, "reviewer@example.test")).rejects.toThrow()
   })
 
-  it("rejects a concurrent decision on a candidate that is mid-validation, preventing a lost update", async () => {
+  it("a decision made while validation is still awaiting the replay gate wins, and the stale validation aborts", async () => {
     let resolveGate: (() => void) | undefined
     const blockingGate: ReplayGate = {
       run: () =>
@@ -498,23 +513,31 @@ describe("CorrectionReviewQueue", () => {
         }),
     }
     const { q } = queue(blockingGate)
-    const candidate = q.submit(correction())
+    const candidate = await q.submit(correction())
     const validation = q.runValidation(candidate.id)
-    // While runValidation is awaiting the replay gate, a concurrent reject
-    // must be refused rather than silently racing the eventual state write.
-    expect(() => q.reject(candidate.id, "reviewer@example.test", "too fast")).toThrow(
-      /already in progress/,
-    )
-    resolveGate?.()
-    const result = await validation
-    expect(result.state).toBe("validated")
+    // Wait until validation has actually reached the (blocking) replay gate
+    // before deciding, so this exercises the intended race rather than
+    // racing reject() against runValidation's own pre-replay bookkeeping.
+    while (!resolveGate) await Promise.resolve()
+    const rejected = await q.reject(candidate.id, "reviewer@example.test", "too fast")
+    expect(rejected.state).toBe("rejected")
+    resolveGate()
+    // The in-flight validation must not clobber the rejection once the
+    // gate finally resolves; it aborts against the fresher, locked state.
+    await expect(validation).rejects.toThrow(/state "rejected"/)
+    const stored = await q.get(candidate.id)
+    expect(stored?.state).toBe("rejected")
   })
 
   it("requestChanges preserves the candidate and audit trail without mutating memory", async () => {
     const { q, applied } = queue(passingGate)
-    const candidate = q.submit(correction())
+    const candidate = await q.submit(correction())
     await q.runValidation(candidate.id)
-    const changed = q.requestChanges(candidate.id, "reviewer@example.test", "need more evidence")
+    const changed = await q.requestChanges(
+      candidate.id,
+      "reviewer@example.test",
+      "need more evidence",
+    )
     expect(changed.state).toBe("needs_changes")
     expect(applied).toHaveLength(0)
     expect(changed.reviewerDecision?.decision).toBe("changes_requested")
@@ -522,29 +545,30 @@ describe("CorrectionReviewQueue", () => {
 
   it("leaves the candidate in a retryable state and records no false approval when applyMutation fails", async () => {
     const q = new CorrectionReviewQueue(
+      new InMemoryCorrectionCandidateStore(),
       () => [],
       () => [],
       () => Promise.reject(new Error("database unavailable")),
       passingGate,
     )
-    const candidate = q.submit(correction())
+    const candidate = await q.submit(correction())
     await q.runValidation(candidate.id)
     await expect(q.approve(candidate.id, "reviewer@example.test")).rejects.toThrow(
       "database unavailable",
     )
-    const stored = q.get(candidate.id)
+    const stored = await q.get(candidate.id)
     expect(stored?.state).toBe("validated")
     expect(stored?.reviewerDecision).toBeUndefined()
     expect(stored?.audit.some((entry) => entry.event === "approved")).toBe(false)
   })
 
-  it("returns defensive copies so callers cannot mutate queue-internal state", () => {
+  it("returns defensive copies so callers cannot mutate queue-internal state", async () => {
     const { q } = queue(passingGate)
-    const candidate = q.submit(correction())
+    const candidate = await q.submit(correction())
     candidate.state = "applied"
     candidate.audit.length = 0
     candidate.correction.actor = "attacker"
-    const stored = q.get(candidate.id)
+    const stored = await q.get(candidate.id)
     expect(stored?.state).toBe("pending_validation")
     expect(stored?.audit).toHaveLength(1)
     expect(stored?.correction.actor).toBe("reviewer@example.test")
@@ -553,13 +577,13 @@ describe("CorrectionReviewQueue", () => {
   it("clones the correction on ingestion so mutating the caller's original object after submit has no effect", async () => {
     const { q } = queue(passingGate)
     const original = correction()
-    const candidate = q.submit(original)
+    const candidate = await q.submit(original)
     original.actor = "attacker"
     original.correctionText = "attacker-controlled text"
     original.expectedOutcome = "attacker-controlled outcome"
     original.disputedMemoryIds = ["some.other.id"]
 
-    const stored = q.get(candidate.id)
+    const stored = await q.get(candidate.id)
     expect(stored?.correction.actor).toBe("reviewer@example.test")
     expect(stored?.correction.correctionText).toBe(
       "The agent said rollback plans are optional; they are required for production.",
@@ -575,27 +599,27 @@ describe("CorrectionReviewQueue", () => {
     expect(result.rootCause).toBe("knowledge_gap")
   })
 
-  it("rejects a duplicate candidate id instead of silently overwriting the existing candidate", () => {
+  it("rejects a duplicate candidate id instead of silently overwriting the existing candidate", async () => {
     const { q } = queue(passingGate)
-    const first = q.submit(correction({ id: "fixed-id" }))
-    expect(() => q.submit(correction({ id: "fixed-id" }))).toThrow(/already exists/)
-    expect(q.get(first.id)?.audit).toHaveLength(1)
+    const first = await q.submit(correction({ id: "fixed-id" }))
+    await expect(q.submit(correction({ id: "fixed-id" }))).rejects.toThrow(/already exists/)
+    expect((await q.get(first.id))?.audit).toHaveLength(1)
   })
 
   it("terminal states reject further transitions: revalidate, reject, and requestChanges after apply", async () => {
     const { q } = queue(passingGate)
-    const candidate = q.submit(correction())
+    const candidate = await q.submit(correction())
     await q.runValidation(candidate.id)
     const applied = await q.approve(candidate.id, "reviewer@example.test")
     expect(applied.state).toBe("applied")
 
-    await expect(q.runValidation(candidate.id)).rejects.toThrow(/terminal state "applied"/)
-    expect(() => q.reject(candidate.id, "reviewer@example.test", "too late")).toThrow(
-      /terminal state "applied"/,
+    await expect(q.runValidation(candidate.id)).rejects.toThrow(/state "applied"/)
+    await expect(q.reject(candidate.id, "reviewer@example.test", "too late")).rejects.toThrow(
+      /state "applied"/,
     )
-    expect(() => q.requestChanges(candidate.id, "reviewer@example.test", "too late")).toThrow(
-      /terminal state "applied"/,
-    )
+    await expect(
+      q.requestChanges(candidate.id, "reviewer@example.test", "too late"),
+    ).rejects.toThrow(/state "applied"/)
 
     // A second approve attempt must also fail, since state never left "applied".
     await expect(q.approve(candidate.id, "reviewer@example.test")).rejects.toThrow(
@@ -605,46 +629,34 @@ describe("CorrectionReviewQueue", () => {
 
   it("a rejected candidate cannot be reopened via reject, requestChanges, or revalidation", async () => {
     const { q } = queue(passingGate)
-    const candidate = q.submit(correction())
+    const candidate = await q.submit(correction())
     await q.runValidation(candidate.id)
-    q.reject(candidate.id, "reviewer@example.test", "not needed")
+    await q.reject(candidate.id, "reviewer@example.test", "not needed")
 
-    expect(() => q.reject(candidate.id, "reviewer@example.test", "again")).toThrow(
-      /terminal state "rejected"/,
+    await expect(q.reject(candidate.id, "reviewer@example.test", "again")).rejects.toThrow(
+      /state "rejected"/,
     )
-    expect(() => q.requestChanges(candidate.id, "reviewer@example.test", "reopen")).toThrow(
-      /terminal state "rejected"/,
+    await expect(q.requestChanges(candidate.id, "reviewer@example.test", "reopen")).rejects.toThrow(
+      /state "rejected"/,
     )
-    await expect(q.runValidation(candidate.id)).rejects.toThrow(/terminal state "rejected"/)
+    await expect(q.runValidation(candidate.id)).rejects.toThrow(/state "rejected"/)
   })
 
   it("evicts only resolved (terminal) candidates when at capacity, never one under active review", async () => {
-    const q = new CorrectionReviewQueue(
-      () => [],
-      () => [],
-      () => Promise.resolve({ memoryId: "new-id" }),
-      passingGate,
-      1,
-    )
-    const resolved = q.submit(correction({ id: "resolved" }))
+    const { q } = queue(passingGate, [], 1)
+    const resolved = await q.submit(correction({ id: "resolved" }))
     await q.runValidation(resolved.id)
-    q.reject(resolved.id, "reviewer@example.test", "not needed")
+    await q.reject(resolved.id, "reviewer@example.test", "not needed")
 
-    const next = q.submit(correction({ id: "next" }))
-    expect(q.get(resolved.id)).toBeUndefined()
-    expect(q.get(next.id)?.id).toBe("next")
+    const next = await q.submit(correction({ id: "next" }))
+    expect(await q.get(resolved.id)).toBeUndefined()
+    expect((await q.get(next.id))?.id).toBe("next")
   })
 
-  it("refuses to submit when the queue is full of non-terminal candidates rather than evicting one", () => {
-    const q = new CorrectionReviewQueue(
-      () => [],
-      () => [],
-      () => Promise.resolve({ memoryId: "new-id" }),
-      passingGate,
-      1,
-    )
-    q.submit(correction({ id: "active" }))
-    expect(() => q.submit(correction({ id: "overflow" }))).toThrow(/queue is full/)
+  it("refuses to submit when the queue is full of non-terminal candidates rather than evicting one", async () => {
+    const { q } = queue(passingGate, [], 1)
+    await q.submit(correction({ id: "active" }))
+    await expect(q.submit(correction({ id: "overflow" }))).rejects.toThrow(/queue is full/)
   })
 
   it("computes the impacted-record closure for a retire mutation via #24 dependency references", async () => {
@@ -661,12 +673,13 @@ describe("CorrectionReviewQueue", () => {
       dependsOnPositionIds: [older.id],
     })
     const q = new CorrectionReviewQueue(
+      new InMemoryCorrectionCandidateStore(),
       () => [older, newer, dependent],
       () => [positionWrite(older), positionWrite(newer), positionWrite(dependent)],
       () => Promise.resolve({ memoryId: "new-id" }),
       passingGate,
     )
-    const candidate = q.submit(correction({ disputedMemoryIds: [older.id, newer.id] }))
+    const candidate = await q.submit(correction({ disputedMemoryIds: [older.id, newer.id] }))
     const result = await q.runValidation(candidate.id)
     expect(result.mutation?.kind).toBe("retire")
     expect(result.impactedMemoryIds).toEqual([dependent.id])

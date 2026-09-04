@@ -190,11 +190,11 @@ async function registerTools(
         properties: { candidateId: { type: "string", minLength: 1 } },
         additionalProperties: false,
       },
-      execute(input) {
+      async execute(input) {
         const args = input as { candidateId?: string }
         const result = args.candidateId
-          ? orchestrator.explainCorrectionCandidate(args.candidateId)
-          : orchestrator.reviewCandidates()
+          ? await orchestrator.explainCorrectionCandidate(args.candidateId)
+          : await orchestrator.reviewCandidates()
         const redacted = Array.isArray(result)
           ? result.map(redactCandidateSummary)
           : "id" in result
