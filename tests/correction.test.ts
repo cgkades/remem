@@ -9,6 +9,7 @@ import {
 } from "../src/correction.js"
 import type {
   InstitutionalPosition,
+  InstitutionalProcedure,
   MemoryContext,
   MemoryTrace,
   MemoryWrite,
@@ -68,6 +69,43 @@ function positionWrite(institutional: InstitutionalPosition): MemoryWrite {
     provenance: [
       {
         source: { kind: "document", uri: "policy://release/rollback-position" },
+        capturedAt: "2026-09-01T00:00:00.000Z",
+        original: true,
+      },
+    ],
+    institutional,
+  }
+}
+
+function procedure(overrides: Partial<InstitutionalProcedure> = {}): InstitutionalProcedure {
+  return {
+    role: "procedure",
+    id: "procedure.production-rollout",
+    steps: [{ id: "step-1", instruction: "Collect rollback evidence before approving." }],
+    positionIds: ["position.production-rollout"],
+    requiredEvidence: ["rollback owner"],
+    completionCriteria: ["rollback plan approved"],
+    escalationConditions: ["missing rollback owner"],
+    applicability: {
+      match: "all",
+      conditions: [{ id: "project", kind: "context", field: "projectId", value: "phoenix" }],
+    },
+    review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: "2027-09-01T00:00:00.000Z" },
+    ...overrides,
+  }
+}
+
+function procedureWrite(institutional: InstitutionalProcedure): MemoryWrite {
+  return {
+    type: "procedure",
+    title: "Production rollout procedure",
+    content: institutional.steps
+      .map((step, index) => `${index + 1}. ${step.instruction}`)
+      .join("\n"),
+    scope: { kind: "project", id: "phoenix" },
+    provenance: [
+      {
+        source: { kind: "document", uri: "policy://release/rollback-procedure" },
         capturedAt: "2026-09-01T00:00:00.000Z",
         original: true,
       },
@@ -180,7 +218,8 @@ describe("proposeCandidateMutation", () => {
     const diagnosis = diagnoseCorrection(correction(), [])
     const mutation = proposeCandidateMutation(correction(), diagnosis, [])
     expect(mutation?.kind).toBe("create")
-    expect(mutation?.proposed?.scope).toEqual({ kind: "project", id: "phoenix" })
+    if (mutation?.kind !== "create") throw new Error("expected a create mutation")
+    expect(mutation.proposed.scope).toEqual({ kind: "project", id: "phoenix" })
   })
 
   it("proposes no mutation for an ambiguous correction", () => {
@@ -202,7 +241,8 @@ describe("proposeCandidateMutation", () => {
     const diagnosis = diagnoseCorrection(input, [older, newer])
     const mutation = proposeCandidateMutation(input, diagnosis, [older, newer])
     expect(mutation?.kind).toBe("retire")
-    expect(mutation?.targetMemoryId).toBe(older.id)
+    if (mutation?.kind !== "retire") throw new Error("expected a retire mutation")
+    expect(mutation.targetMemoryId).toBe(older.id)
   })
 })
 
@@ -234,7 +274,7 @@ describe("validateCandidateStructure", () => {
 
   it("accepts a valid retire mutation", () => {
     const record = position()
-    const mutation = { kind: "retire" as const, targetMemoryId: record.id }
+    const mutation = { kind: "retire" as const, targetMemoryId: record.id, note: "retired" }
     const result = validateCandidateStructure(mutation, correction(), [positionWrite(record)])
     expect(result.valid).toBe(true)
   })
@@ -248,14 +288,15 @@ const failingGate: ReplayGate = {
     Promise.resolve({ passed: false, caseIds: ["case-1"], failures: ["outcome mismatch"] }),
 }
 
-function queue(replayGate?: ReplayGate, existing: InstitutionalPosition[] = []) {
+function queue(replayGate: ReplayGate, existing: InstitutionalPosition[] = []) {
   const applied: unknown[] = []
   const q = new CorrectionReviewQueue(
     () => existing,
     () => existing.map(positionWrite),
     (mutation) => {
       applied.push(mutation)
-      return Promise.resolve({ memoryId: mutation.targetMemoryId ?? "new-memory-id" })
+      const memoryId = "targetMemoryId" in mutation ? mutation.targetMemoryId : undefined
+      return Promise.resolve({ memoryId: memoryId ?? "new-memory-id" })
     },
     replayGate,
   )
@@ -289,7 +330,9 @@ describe("CorrectionReviewQueue", () => {
     const rejected = q.reject(candidate.id, "reviewer@example.test", "not needed")
     expect(rejected.state).toBe("rejected")
     expect(applied).toHaveLength(0)
-    await expect(q.approve(candidate.id, "reviewer@example.test")).rejects.toThrow()
+    await expect(q.approve(candidate.id, "reviewer@example.test")).rejects.toThrow(
+      /cannot be approved from state "rejected"/,
+    )
   })
 
   it("invalid: structural validation failure blocks approval", async () => {
@@ -350,6 +393,45 @@ describe("CorrectionReviewQueue", () => {
     expect(result.state).toBe("validated")
   })
 
+  it("stale: an expired procedure supersedes using its ordered steps, not free text", async () => {
+    const record = procedure({
+      review: { reviewedAt: "2020-01-01T00:00:00.000Z", expiresAt: "2020-06-01T00:00:00.000Z" },
+    })
+    const referencedPosition = position()
+    const q = new CorrectionReviewQueue(
+      () => [record, referencedPosition],
+      () => [procedureWrite(record), positionWrite(referencedPosition)],
+      (mutation) =>
+        Promise.resolve({
+          memoryId: "targetMemoryId" in mutation ? (mutation.targetMemoryId ?? "new-id") : "new-id",
+        }),
+      passingGate,
+    )
+    const candidate = q.submit(
+      correction({
+        disputedMemoryIds: [record.id],
+        trace: baseTrace({
+          applicability: [
+            {
+              catalogEntryId: "x",
+              institutionalId: record.id,
+              applicable: true,
+              reason: "matched",
+            },
+          ],
+        }),
+      }),
+    )
+    const result = await q.runValidation(candidate.id)
+    expect(result.rootCause).toBe("stale_position")
+    expect(result.mutation?.kind).toBe("supersede")
+    if (result.mutation?.kind !== "supersede") throw new Error("expected a supersede mutation")
+    expect(result.mutation.proposed.content).toBe(
+      record.steps.map((step, index) => `${index + 1}. ${step.instruction}`).join("\n"),
+    )
+    expect(result.state).toBe("validated")
+  })
+
   it("conflicting: a duplicate/conflict candidate proposes retiring the older record", async () => {
     const older = position({
       id: "position.older",
@@ -364,7 +446,8 @@ describe("CorrectionReviewQueue", () => {
     const result = await q.runValidation(candidate.id)
     expect(result.rootCause).toBe("duplicate_conflict")
     expect(result.mutation?.kind).toBe("retire")
-    expect(result.mutation?.targetMemoryId).toBe(older.id)
+    if (result.mutation?.kind !== "retire") throw new Error("expected a retire mutation")
+    expect(result.mutation.targetMemoryId).toBe(older.id)
     expect(result.state).toBe("validated")
   })
 
@@ -387,10 +470,25 @@ describe("CorrectionReviewQueue", () => {
     await expect(q.approve(candidate.id, "reviewer@example.test")).rejects.toThrow()
   })
 
-  it("throws when no replay gate is configured, refusing to silently bypass the gate", async () => {
-    const { q } = queue(undefined)
+  it("rejects a concurrent decision on a candidate that is mid-validation, preventing a lost update", async () => {
+    let resolveGate: (() => void) | undefined
+    const blockingGate: ReplayGate = {
+      run: () =>
+        new Promise((resolve) => {
+          resolveGate = () => resolve({ passed: true, caseIds: [], failures: [] })
+        }),
+    }
+    const { q } = queue(blockingGate)
     const candidate = q.submit(correction())
-    await expect(q.runValidation(candidate.id)).rejects.toThrow(/replay gate/)
+    const validation = q.runValidation(candidate.id)
+    // While runValidation is awaiting the replay gate, a concurrent reject
+    // must be refused rather than silently racing the eventual state write.
+    expect(() => q.reject(candidate.id, "reviewer@example.test", "too fast")).toThrow(
+      /already in progress/,
+    )
+    resolveGate?.()
+    const result = await validation
+    expect(result.state).toBe("validated")
   })
 
   it("requestChanges preserves the candidate and audit trail without mutating memory", async () => {
@@ -426,8 +524,10 @@ describe("CorrectionReviewQueue", () => {
     const candidate = q.submit(correction())
     candidate.state = "applied"
     candidate.audit.length = 0
+    candidate.correction.actor = "attacker"
     const stored = q.get(candidate.id)
     expect(stored?.state).toBe("pending_validation")
     expect(stored?.audit).toHaveLength(1)
+    expect(stored?.correction.actor).toBe("reviewer@example.test")
   })
 })

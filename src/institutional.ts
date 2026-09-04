@@ -37,7 +37,7 @@ export interface InstitutionalValidationOptions {
 
 export type InstitutionalReviewStatus = "current" | "expired" | "invalid"
 
-type InstitutionalWrite = Pick<
+export type InstitutionalWrite = Pick<
   MemoryWrite,
   "title" | "content" | "scope" | "type" | "provenance" | "institutional"
 >

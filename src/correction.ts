@@ -4,6 +4,7 @@ import {
   procedureContent,
   validateInstitutionalMemories,
   type InstitutionalValidationIssue,
+  type InstitutionalWrite,
 } from "./institutional.js"
 import type {
   ApplicabilityDecision,
@@ -13,32 +14,19 @@ import type {
   MemoryWrite,
 } from "./types.js"
 
-type InstitutionalWrite = Pick<
-  MemoryWrite,
-  "title" | "content" | "scope" | "type" | "provenance" | "institutional"
->
-
 export type CorrectionRootCause =
   "knowledge_gap" | "procedure_fault" | "duplicate_conflict" | "stale_position" | "ambiguous"
 
-export type CandidateMutationKind =
-  "create" | "update" | "supersede" | "retire" | "route_adjustment"
+export type CandidateMutation =
+  | { kind: "create"; proposed: MemoryWrite }
+  | { kind: "update" | "supersede"; targetMemoryId: string; proposed: MemoryWrite }
+  | { kind: "retire"; targetMemoryId: string; note: string }
+  | { kind: "route_adjustment"; targetMemoryId?: string; note: string }
 
-export interface CandidateMutation {
-  kind: CandidateMutationKind
-  targetMemoryId?: string
-  proposed?: MemoryWrite
-  note?: string
-}
+export type CandidateMutationKind = CandidateMutation["kind"]
 
 export type CandidateLifecycleState =
-  | "draft"
-  | "pending_validation"
-  | "validated"
-  | "needs_changes"
-  | "rejected"
-  | "approved"
-  | "applied"
+  "pending_validation" | "validated" | "needs_changes" | "rejected" | "applied"
 
 export interface CorrectionInput {
   id?: string
@@ -46,6 +34,14 @@ export interface CorrectionInput {
   prompt: string
   correctionText: string
   expectedOutcome: string
+  /**
+   * An unauthenticated provenance hint, not a verified identity. This
+   * library has no concept of authentication -- callers that expose
+   * `submit`/`list`/`get` to multiple tenants or untrusted agents are
+   * responsible for scoping access and for supplying a trustworthy `actor`
+   * to `approve`/`reject`/`requestChanges` from their own session context,
+   * not from this field.
+   */
   actor: string
   context: MemoryContext
   trace: MemoryTrace
@@ -116,6 +112,12 @@ function isDefined<T>(value: T | undefined): value is T {
   return value !== undefined
 }
 
+export interface CorrectionDiagnosis {
+  rootCause: CorrectionRootCause
+  reason: string
+  affectedMemoryIds: string[]
+}
+
 function institutionalApplicabilityFor(
   institutionalId: string,
   applicability: ApplicabilityDecision[] | undefined,
@@ -133,7 +135,7 @@ function institutionalApplicabilityFor(
 export function diagnoseCorrection(
   correction: CorrectionInput,
   existing: InstitutionalMemory[],
-): { rootCause: CorrectionRootCause; reason: string; affectedMemoryIds: string[] } {
+): CorrectionDiagnosis {
   const disputedIds = correction.disputedMemoryIds ?? []
   const disputedRecords = disputedIds
     .map((id) => existing.find((memory) => memory.id === id))
@@ -238,7 +240,7 @@ function retireCandidate(records: InstitutionalMemory[]): InstitutionalMemory {
  */
 export function proposeCandidateMutation(
   correction: CorrectionInput,
-  diagnosis: ReturnType<typeof diagnoseCorrection>,
+  diagnosis: CorrectionDiagnosis,
   existing: InstitutionalMemory[],
 ): CandidateMutation | undefined {
   switch (diagnosis.rootCause) {
@@ -336,24 +338,21 @@ function applyMutationToInstitutionalSet(
   mutation: CandidateMutation,
   existing: InstitutionalWrite[],
 ): InstitutionalWrite[] {
-  if (mutation.kind === "route_adjustment") return existing
-  if (mutation.kind === "create") {
-    return mutation.proposed ? [...existing, mutation.proposed] : existing
+  switch (mutation.kind) {
+    case "route_adjustment":
+      return existing
+    case "create":
+      return [...existing, mutation.proposed]
+    case "retire":
+      return existing.filter((entry) => entry.institutional?.id !== mutation.targetMemoryId)
+    case "update":
+    case "supersede": {
+      const withoutTarget = existing.filter(
+        (entry) => entry.institutional?.id !== mutation.targetMemoryId,
+      )
+      return [...withoutTarget, mutation.proposed]
+    }
   }
-  if (mutation.kind === "retire") {
-    return existing.filter((entry) => entry.institutional?.id !== mutation.targetMemoryId)
-  }
-  // update / supersede: replace the targeted entry with the proposed content.
-  const withoutTarget = existing.filter(
-    (entry) => entry.institutional?.id !== mutation.targetMemoryId,
-  )
-  return mutation.proposed ? [...withoutTarget, mutation.proposed] : existing
-}
-
-const GLOBAL_SCOPE_FOR_PROJECT_CORRECTION: InstitutionalValidationIssue = {
-  code: "invalid_applicability",
-  id: "scope",
-  message: "a project-scoped correction must not create a global-scope memory",
 }
 
 export function validateCandidateStructure(
@@ -364,8 +363,12 @@ export function validateCandidateStructure(
   if (mutation.kind === "route_adjustment") return { valid: true, issues: [] }
 
   const issues: InstitutionalValidationIssue[] = []
-  if (mutation.kind === "create" && mutation.proposed?.scope.kind === "global") {
-    issues.push({ ...GLOBAL_SCOPE_FOR_PROJECT_CORRECTION, id: mutation.proposed.title })
+  if (mutation.kind === "create" && mutation.proposed.scope.kind === "global") {
+    issues.push({
+      code: "invalid_applicability",
+      id: mutation.proposed.title,
+      message: "a project-scoped correction must not create a global-scope memory",
+    })
   }
 
   const nextState = applyMutationToInstitutionalSet(mutation, existingInstitutional)
@@ -395,14 +398,18 @@ function clone(candidate: CorrectionCandidate): CorrectionCandidate {
   return structuredClone(candidate)
 }
 
+const DEFAULT_MAX_CANDIDATES = 1_000
+
 export class CorrectionReviewQueue {
   private readonly candidates = new Map<string, CorrectionCandidate>()
+  private readonly pending = new Set<string>()
 
   constructor(
     private readonly loadInstitutional: () => InstitutionalMemory[],
     private readonly loadInstitutionalWrites: () => InstitutionalWrite[],
     private readonly applyMutation: ApplyMutation,
-    private readonly replayGate?: ReplayGate,
+    private readonly replayGate: ReplayGate,
+    private readonly maxCandidates = DEFAULT_MAX_CANDIDATES,
   ) {}
 
   submit(correction: CorrectionInput): CorrectionCandidate {
@@ -417,6 +424,11 @@ export class CorrectionReviewQueue {
       updatedAt: now,
     }
     this.candidates.set(candidate.id, candidate)
+    while (this.candidates.size > this.maxCandidates) {
+      const oldest = this.candidates.keys().next().value
+      if (!oldest) break
+      this.candidates.delete(oldest)
+    }
     return clone(candidate)
   }
 
@@ -438,14 +450,45 @@ export class CorrectionReviewQueue {
     candidate.updatedAt = at
   }
 
-  private require(candidateId: string): CorrectionCandidate {
+  /** Looks up a candidate without checking the in-flight lock -- only safe to call from within `withLock`. */
+  private lookup(candidateId: string): CorrectionCandidate {
     const candidate = this.candidates.get(candidateId)
     if (!candidate) throw new Error(`unknown correction candidate: ${candidateId}`)
     return candidate
   }
 
+  private require(candidateId: string): CorrectionCandidate {
+    if (this.pending.has(candidateId)) {
+      throw new Error(`candidate ${candidateId} has a review operation already in progress`)
+    }
+    return this.lookup(candidateId)
+  }
+
+  /**
+   * runValidation and approve both mutate the live candidate across an
+   * `await`, which yields the event loop to any other call on the same
+   * candidateId. Without this guard, an interleaved reject/requestChanges/
+   * approve on the same id could silently overwrite a concurrent decision
+   * once the first call resumes.
+   */
+  private async withLock<T>(candidateId: string, run: () => Promise<T>): Promise<T> {
+    if (this.pending.has(candidateId)) {
+      throw new Error(`candidate ${candidateId} has a review operation already in progress`)
+    }
+    this.pending.add(candidateId)
+    try {
+      return await run()
+    } finally {
+      this.pending.delete(candidateId)
+    }
+  }
+
   async runValidation(candidateId: string): Promise<CorrectionCandidate> {
-    const candidate = this.require(candidateId)
+    return this.withLock(candidateId, () => this.runValidationLocked(candidateId))
+  }
+
+  private async runValidationLocked(candidateId: string): Promise<CorrectionCandidate> {
+    const candidate = this.lookup(candidateId)
     const existing = this.loadInstitutional()
     const diagnosis = diagnoseCorrection(candidate.correction, existing)
     candidate.rootCause = diagnosis.rootCause
@@ -500,12 +543,9 @@ export class CorrectionReviewQueue {
       detail: "structural validation passed",
     })
 
-    if (!this.replayGate) {
-      throw new Error(
-        "no replay gate configured: a targeted behavioral replay must run before a candidate can be approved",
-      )
-    }
-    const replay = await this.replayGate.run(candidate)
+    // Pass a clone: the gate is caller-supplied and must not be able to
+    // mutate live candidate state out from under this method.
+    const replay = await this.replayGate.run(clone(candidate))
     candidate.replay = replay
     if (!replay.passed) {
       candidate.state = "needs_changes"
@@ -552,7 +592,11 @@ export class CorrectionReviewQueue {
   }
 
   async approve(candidateId: string, actor: string): Promise<CorrectionCandidate> {
-    const candidate = this.require(candidateId)
+    return this.withLock(candidateId, () => this.approveLocked(candidateId, actor))
+  }
+
+  private async approveLocked(candidateId: string, actor: string): Promise<CorrectionCandidate> {
+    const candidate = this.lookup(candidateId)
     if (candidate.state !== "validated" || !candidate.mutation) {
       throw new Error(
         `candidate ${candidateId} cannot be approved from state "${candidate.state}"; it must pass validation first`,
