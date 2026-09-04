@@ -979,7 +979,8 @@ integration("PostgreSQL managed provider", () => {
     // Drain any backlog left by earlier tests in this shared-schema
     // sequential suite first, so the batch-size assertions below only ever
     // see the three rows this test controls.
-    await provider.reembedStale(10_000)
+    const drain = await provider.reembedStale(10_000)
+    expect(drain.status).not.toBe("failed")
 
     const ids = await Promise.all(
       ["oldest", "middle", "newest"].map(
@@ -994,54 +995,61 @@ integration("PostgreSQL managed provider", () => {
           ).id,
       ),
     )
-    // Force a deterministic claim order (oldest updated_at first, matching
-    // claimStaleRows' `ORDER BY me.updated_at`) so which two of the three
-    // rows get claimed by a batch size of 2 is not left to chance.
-    await pool.query(
-      `UPDATE remem.memory_embeddings
-         SET model = 'stale-batch-test', updated_at = now() - ($2 * interval '1 hour')
-       WHERE memory_id = $1`,
-      [ids[0], 3],
-    )
-    await pool.query(
-      `UPDATE remem.memory_embeddings
-         SET model = 'stale-batch-test', updated_at = now() - ($2 * interval '1 hour')
-       WHERE memory_id = $1`,
-      [ids[1], 2],
-    )
-    await pool.query(
-      `UPDATE remem.memory_embeddings
-         SET model = 'stale-batch-test', updated_at = now() - ($2 * interval '1 hour')
-       WHERE memory_id = $1`,
-      [ids[2], 1],
-    )
+    try {
+      // Force a deterministic claim order (oldest updated_at first, matching
+      // claimStaleRows' `ORDER BY me.updated_at`) so which two of the three
+      // rows get claimed by a batch size of 2 is not left to chance.
+      await pool.query(
+        `UPDATE remem.memory_embeddings
+           SET model = 'stale-batch-test', updated_at = now() - ($2 * interval '1 hour')
+         WHERE memory_id = $1`,
+        [ids[0], 3],
+      )
+      await pool.query(
+        `UPDATE remem.memory_embeddings
+           SET model = 'stale-batch-test', updated_at = now() - ($2 * interval '1 hour')
+         WHERE memory_id = $1`,
+        [ids[1], 2],
+      )
+      await pool.query(
+        `UPDATE remem.memory_embeddings
+           SET model = 'stale-batch-test', updated_at = now() - ($2 * interval '1 hour')
+         WHERE memory_id = $1`,
+        [ids[2], 1],
+      )
 
-    const firstBatch = await provider.reembedStale(2)
-    expect(firstBatch.status).toBe("completed")
-    expect(firstBatch.claimed).toBe(2)
-    expect(firstBatch.reembedded).toBe(2)
+      const firstBatch = await provider.reembedStale(2)
+      expect(firstBatch.status).toBe("completed")
+      expect(firstBatch.claimed).toBe(2)
+      expect(firstBatch.reembedded).toBe(2)
 
-    const modelsAfterFirstBatch = await pool.query<{ memory_id: string; model: string }>(
-      "SELECT memory_id, model FROM remem.memory_embeddings WHERE memory_id = ANY($1)",
-      [ids],
-    )
-    const modelById = new Map(modelsAfterFirstBatch.rows.map((row) => [row.memory_id, row.model]))
-    // The two oldest rows (by the updated_at we set above) must have been
-    // claimed; the newest must still be waiting. A regression that dropped
-    // the LIMIT clause would instead reembed all three in the first batch.
-    expect(modelById.get(ids[0]!)).toBe("remem-local-hash-v1")
-    expect(modelById.get(ids[1]!)).toBe("remem-local-hash-v1")
-    expect(modelById.get(ids[2]!)).toBe("stale-batch-test")
+      const modelsAfterFirstBatch = await pool.query<{ memory_id: string; model: string }>(
+        "SELECT memory_id, model FROM remem.memory_embeddings WHERE memory_id = ANY($1)",
+        [ids],
+      )
+      const modelById = new Map(modelsAfterFirstBatch.rows.map((row) => [row.memory_id, row.model]))
+      // The two oldest rows (by the updated_at we set above) must have been
+      // claimed; the newest must still be waiting. A regression that dropped
+      // the LIMIT clause would instead reembed all three in the first batch.
+      expect(modelById.get(ids[0]!)).toBe("remem-local-hash-v1")
+      expect(modelById.get(ids[1]!)).toBe("remem-local-hash-v1")
+      expect(modelById.get(ids[2]!)).toBe("stale-batch-test")
 
-    const secondBatch = await provider.reembedStale(2)
-    expect(secondBatch.status).toBe("completed")
-    expect(secondBatch.claimed).toBe(1)
-    expect(secondBatch.reembedded).toBe(1)
-    const finalRow = await pool.query<{ model: string }>(
-      "SELECT model FROM remem.memory_embeddings WHERE memory_id = $1",
-      [ids[2]],
-    )
-    expect(finalRow.rows[0]?.model).toBe("remem-local-hash-v1")
+      const secondBatch = await provider.reembedStale(2)
+      expect(secondBatch.status).toBe("completed")
+      expect(secondBatch.claimed).toBe(1)
+      expect(secondBatch.reembedded).toBe(1)
+      const finalRow = await pool.query<{ model: string }>(
+        "SELECT model FROM remem.memory_embeddings WHERE memory_id = $1",
+        [ids[2]],
+      )
+      expect(finalRow.rows[0]?.model).toBe("remem-local-hash-v1")
+    } finally {
+      // Defensive: if an assertion above threw before the second batch ran,
+      // don't leave any of these three rows behind at the 'stale-batch-test'
+      // marker for later tests in this shared, sequential-suite schema.
+      await provider.reembedStale(10_000)
+    }
   })
 
   it("recovers an interrupted reembed claim before reclaiming and completing it", async () => {
@@ -1074,26 +1082,38 @@ integration("PostgreSQL managed provider", () => {
       [interruptedRunId, [written.id]],
     )
 
-    const recoveredRun = await provider.reembedStale(1_000)
+    try {
+      const recoveredRun = await provider.reembedStale(1_000)
 
-    expect(recoveredRun.status).toBe("completed")
-    expect(
-      (
-        await pool.query<{ status: string }>(
-          "SELECT status FROM remem.consolidation_records WHERE id = $1",
-          [interruptedRunId],
-        )
-      ).rows[0]?.status,
-    ).toBe("failed")
-    const row = await pool.query<{ model: string; reembed_claim_id: string | null }>(
-      "SELECT model, reembed_claim_id FROM remem.memory_embeddings WHERE memory_id = $1",
-      [written.id],
-    )
-    // The interrupted claim must be released (not left dangling, which would
-    // make the row permanently unclaimable) and the row actually reembedded
-    // in this same run.
-    expect(row.rows[0]?.reembed_claim_id).toBeNull()
-    expect(row.rows[0]?.model).toBe("remem-local-hash-v1")
+      expect(recoveredRun.status).toBe("completed")
+      expect(
+        (
+          await pool.query<{ status: string }>(
+            "SELECT status FROM remem.consolidation_records WHERE id = $1",
+            [interruptedRunId],
+          )
+        ).rows[0]?.status,
+      ).toBe("failed")
+      const row = await pool.query<{ model: string; reembed_claim_id: string | null }>(
+        "SELECT model, reembed_claim_id FROM remem.memory_embeddings WHERE memory_id = $1",
+        [written.id],
+      )
+      // The interrupted claim must be released (not left dangling, which would
+      // make the row permanently unclaimable) and the row actually reembedded
+      // in this same run.
+      expect(row.rows[0]?.reembed_claim_id).toBeNull()
+      expect(row.rows[0]?.model).toBe("remem-local-hash-v1")
+    } finally {
+      // Defensive: if an assertion above threw before reembedStale ran (or
+      // before it finished), don't leave this row's claim dangling or its
+      // model at the transient marker for later tests in this shared,
+      // sequential-suite schema.
+      await pool.query(
+        "UPDATE remem.memory_embeddings SET reembed_claim_id = NULL WHERE memory_id = $1",
+        [written.id],
+      )
+      await provider.reembedStale(10_000)
+    }
   })
 
   it("records a failed run instead of a false completion when every reembed attempt errors", async () => {
