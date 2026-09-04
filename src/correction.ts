@@ -388,7 +388,13 @@ export function computeImpactedMemoryIds(
     .map((record) => record.id)
 }
 
-function applyMutationToInstitutionalSet(
+/**
+ * Applies a candidate's mutation to an institutional corpus in memory,
+ * without persisting anything -- used both by structural validation (check
+ * the resulting set) and by a replay gate (run scenarios against the
+ * resulting set before approval).
+ */
+export function applyMutationToInstitutionalSet(
   mutation: CandidateMutation,
   existing: InstitutionalWrite[],
 ): InstitutionalWrite[] {
