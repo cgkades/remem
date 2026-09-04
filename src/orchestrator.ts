@@ -1,5 +1,11 @@
 import { MemoryCatalog, renderCatalog, type CatalogSnapshot } from "./catalog.js"
 import type { OrchestratorConfig } from "./config.js"
+import type {
+  CandidateLifecycleState,
+  CorrectionCandidate,
+  CorrectionInput,
+  CorrectionReviewQueue,
+} from "./correction.js"
 import { MemoryDiagnostics } from "./diagnostics.js"
 import { institutionalApplies, institutionalReviewStatus } from "./institutional.js"
 import { isObservationStore } from "./observation.js"
@@ -112,6 +118,14 @@ export interface ManualSearchResult {
 export interface OrchestratorDependencies {
   embeddingModel?: EmbeddingModel
   synthesizer?: SynthesisStrategy
+  /**
+   * Owns the correction-candidate review lifecycle. Deliberately not exposed
+   * with its mutating approve/reject/requestChanges methods anywhere in this
+   * class -- only read-only status/diagnostics are surfaced here, so no
+   * agent-facing host tool can grant approval by wiring against the
+   * orchestrator.
+   */
+  reviewQueue?: CorrectionReviewQueue
 }
 
 export class RememOrchestrator {
@@ -124,6 +138,7 @@ export class RememOrchestrator {
   private readonly diagnostics = new MemoryDiagnostics()
   private readonly providerIds: string[]
   private readonly providers: MemoryProvider[]
+  private readonly reviewQueue?: CorrectionReviewQueue
 
   constructor(
     providers: MemoryProvider[],
@@ -131,6 +146,7 @@ export class RememOrchestrator {
     private readonly logger: RememLogger = NOOP_LOGGER,
     dependencies: OrchestratorDependencies = {},
   ) {
+    if (dependencies.reviewQueue) this.reviewQueue = dependencies.reviewQueue
     const byId = new Map<string, MemoryProvider>()
     for (const provider of providers) {
       if (!byId.has(provider.id)) byId.set(provider.id, provider)
@@ -476,6 +492,31 @@ export class RememOrchestrator {
 
   explain(sessionId?: string): MemoryTrace | { status: "no-trace" } {
     return this.diagnostics.latest(sessionId) ?? { status: "no-trace" }
+  }
+
+  /**
+   * Submits a correction to the review queue for diagnosis and validation.
+   * Read/write access to approve, reject, or request changes on the
+   * resulting candidate is intentionally not available through the
+   * orchestrator -- see `OrchestratorDependencies.reviewQueue`.
+   */
+  submitCorrection(correction: CorrectionInput): CorrectionCandidate | { status: "unavailable" } {
+    if (!this.reviewQueue) return { status: "unavailable" }
+    return this.reviewQueue.submit(correction)
+  }
+
+  reviewCandidates(filter?: {
+    state?: CandidateLifecycleState
+  }): CorrectionCandidate[] | { status: "unavailable" } {
+    if (!this.reviewQueue) return { status: "unavailable" }
+    return this.reviewQueue.list(filter)
+  }
+
+  explainCorrectionCandidate(
+    candidateId: string,
+  ): CorrectionCandidate | { status: "unavailable" | "not-found" } {
+    if (!this.reviewQueue) return { status: "unavailable" }
+    return this.reviewQueue.get(candidateId) ?? { status: "not-found" }
   }
 
   private async synthesize(

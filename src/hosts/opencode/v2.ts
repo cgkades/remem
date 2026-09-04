@@ -2,6 +2,7 @@ import { Plugin } from "@opencode-ai/plugin"
 import type { Context } from "@opencode-ai/plugin/promise/plugin"
 import { createCaptureCoordinator, type CaptureCoordinator } from "../../capture.js"
 import { parseConfig } from "../../config.js"
+import type { CorrectionCandidate } from "../../correction.js"
 import { RememOrchestrator } from "../../orchestrator.js"
 import { PostgresMemoryProvider } from "../../providers/postgres.js"
 import { createProviders } from "../../providers/factory.js"
@@ -64,6 +65,46 @@ function consoleLogger(): RememLogger {
 // directly callable functions, making them unreachable by bare name (see
 // https://github.com/cgkades/remem/issues/11). Applied to every tool below.
 const BARE_CALLABLE_TOOL_OPTIONS = { codemode: false }
+
+/**
+ * Projects a CorrectionCandidate down to state/diagnosis metadata only.
+ * Deliberately omits `correction.correctionText`/`expectedOutcome`/`prompt`
+ * (untrusted free text), `mutation.proposed` (the full candidate memory
+ * body), and free-text audit/reviewer `detail`/`reason` fields, since an
+ * agent reading this tool's output should learn what state a candidate is
+ * in without absorbing the untrusted content the correction workflow is
+ * built to keep inert.
+ */
+function redactCandidateSummary(candidate: CorrectionCandidate) {
+  return {
+    id: candidate.id,
+    state: candidate.state,
+    rootCause: candidate.rootCause,
+    rootCauseReason: candidate.rootCauseReason,
+    affectedMemoryIds: candidate.affectedMemoryIds,
+    mutationKind: candidate.mutation?.kind,
+    structuralValidation: candidate.structuralValidation
+      ? {
+          valid: candidate.structuralValidation.valid,
+          issueCodes: candidate.structuralValidation.issues.map((issue) => issue.code),
+        }
+      : undefined,
+    replay: candidate.replay
+      ? { passed: candidate.replay.passed, caseIds: candidate.replay.caseIds }
+      : undefined,
+    audit: candidate.audit.map((entry) => ({
+      at: entry.at,
+      actor: entry.actor,
+      event: entry.event,
+    })),
+    reviewerDecision: candidate.reviewerDecision
+      ? { actor: candidate.reviewerDecision.actor, decision: candidate.reviewerDecision.decision }
+      : undefined,
+    appliedMemoryId: candidate.appliedMemoryId,
+    createdAt: candidate.createdAt,
+    updatedAt: candidate.updatedAt,
+  }
+}
 
 async function registerTools(
   context: Context,
@@ -135,6 +176,31 @@ async function registerTools(
         return Promise.resolve({
           content: JSON.stringify(orchestrator.explain(toolContext.sessionID), null, 2),
         })
+      },
+    })
+    draft.add({
+      name: "memory_review_status",
+      description:
+        "Show correction-candidate review status and diagnostics. Read-only: this tool " +
+        "cannot approve, reject, or otherwise mutate a candidate or active memory, and " +
+        "never returns the free-text correction content or proposed memory body.",
+      options: BARE_CALLABLE_TOOL_OPTIONS,
+      input: {
+        type: "object",
+        properties: { candidateId: { type: "string", minLength: 1 } },
+        additionalProperties: false,
+      },
+      execute(input) {
+        const args = input as { candidateId?: string }
+        const result = args.candidateId
+          ? orchestrator.explainCorrectionCandidate(args.candidateId)
+          : orchestrator.reviewCandidates()
+        const redacted = Array.isArray(result)
+          ? result.map(redactCandidateSummary)
+          : "id" in result
+            ? redactCandidateSummary(result)
+            : result
+        return Promise.resolve({ content: JSON.stringify(redacted, null, 2) })
       },
     })
   })
