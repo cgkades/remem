@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import type { OrchestratorConfig } from "./config.js"
 import {
   applyMutationToInstitutionalSet,
@@ -10,6 +11,7 @@ import type { InstitutionalWrite } from "./institutional.js"
 import { RememOrchestrator } from "./orchestrator.js"
 import type {
   CatalogEntry,
+  EmbeddingModel,
   MemoryCapabilities,
   MemoryContext,
   MemoryProvider,
@@ -17,8 +19,6 @@ import type {
   MemorySearchRequest,
   ProviderDescriptor,
 } from "./types.js"
-
-let overlayRecordCounter = 0
 
 /**
  * Read-only, in-memory `MemoryProvider` serving a fixed institutional
@@ -30,8 +30,11 @@ class OverlayMemoryProvider implements MemoryProvider {
   private readonly records: Array<{ id: string; write: InstitutionalWrite }>
 
   constructor(writes: InstitutionalWrite[]) {
+    // A random id per record (rather than a shared counter) keeps every
+    // OverlayMemoryProvider instance self-contained: two replay runs in the
+    // same process never share or race over an id sequence.
     this.records = writes.map((write) => ({
-      id: write.institutional?.id ?? `overlay-${(overlayRecordCounter += 1)}`,
+      id: write.institutional?.id ?? randomUUID(),
       write,
     }))
   }
@@ -147,6 +150,12 @@ export class TargetedReplayGate implements ReplayGate {
     private readonly config: OrchestratorConfig,
     private readonly loadInstitutionalWrites: InstitutionalLoader<InstitutionalWrite[]>,
     private readonly listPriorApplied: () => Promise<CorrectionCandidate[]>,
+    // Pass the same embedding model the production orchestrator uses.
+    // Without this, semantic recognition during replay defaults to
+    // LocalHashEmbeddingModel regardless of what's actually configured, so
+    // a candidate could pass or fail this gate based on a different
+    // retrieval algorithm than the one that will serve the real correction.
+    private readonly embeddingModel?: EmbeddingModel,
     private readonly maxRegressionScenarios = 20,
   ) {}
 
@@ -156,7 +165,12 @@ export class TargetedReplayGate implements ReplayGate {
     }
     const existing = await this.loadInstitutionalWrites(candidate.correction.context)
     const overlaid = applyMutationToInstitutionalSet(candidate.mutation, existing)
-    const orchestrator = new RememOrchestrator([new OverlayMemoryProvider(overlaid)], this.config)
+    const orchestrator = new RememOrchestrator(
+      [new OverlayMemoryProvider(overlaid)],
+      this.config,
+      undefined,
+      this.embeddingModel ? { embeddingModel: this.embeddingModel } : {},
+    )
 
     const priorApplied = await this.listPriorApplied()
     const scenarios = [

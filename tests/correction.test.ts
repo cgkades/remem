@@ -6,6 +6,7 @@ import {
   proposeCandidateMutation,
   validateCandidateStructure,
   type ApplyMutation,
+  type CorrectionCandidateStore,
   type CorrectionInput,
   type ReplayGate,
 } from "../src/correction.js"
@@ -560,6 +561,115 @@ describe("CorrectionReviewQueue", () => {
     expect(stored?.state).toBe("validated")
     expect(stored?.reviewerDecision).toBeUndefined()
     expect(stored?.audit.some((entry) => entry.event === "approved")).toBe(false)
+  })
+
+  it("does not revert to validated when applyMutation succeeds but finalizing the approval fails, to avoid a double-apply on retry", async () => {
+    const inner = new InMemoryCorrectionCandidateStore()
+    let updateCalls = 0
+    const store: CorrectionCandidateStore = {
+      insert: (candidate) => inner.insert(candidate),
+      get: (id) => inner.get(id),
+      list: (filter) => inner.list(filter),
+      update: (id, mutate) => {
+        updateCalls += 1
+        // Call order for this test: (1) runValidation's finalize to
+        // "validated", (2) approve()'s atomic claim to "applying", (3)
+        // approve()'s finalize to "applied" -- which is the one we fail.
+        if (updateCalls === 3) return Promise.reject(new Error("store unavailable"))
+        return inner.update(id, mutate)
+      },
+    }
+    const q = new CorrectionReviewQueue(
+      store,
+      () => [],
+      () => [],
+      () => Promise.resolve({ memoryId: "new-memory-id" }),
+      passingGate,
+    )
+    const candidate = await q.submit(correction())
+    await q.runValidation(candidate.id)
+    await expect(q.approve(candidate.id, "reviewer@example.test")).rejects.toThrow(
+      /mutation applied as memory new-memory-id but recording the approval failed/,
+    )
+    const stored = await inner.get(candidate.id)
+    expect(stored?.state).toBe("applying")
+    expect(stored?.appliedMemoryId).toBeUndefined()
+  })
+
+  it("recoverStuckApplying resolves a stuck candidate to validated or applied", async () => {
+    const inner = new InMemoryCorrectionCandidateStore()
+    const store: CorrectionCandidateStore = {
+      insert: (candidate) => inner.insert(candidate),
+      get: (id) => inner.get(id),
+      list: (filter) => inner.list(filter),
+      update: (id, mutate) => inner.update(id, mutate),
+    }
+    const q = new CorrectionReviewQueue(
+      store,
+      () => [],
+      () => [],
+      () => Promise.resolve({ memoryId: "new-memory-id" }),
+      passingGate,
+    )
+    const submitted = await q.submit(correction())
+    await q.runValidation(submitted.id)
+    // Force the candidate into "applying" directly on the underlying store,
+    // simulating a crash between approve()'s claim and its finalize step.
+    await inner.update(submitted.id, (candidate) => ({ ...candidate, state: "applying" }))
+
+    await expect(q.approve(submitted.id, "reviewer@example.test")).rejects.toThrow(
+      /cannot be approved from state "applying"/,
+    )
+
+    const recoveredToValidated = await q.recoverStuckApplying(
+      submitted.id,
+      "operator@example.test",
+      "validated",
+      "confirmed via provider logs that the write never landed",
+    )
+    expect(recoveredToValidated.state).toBe("validated")
+    const reApproved = await q.approve(submitted.id, "reviewer@example.test")
+    expect(reApproved.state).toBe("applied")
+  })
+
+  it("recoverStuckApplying records a confirmed-applied outcome without re-invoking applyMutation", async () => {
+    const { applyMutation, applied } = recordingApplyMutation()
+    const inner = new InMemoryCorrectionCandidateStore()
+    const store: CorrectionCandidateStore = {
+      insert: (candidate) => inner.insert(candidate),
+      get: (id) => inner.get(id),
+      list: (filter) => inner.list(filter),
+      update: (id, mutate) => inner.update(id, mutate),
+    }
+    const q = new CorrectionReviewQueue(
+      store,
+      () => [],
+      () => [],
+      applyMutation,
+      passingGate,
+    )
+    const submitted = await q.submit(correction())
+    await q.runValidation(submitted.id)
+    await inner.update(submitted.id, (candidate) => ({ ...candidate, state: "applying" }))
+
+    const recovered = await q.recoverStuckApplying(
+      submitted.id,
+      "operator@example.test",
+      "applied",
+      "confirmed via provider logs that the write landed as memory-123",
+      "memory-123",
+    )
+    expect(recovered.state).toBe("applied")
+    expect(recovered.appliedMemoryId).toBe("memory-123")
+    expect(applied).toHaveLength(0)
+  })
+
+  it("recoverStuckApplying refuses to act on a candidate that is not stuck", async () => {
+    const { q } = queue(passingGate)
+    const candidate = await q.submit(correction())
+    await expect(
+      q.recoverStuckApplying(candidate.id, "operator@example.test", "validated", "not stuck"),
+    ).rejects.toThrow(/not "applying"; there is nothing to recover/)
   })
 
   it("returns defensive copies so callers cannot mutate queue-internal state", async () => {

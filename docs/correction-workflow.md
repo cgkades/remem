@@ -19,8 +19,20 @@ pending_validation --runValidation--> validated --approve--> applying --> applie
 `applied` and `rejected` are terminal: no further transition is possible.
 `applying` is a transient claim state — `approve()` sets it atomically
 before calling the (potentially slow) mutation apply step, so two concurrent
-approvals can never both apply the same mutation; on failure it reverts to
-`validated` so the candidate stays retryable.
+approvals can never both apply the same mutation.
+
+If the mutation apply itself fails, the claim safely reverts to `validated`
+and the candidate stays retryable. If the mutation _succeeds_ but the
+finalize write (recording `applied`) fails -- a crash, or a transient store
+error -- the candidate is deliberately left in `applying` rather than
+reverted: reverting would make it retryable, and retrying would call
+`applyMutation` a second time for a mutation that already landed (there is
+no idempotency key on create/update/supersede). A candidate stuck this way
+must be resolved with `CorrectionReviewQueue.recoverStuckApplying` (exposed
+via `remem correction-review <id> --recover-validated` if the mutation
+never took effect, or `--recover-applied --memory-id <ID>` if a human
+confirmed from provider state or logs that it did), using the memory id
+reported in the error `approve()` threw.
 
 ## Diagnosis
 
@@ -55,11 +67,14 @@ reference the mutation's target via `dependsOnPositionIds`/`positionIds`/
 A candidate only reaches `validated` after a `ReplayGate` passes.
 `TargetedReplayGate` (the shipped implementation) applies the mutation to
 the current institutional corpus in memory, serves the result through an
-ephemeral read-only provider, and runs a throwaway orchestrator to check two
-things: does the correction's own prompt now surface the expected outcome,
-and does every previously _applied_ candidate's own prompt still surface its
-expected outcome (the regression check). Nothing here touches a real
-provider or persists anything.
+ephemeral read-only provider, and runs a throwaway orchestrator -- built
+with the same embedding model production uses, so semantic recognition
+during replay matches what will actually serve the corrected memory -- to
+check two things: does the correction's own prompt now surface the expected
+outcome, and does every previously _applied_ candidate's own prompt still
+surface its expected outcome (the regression check, capped to the 20 most
+recently applied candidates). Nothing here touches a real provider or
+persists anything.
 
 ## Persistence
 
@@ -93,9 +108,22 @@ rejected — there is nothing for a provider to write.
   events without free-text detail) — never the untrusted correction text or
   the full proposed memory body.
 - **`remem correction-candidates [--state STATE]`** (CLI): lists candidates
-  with full detail, for a human operator.
-- **`remem correction-review <id> --approve|--reject|--request-changes
-[--reason TEXT] [--actor NAME]`** (CLI): records the human decision.
+  with full detail, for a human operator. Deliberately more permissive than
+  `memory_review_status`: a human operator via CLI is a different trust
+  boundary than an agent via a tool call.
+- **`remem correction-review <id> --approve|--reject|--request-changes|
+--recover-validated|--recover-applied [--reason TEXT] [--actor NAME]
+[--memory-id ID]`** (CLI): records the human decision, or resolves a
+  candidate stuck in `applying`. `--actor` and `--reason` are capped at 255
+  and 4096 characters, since they're persisted and later echoed back
+  verbatim by `correction-candidates`.
+- Both CLI commands only see the primary PostgreSQL provider's institutional
+  corpus and providers (matching every other candidate-related CLI command
+  in this project). If institutional memory or a mutation's target lives in
+  a different configured provider, only a live OpenCode session -- which
+  wires every configured provider -- can see or mutate it; the CLI can
+  still list/approve/reject the candidate row itself, since that's always
+  persisted in the primary provider's own database.
 
 No orchestrator method and no OpenCode tool exposes
 `approve`/`reject`/`requestChanges` — those are reachable only through

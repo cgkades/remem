@@ -160,25 +160,29 @@ integration("PostgresCorrectionCandidateStore", () => {
 
   it("serializes concurrent update() calls on the same row via row-level locking", async () => {
     const store = new PostgresCorrectionCandidateStore(pool, "remem-local")
-    const seeded = candidate({ id: randomUUID() })
+    const seeded = candidate({ id: randomUUID(), rootCauseReason: "0" })
     await store.insert(seeded)
 
-    const order: string[] = []
-    const first = store.update(seeded.id, (current) => {
-      order.push("first-read")
-      return { ...current, rootCauseReason: "first" }
-    })
-    const second = store.update(seeded.id, (current) => {
-      order.push("second-read")
-      return { ...current, rootCauseReason: "second" }
-    })
+    // Classic lost-update detector: each mutate callback reads the current
+    // counter and increments it. If SELECT ... FOR UPDATE is not actually
+    // serializing the two updates, both callbacks can read "0" concurrently
+    // and each write "1" -- a real lost update that a weaker assertion
+    // (e.g. just checking the final value is one of the two writers' own
+    // literals) would not catch. Only true serialization guarantees the
+    // final value is "2": the second update must observe the first's
+    // committed write, not a stale read.
+    const increment = (current: string | undefined): string => String(Number(current ?? "0") + 1)
+    const first = store.update(seeded.id, (current) => ({
+      ...current,
+      rootCauseReason: increment(current.rootCauseReason),
+    }))
+    const second = store.update(seeded.id, (current) => ({
+      ...current,
+      rootCauseReason: increment(current.rootCauseReason),
+    }))
     await Promise.all([first, second])
 
-    // Whichever transaction's SELECT ... FOR UPDATE acquires the row lock
-    // first must fully commit before the other's SELECT can proceed --
-    // so the two mutate callbacks can never interleave, only sequence.
-    expect(order).toHaveLength(2)
     const fetched = await store.get(seeded.id)
-    expect(["first", "second"]).toContain(fetched?.rootCauseReason)
+    expect(fetched?.rootCauseReason).toBe("2")
   })
 })

@@ -35,6 +35,16 @@ export type CandidateLifecycleState =
   | "applying"
   | "applied"
 
+/** Every `CandidateLifecycleState`, for callers (e.g. CLI flag validation) that need to enumerate them without duplicating the union. */
+export const CANDIDATE_LIFECYCLE_STATES: readonly CandidateLifecycleState[] = [
+  "pending_validation",
+  "validated",
+  "needs_changes",
+  "rejected",
+  "applying",
+  "applied",
+]
+
 export interface CorrectionInput {
   id?: string
   sessionId: string
@@ -412,6 +422,15 @@ export function applyMutationToInstitutionalSet(
       )
       return [...withoutTarget, mutation.proposed]
     }
+    default: {
+      // Defense in depth: this is exhaustive over CandidateMutation today,
+      // but a mutation loaded from durable storage (e.g. a row written by a
+      // newer app version, or hand-edited) is not guaranteed to match this
+      // process's type at runtime. Fail loudly instead of silently
+      // returning undefined to every caller.
+      const unknown: never = mutation
+      throw new Error(`unknown correction mutation kind: ${JSON.stringify(unknown)}`)
+    }
   }
 }
 
@@ -786,9 +805,18 @@ export class CorrectionReviewQueue {
   /**
    * Claims the candidate for approval (atomic; fails immediately if it is
    * not "validated"), applies its mutation outside the store lock since a
-   * provider write may be slow, then finalizes to "applied". On apply
-   * failure the claim is rolled back to "validated" so the candidate stays
-   * retryable, with no misleading "approved" audit entry.
+   * provider write may be slow, then finalizes to "applied".
+   *
+   * If `applyMutation` itself throws, the mutation never took effect, so the
+   * claim is safely rolled back to "validated" and the candidate stays
+   * retryable. If `applyMutation` *succeeds* but the finalize write fails
+   * (e.g. a transient store error), the candidate is deliberately left in
+   * "applying" rather than reverted -- reverting would make it retryable,
+   * and retrying would call `applyMutation` a second time for a mutation
+   * that already landed (this library has no idempotency key for
+   * create/update/supersede). A candidate stuck this way must be resolved
+   * with `recoverStuckApplying`, using the memory id reported in the thrown
+   * error.
    */
   async approve(candidateId: string, actor: string): Promise<CorrectionCandidate> {
     const claimed = await this.store.update(candidateId, (candidate) => {
@@ -802,8 +830,17 @@ export class CorrectionReviewQueue {
     const mutation = claimed.mutation
     if (!mutation) throw new Error(`candidate ${candidateId} was claimed without a mutation`)
 
+    let result: ApplyMutationResult
     try {
-      const result = await this.applyMutation(mutation, claimed.correction.context)
+      result = await this.applyMutation(mutation, claimed.correction.context)
+    } catch (error) {
+      await this.store.update(candidateId, (candidate) =>
+        candidate.state === "applying" ? { ...candidate, state: "validated" } : candidate,
+      )
+      throw error
+    }
+
+    try {
       return await this.store.update(candidateId, (candidate) => {
         const at = new Date().toISOString()
         let next: CorrectionCandidate = {
@@ -815,11 +852,53 @@ export class CorrectionReviewQueue {
         next = touch(next, { actor, event: "approved" })
         return touch(next, { actor: "system", event: "applied", detail: result.memoryId })
       })
-    } catch (error) {
-      await this.store.update(candidateId, (candidate) =>
-        candidate.state === "applying" ? { ...candidate, state: "validated" } : candidate,
+    } catch (finalizeError) {
+      const detail = finalizeError instanceof Error ? finalizeError.message : String(finalizeError)
+      throw new Error(
+        `mutation applied as memory ${result.memoryId} but recording the approval failed; ` +
+          `use recoverStuckApplying to resolve candidate ${candidateId} instead of retrying ` +
+          `approve() (it would re-apply the mutation): ${detail}`,
+        { cause: finalizeError },
       )
-      throw error
     }
+  }
+
+  /**
+   * Manually resolves a candidate stuck in "applying" -- the only way that
+   * can happen is a crash or a finalize failure between `approve()` calling
+   * `applyMutation` and recording the result (see `approve`'s doc comment).
+   * `outcome: "validated"` means a human confirmed the mutation never took
+   * effect, so the candidate is retryable via `approve()` again.
+   * `outcome: "applied"` means a human confirmed (e.g. from provider state
+   * or logs) that it did land, so this records that outcome without
+   * re-applying it.
+   */
+  async recoverStuckApplying(
+    candidateId: string,
+    actor: string,
+    outcome: "validated" | "applied",
+    reason: string,
+    appliedMemoryId?: string,
+  ): Promise<CorrectionCandidate> {
+    return this.store.update(candidateId, (candidate) => {
+      if (candidate.state !== "applying") {
+        throw new Error(
+          `candidate ${candidateId} is in state "${candidate.state}", not "applying"; there is nothing to recover`,
+        )
+      }
+      let next: CorrectionCandidate = { ...candidate, state: outcome }
+      if (outcome === "applied") {
+        next = {
+          ...next,
+          reviewerDecision: { actor, decision: "approved", at: new Date().toISOString() },
+          ...(appliedMemoryId ? { appliedMemoryId } : {}),
+        }
+      }
+      return touch(next, {
+        actor,
+        event: outcome === "applied" ? "applied" : "validation_failed",
+        detail: `manual recovery from a stuck "applying" state: ${reason}`,
+      })
+    })
   }
 }

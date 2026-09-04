@@ -1,22 +1,18 @@
 import { Plugin } from "@opencode-ai/plugin"
 import type { Context } from "@opencode-ai/plugin/promise/plugin"
-import type { OrchestratorConfig } from "../../config.js"
 import { createCaptureCoordinator, type CaptureCoordinator } from "../../capture.js"
 import { parseConfig } from "../../config.js"
 import {
-  CorrectionReviewQueue,
   InMemoryCorrectionCandidateStore,
   type CorrectionCandidate,
   type CorrectionCandidateStore,
 } from "../../correction.js"
-import { createProviderApplyMutation } from "../../correction-apply.js"
-import { createInstitutionalLoaders } from "../../correction-institutional.js"
+import { createCorrectionReviewQueue } from "../../correction-wiring.js"
 import { RememOrchestrator } from "../../orchestrator.js"
 import { PostgresMemoryProvider } from "../../providers/postgres.js"
 import { PostgresCorrectionCandidateStore } from "../../providers/postgres-correction-store.js"
 import { createProviders } from "../../providers/factory.js"
 import { shouldAttemptReembed } from "../../reembedding.js"
-import { TargetedReplayGate } from "../../replay-gate.js"
 import { loadInstalledPluginOptions } from "../../storage/config-file.js"
 import { createEmbeddingModel } from "../../storage/embedding-neural.js"
 import type { MemoryContext, MemoryProvider, RememLogger } from "../../types.js"
@@ -117,37 +113,18 @@ function redactCandidateSummary(candidate: CorrectionCandidate) {
 }
 
 /**
- * Wires a live CorrectionReviewQueue against the configured providers.
- * Durable, cross-process review (so a future `remem correction review`
- * CLI command can act on a candidate this plugin session created) requires
- * a Postgres provider; without one, review state is in-memory only for the
- * lifetime of this process, same as every other in-memory fallback in this
- * plugin.
+ * Selects durable storage for a live CorrectionReviewQueue. Durable,
+ * cross-process review (so the `remem correction-review` CLI command can
+ * act on a candidate this plugin session created) requires a Postgres
+ * provider; without one, review state is in-memory only for the lifetime
+ * of this process, same as every other in-memory fallback in this plugin.
  */
-function createCorrectionReviewQueue(
-  providers: MemoryProvider[],
-  config: OrchestratorConfig,
+function correctionCandidateStore(
   primaryPostgres: PostgresMemoryProvider | undefined,
-): CorrectionReviewQueue {
-  const store: CorrectionCandidateStore = primaryPostgres
+): CorrectionCandidateStore {
+  return primaryPostgres
     ? new PostgresCorrectionCandidateStore(primaryPostgres.connectionPool, primaryPostgres.id)
     : new InMemoryCorrectionCandidateStore()
-  const { loadInstitutional, loadInstitutionalWrites } = createInstitutionalLoaders(providers)
-  // Forward reference: the replay gate needs to list the queue it will be
-  // constructed into, so this can't be `const` initialized in one step.
-  // eslint-disable-next-line prefer-const
-  let reviewQueue: CorrectionReviewQueue
-  const replayGate = new TargetedReplayGate(config, loadInstitutionalWrites, () =>
-    reviewQueue.list({ state: "applied" }),
-  )
-  reviewQueue = new CorrectionReviewQueue(
-    store,
-    loadInstitutional,
-    loadInstitutionalWrites,
-    createProviderApplyMutation(providers),
-    replayGate,
-  )
-  return reviewQueue
 }
 
 async function registerTools(
@@ -338,9 +315,10 @@ export const RememPlugin = Plugin.define({
           provider instanceof PostgresMemoryProvider,
       )
       const reviewQueue = createCorrectionReviewQueue(
+        correctionCandidateStore(primaryPostgres),
         created.providers,
         parsed.config,
-        primaryPostgres,
+        embeddingModel,
       )
       const orchestrator = new RememOrchestrator(created.providers, parsed.config, logger, {
         embeddingModel,

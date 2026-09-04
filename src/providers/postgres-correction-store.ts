@@ -178,7 +178,14 @@ export class PostgresCorrectionCandidateStore implements CorrectionCandidateStor
       await client.query("COMMIT")
       return updated
     } catch (error) {
-      await client.query("ROLLBACK")
+      // If ROLLBACK itself throws (e.g. the connection is already broken),
+      // that error is a distraction next to the real cause -- surface the
+      // original error, not whatever ROLLBACK failed with.
+      try {
+        await client.query("ROLLBACK")
+      } catch {
+        // Ignored: the transaction is being discarded either way (see below).
+      }
       throw error
     } finally {
       client.release()
