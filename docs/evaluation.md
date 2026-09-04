@@ -120,6 +120,10 @@ integration suite rather than skipping it.
 
 `npm run check` includes Prettier, ESLint, TypeScript, tests, and build.
 
+The separate **Neural embedding evaluation** job runs `npm run test:eval` on Node.js 22, caches the
+pinned transformer-model revision outside `node_modules`, and uploads a JSON report. It is non-blocking
+while the suite measures quality and model-download availability rather than functional correctness.
+
 ## Interpretation and Gaps
 
 The current corpus is small, English-heavy, deterministic, and selected around implemented concept

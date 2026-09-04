@@ -61,3 +61,30 @@ jobs:
           name: opencode-v2-e2e-workspace
           path: ${{ env.REMEM_E2E_WORKSPACE }}
           retention-days: 3
+
+  neural-evaluation:
+    name: Neural embedding evaluation
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ runner.temp }}/transformers-cache
+          key: neural-evaluation-${{ runner.os }}-ea104dacec62c0de699686887e3f920caeb4f3e3-${{ hashFiles('package-lock.json') }}
+      - run: npm ci
+      - run: npm run test:eval -- --reporter=json --outputFile=artifacts/neural-evaluation.json
+        env:
+          REMEM_TRANSFORMERS_CACHE_DIR: ${{ runner.temp }}/transformers-cache
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: neural-evaluation
+          path: artifacts/neural-evaluation.json
+          if-no-files-found: error
+          retention-days: 14
