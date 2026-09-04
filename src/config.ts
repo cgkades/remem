@@ -1,3 +1,4 @@
+import path from "node:path"
 import type { MemoryScopeKind } from "./types.js"
 
 export interface TokenBudgets {
@@ -25,7 +26,17 @@ export interface CaptureConfig {
   timeoutMs: number
 }
 
-export interface EmbeddingConfig {
+/**
+ * The runtime plugin-options embedding shape (`{backend, modelPath}`),
+ * distinct from `EmbeddingAppConfig` (`storage/config-file.ts`), the
+ * persisted app-config shape (`{provider, model, dimensions}`) `remem init`
+ * writes to disk. Confusing the two was the direct root cause of a real
+ * bug (the OpenCode plugin only recognized this shape's `backend` field,
+ * silently ignoring `remem init`'s neural default written in the other
+ * shape) -- kept intentionally distinctly named so that mistake is harder
+ * to make again.
+ */
+export interface EmbeddingPluginOptions {
   backend: "hash" | "neural"
   modelPath?: string
 }
@@ -64,7 +75,9 @@ export interface RememConfig extends OrchestratorConfig {
   providers: MemoryProviderConfig[]
   compaction: boolean
   capture: CaptureConfig
-  embedding: EmbeddingConfig
+  embedding: EmbeddingPluginOptions
+  /** Minimum time between hook-triggered opportunistic re-embed attempts (see `shouldAttemptReembed`). */
+  reembedCooldownMs: number
 }
 
 export interface ConfigDiagnostic {
@@ -171,7 +184,7 @@ function parseProvider(
   }
 }
 
-function parseEmbedding(value: unknown, diagnostics: ConfigDiagnostic[]): EmbeddingConfig {
+function parseEmbedding(value: unknown, diagnostics: ConfigDiagnostic[]): EmbeddingPluginOptions {
   const options = isRecord(value) ? value : {}
   const backendFromPluginOptions =
     options.backend === "neural" ? "neural" : options.backend === "hash" ? "hash" : undefined
@@ -196,8 +209,35 @@ function parseEmbedding(value: unknown, diagnostics: ConfigDiagnostic[]): Embedd
         : undefined
   return {
     backend: backendFromPluginOptions ?? backendFromAppConfig ?? "hash",
-    ...(typeof options.modelPath === "string" ? { modelPath: options.modelPath } : {}),
+    ...(parseModelPath(options.modelPath, diagnostics) ? { modelPath: options.modelPath } : {}),
   }
+}
+
+/**
+ * Basic defense-in-depth for the air-gapped local-weights override:
+ * `modelPath` is set by whoever can already edit this config (the same
+ * trust level as a Postgres connection string or a Markdown provider
+ * path), so this is not a trust-boundary check -- it just requires an
+ * absolute, normalized path instead of accepting any string verbatim,
+ * catching accidental relative paths (whose resolution would silently
+ * depend on the process's current working directory) or path-traversal
+ * segments before they reach `@huggingface/transformers`.
+ */
+function parseModelPath(value: unknown, diagnostics: ConfigDiagnostic[]): value is string {
+  if (value === undefined) return false
+  if (typeof value !== "string" || !value.trim()) {
+    diagnostics.push({ level: "warn", message: "embedding.modelPath must be a non-empty string" })
+    return false
+  }
+  const normalized = path.normalize(value)
+  if (!path.isAbsolute(normalized) || normalized !== value) {
+    diagnostics.push({
+      level: "warn",
+      message: "embedding.modelPath must be an absolute, normalized path (e.g. no '..' segments)",
+    })
+    return false
+  }
+  return true
 }
 
 export function parseConfig(options: unknown): ParsedConfig {
@@ -291,6 +331,7 @@ export function parseConfig(options: unknown): ParsedConfig {
         timeoutMs: finiteNumber(captureOptions.timeoutMs, 1_000, 50, 10_000),
       },
       embedding: parseEmbedding(root.embedding, diagnostics),
+      reembedCooldownMs: finiteNumber(root.reembedCooldownMs, 5 * 60_000, 0, 60 * 60_000),
     },
     diagnostics,
   }

@@ -1,7 +1,8 @@
 import { tokenize } from "../text.js"
 import type { EmbeddingModel } from "../types.js"
+import { EMBEDDING_DIMENSIONS, LOCAL_HASH_MODEL_ID } from "./embedding-model-ids.js"
 
-export const DEFAULT_EMBEDDING_DIMENSIONS = 384
+export const DEFAULT_EMBEDDING_DIMENSIONS = EMBEDDING_DIMENSIONS
 
 const CONCEPT_GROUPS = [
   [
@@ -57,7 +58,7 @@ function features(text: string): string[] {
 }
 
 export class LocalHashEmbeddingModel implements EmbeddingModel {
-  readonly id = "remem-local-hash-v1"
+  readonly id = LOCAL_HASH_MODEL_ID
   readonly dimensions = DEFAULT_EMBEDDING_DIMENSIONS
 
   embed(text: string, signal?: AbortSignal): Promise<number[]> {

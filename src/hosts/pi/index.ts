@@ -30,7 +30,7 @@ import { deriveHostLocation } from "./location.js"
  */
 interface PiSessionState {
   location: HostLocation
-  config: Pick<RememConfig, "compaction">
+  config: Pick<RememConfig, "compaction" | "reembedCooldownMs">
   orchestrator: RememOrchestrator
   providers: MemoryProvider[]
   capture?: CaptureCoordinator | undefined
@@ -341,7 +341,10 @@ export default function remem(pi: ExtensionAPI): void {
       }
     }
     const primaryPostgres = state.primaryPostgres
-    if (primaryPostgres && shouldAttemptReembed(state.lastReembedAttempt)) {
+    if (
+      primaryPostgres &&
+      shouldAttemptReembed(state.lastReembedAttempt, Date.now, state.config.reembedCooldownMs)
+    ) {
       state.lastReembedAttempt = Date.now()
       // Fire-and-forget: must never delay or fail input handling. Reembedding
       // is opportunistic maintenance, not an assertion about the input's

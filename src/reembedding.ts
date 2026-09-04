@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { Pool } from "pg"
+import { describeError } from "./text.js"
 
 export interface ReembedTarget {
   memoryId: string
@@ -82,7 +83,7 @@ export class PostgresReembedRunner {
         )
         if (updated.rowCount !== null && updated.rowCount > 0) reembedded++
       } catch (error) {
-        errors.push(error instanceof Error ? error.name : "unknown error")
+        errors.push(describeError(error))
       }
     }
     if (errors.length > 0 && reembedded === 0) {

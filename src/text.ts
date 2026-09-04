@@ -77,3 +77,18 @@ export function stripControlCharacters(value: string): string {
 export function contentFingerprint(value: string): string {
   return normalizeText(value).replace(/\s+/gu, " ")
 }
+
+/**
+ * A bounded `"Name: message"` summary of a caught error, for persisting to
+ * durable run/audit records (e.g. `consolidation_records.metadata`) where
+ * `error.name` alone ("TypeError") gives no way to tell two different
+ * failures apart. Capped since these are internal processing errors (an
+ * embedding backend failure, a consolidation pipeline error), not raw user
+ * input, but a pathological `.message` (e.g. a library that embeds a full
+ * stack trace) should not balloon a persisted JSONB column unbounded.
+ */
+export function describeError(error: unknown, maxLength = 500): string {
+  if (!(error instanceof Error)) return "unknown error"
+  const description = error.message ? `${error.name}: ${error.message}` : error.name
+  return description.length > maxLength ? `${description.slice(0, maxLength)}…` : description
+}
