@@ -2,7 +2,7 @@ CREATE TABLE remem.correction_candidates (
   id uuid PRIMARY KEY,
   provider_id text NOT NULL,
   state text NOT NULL CHECK (
-    state IN ('pending_validation', 'validated', 'needs_changes', 'rejected', 'applied')
+    state IN ('pending_validation', 'validated', 'needs_changes', 'rejected', 'applying', 'applied')
   ),
   correction jsonb NOT NULL,
   root_cause text,

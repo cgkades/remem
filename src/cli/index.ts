@@ -4,8 +4,13 @@ import { access, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promi
 import net from "node:net"
 import path from "node:path"
 import { Pool } from "pg"
-import type { PostgresProviderConfig } from "../config.js"
+import { parseConfig, type PostgresProviderConfig } from "../config.js"
+import { createProviderApplyMutation } from "../correction-apply.js"
+import { createInstitutionalLoaders } from "../correction-institutional.js"
+import { CorrectionReviewQueue, type CandidateLifecycleState } from "../correction.js"
 import type { CandidateMemory } from "../observation.js"
+import { PostgresCorrectionCandidateStore } from "../providers/postgres-correction-store.js"
+import { TargetedReplayGate } from "../replay-gate.js"
 import {
   readAppConfig,
   writeAppConfig,
@@ -344,6 +349,50 @@ function primaryPostgresProvider(config: RememAppConfig): PostgresMemoryProvider
   return new PostgresMemoryProvider(findPrimaryPostgresConfig(config))
 }
 
+/**
+ * Builds the same CorrectionReviewQueue stack a live OpenCode session would
+ * use, so `correction-candidates`/`correction-review` act on the exact
+ * candidates that session's `memory_submit_correction` tool created.
+ */
+function correctionReviewQueue(config: RememAppConfig): {
+  queue: CorrectionReviewQueue
+  provider: PostgresMemoryProvider
+} {
+  const provider = primaryPostgresProvider(config)
+  const store = new PostgresCorrectionCandidateStore(provider.connectionPool, provider.id)
+  const { loadInstitutional, loadInstitutionalWrites } = createInstitutionalLoaders([provider])
+  // `RememAppConfig` stores partial overrides on disk; resolve it through
+  // the same defaulting path plugin options go through to get a full
+  // OrchestratorConfig for the replay gate's throwaway orchestrator.
+  const resolvedConfig = parseConfig(config).config
+  // eslint-disable-next-line prefer-const -- forward reference, see the identical pattern in src/hosts/opencode/v2.ts
+  let queue: CorrectionReviewQueue
+  const replayGate = new TargetedReplayGate(resolvedConfig, loadInstitutionalWrites, () =>
+    queue.list({ state: "applied" }),
+  )
+  queue = new CorrectionReviewQueue(
+    store,
+    loadInstitutional,
+    loadInstitutionalWrites,
+    createProviderApplyMutation([provider]),
+    replayGate,
+  )
+  return { queue, provider }
+}
+
+function correctionStateFlag(parsed: ParsedArguments): CandidateLifecycleState | undefined {
+  const value = stringFlag(parsed, "state")
+  const states: CandidateLifecycleState[] = [
+    "pending_validation",
+    "validated",
+    "needs_changes",
+    "rejected",
+    "applying",
+    "applied",
+  ]
+  return states.find((state) => state === value)
+}
+
 async function reembedProvider(config: RememAppConfig): Promise<PostgresMemoryProvider> {
   // Unlike candidates/review/consolidate, reembed's entire purpose is to
   // re-embed stale rows into the CONFIGURED embedding model — it must use
@@ -458,6 +507,8 @@ Commands:
   start | stop | status | doctor | migrate
   candidates [--status STATUS]
   review <CANDIDATE_ID> --approve|--reject
+  correction-candidates [--state STATE]
+  correction-review <CANDIDATE_ID> --approve|--reject|--request-changes [--reason TEXT] [--actor NAME]
   consolidate [--batch-size NUMBER]
   reembed [--batch-size NUMBER]
   backup [--output FILE]
@@ -488,6 +539,7 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
         "restore",
         "reset",
         "review",
+        "correction-review",
         "consolidate",
         "reembed",
       ]).has(parsed.command)
@@ -557,6 +609,41 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
           throw new Error("--batch-size must be an integer from 1 to 1000")
         }
         output(JSON.stringify(await provider.consolidateCandidates(batchSize), null, 2))
+        return 0
+      } finally {
+        await provider.close()
+      }
+    }
+    if (parsed.command === "correction-candidates" || parsed.command === "correction-review") {
+      const { queue, provider } = correctionReviewQueue(config)
+      try {
+        if (parsed.command === "correction-candidates") {
+          const state = correctionStateFlag(parsed)
+          output(JSON.stringify(await queue.list(state ? { state } : undefined), null, 2))
+          return 0
+        }
+        const id = parsed.positionals[0]
+        if (!id) throw new Error("correction-review requires a candidate id")
+        const approve = hasFlag(parsed, "approve")
+        const reject = hasFlag(parsed, "reject")
+        const requestChanges = hasFlag(parsed, "request-changes")
+        if ([approve, reject, requestChanges].filter(Boolean).length !== 1) {
+          throw new Error(
+            "correction-review requires exactly one of --approve, --reject, or --request-changes",
+          )
+        }
+        const actor = stringFlag(parsed, "actor") ?? "cli"
+        const reason = stringFlag(parsed, "reason") ?? ""
+        if (approve) {
+          const result = await queue.approve(id, actor)
+          output(`Correction candidate ${id} applied as memory ${result.appliedMemoryId ?? ""}.`)
+          return 0
+        }
+        if (!reason) throw new Error("--reject and --request-changes require --reason")
+        const result = reject
+          ? await queue.reject(id, actor, reason)
+          : await queue.requestChanges(id, actor, reason)
+        output(`Correction candidate ${id} is now ${result.state}.`)
         return 0
       } finally {
         await provider.close()
