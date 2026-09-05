@@ -101,6 +101,111 @@ function renderMessagesForSummary(messages: readonly unknown[]): string {
     .join("\n")
 }
 
+/**
+ * Tokens reserved when bounding rendered branch history before
+ * summarization, mirroring Pi's own default `reserveTokens` for
+ * compaction/branch-summary budgeting (`docs/compaction.md`'s
+ * `reserveTokens` setting, default 16384). Named here so both this reserve
+ * and its rationale stay in one place if it needs tuning later, rather than
+ * being an inline magic number at the call site.
+ */
+const BRANCH_SUMMARY_RESERVE_TOKENS = 16_384
+
+/**
+ * Conservative chars-per-token divisor for `branchMessagesForSummary`'s
+ * token-budget estimate. A more typical average is ~4 chars/token; dividing
+ * by 3 instead intentionally overestimates for code-heavy/symbol-dense
+ * conversation content so the request stays safely within the model's real
+ * context window.
+ */
+const BRANCH_SUMMARY_CHARS_PER_TOKEN_ESTIMATE = 3
+
+/**
+ * Pi's tree hook supplies session entries, while compaction supplies agent
+ * messages. Keep the tree conversion local: Pi only exports its conversion
+ * helpers through its top-level runtime entry, which may load an undeclared
+ * server dependency in consumers (see `renderMessagesForSummary`).
+ *
+ * The returned objects are intentionally not real Pi/LLM messages -- their
+ * `role` values (`"summary"`, `"custom:<customType>"`) are synthetic labels
+ * meaningful only to `renderMessagesForSummary`, the sole consumer of this
+ * function's output. Do not reuse these objects anywhere a real message role
+ * union is expected (e.g. constructing an actual model-facing message).
+ */
+function branchMessagesForSummary(entries: readonly unknown[], tokenBudget: number): unknown[] {
+  const messages: unknown[] = []
+  let tokens = 0
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]
+    if (!entry || typeof entry !== "object" || !("type" in entry)) continue
+    const type = entry.type
+    const message =
+      type === "message" && "message" in entry
+        ? entry.message
+        : type === "custom_message" && "content" in entry
+          ? {
+              role: `custom:${"customType" in entry ? String(entry.customType) : "message"}`,
+              content: entry.content,
+            }
+          : (type === "compaction" || type === "branch_summary") &&
+              "summary" in entry &&
+              typeof entry.summary === "string"
+            ? // Synthetic, rendering-only role: `renderMessagesForSummary` only
+              // reads `role`/`content` for display in the summarizer prompt, so
+              // this never needs to match a real Pi/LLM message role -- it just
+              // needs to label prior compaction/branch-summary text distinctly
+              // from ordinary conversation turns.
+              { role: "summary", content: entry.summary }
+            : undefined
+    if (!message) continue
+    // Pi's own branch preparation retains the newest messages that fit its
+    // context budget. This conservative estimate avoids an unbounded request
+    // without importing Pi's runtime-only token helpers.
+    const estimatedTokens = Math.ceil(
+      JSON.stringify(message).length / BRANCH_SUMMARY_CHARS_PER_TOKEN_ESTIMATE,
+    )
+    if (tokens + estimatedTokens > tokenBudget) break
+    messages.unshift(message)
+    tokens += estimatedTokens
+  }
+  return messages
+}
+
+/**
+ * Resolve `promise`, but resolve to `undefined` early if `signal` aborts
+ * first. Does not cancel `promise`'s underlying work (Remem's
+ * `compactionContext` has no cancellation parameter) -- it only stops the
+ * caller from waiting on and acting on a result that arrives after the
+ * caller no longer wants it.
+ */
+export function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
+  if (signal.aborted) {
+    // Still consume `promise`'s eventual settlement so a later rejection
+    // (e.g. a memory-provider lookup failure) never surfaces as an
+    // unhandled promise rejection just because nothing else is awaiting it.
+    promise.catch(() => {})
+    return Promise.resolve(undefined)
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve(undefined)
+    signal.addEventListener("abort", onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort)
+        resolve(value)
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort)
+        reject(
+          error instanceof Error
+            ? error
+            : new Error("raceAbort: non-Error rejection", { cause: error }),
+        )
+      },
+    )
+  })
+}
+
 function piLogger(): RememLogger {
   return {
     log(level, event, data) {
@@ -272,7 +377,7 @@ function registerTools(pi: ExtensionAPI, getState: () => PiSessionState | undefi
  * compaction-context behavior of the OpenCode v1/v2 adapters
  * (`src/hosts/opencode/v1.ts`, `src/hosts/opencode/v2.ts`), mapped onto
  * Pi's `before_agent_start` / `pi.registerTool` / `input` /
- * `session_before_compact` events instead of OpenCode's plugin hooks.
+ * `session_before_compact` / `session_before_tree` events instead of OpenCode's plugin hooks.
  */
 export default function remem(pi: ExtensionAPI): void {
   const logger = piLogger()
@@ -354,6 +459,87 @@ export default function remem(pi: ExtensionAPI): void {
           error: error instanceof Error ? error.name : "unknown error",
         })
       })
+    }
+  })
+
+  pi.on("session_before_tree", async (event, ctx) => {
+    if (!state || !state.config.compaction || !event.preparation.userWantsSummary) return
+    const { preparation, signal } = event
+    if (preparation.entriesToSummarize.length === 0) return
+    const model = ctx.model
+    // Pi's `summary` return value fully replaces its branch summary. Do not
+    // replace abandoned-branch history with Remem-only continuity: if no real
+    // summary can be made, return undefined and let Pi use its default flow.
+    if (!model) return undefined
+    try {
+      const messages = branchMessagesForSummary(
+        preparation.entriesToSummarize,
+        Math.max(0, model.contextWindow - BRANCH_SUMMARY_RESERVE_TOKENS),
+      )
+      if (messages.length === 0) return undefined
+      const conversationText = renderMessagesForSummary(messages)
+      const continuity = await raceAbort(
+        state.orchestrator.compactionContext(contextFor(state, ctx)),
+        signal,
+      )
+      if (signal.aborted || continuity === undefined) return undefined
+      const customInstructions = preparation.customInstructions
+      const instructions =
+        preparation.replaceInstructions && customInstructions
+          ? customInstructions
+          : [
+              "You are a conversation summarizer. Create a comprehensive summary of this",
+              "abandoned conversation branch that captures goals, decisions, technical",
+              "details, current state, blockers, and next steps. Format as structured",
+              "markdown. This summary provides the context from the branch being left, so",
+              "include everything needed to continue or revisit that work.",
+              customInstructions ? `\nAdditional focus: ${customInstructions}` : "",
+            ].join("\n")
+      const response = await ctx.modelRegistry.complete(
+        model,
+        {
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: [
+                    instructions,
+                    "",
+                    "<conversation>",
+                    conversationText,
+                    "</conversation>",
+                  ].join("\n"),
+                },
+              ],
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        { maxTokens: 8192, signal, cacheRetention: "none", sessionId: randomUUID() },
+      )
+      const summaryText = response.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n")
+        .trim()
+      if (signal.aborted || response.stopReason === "aborted" || response.stopReason === "error") {
+        return undefined
+      }
+      if (!summaryText) return undefined
+      return {
+        summary: {
+          // Continuity augments the real branch summary; it never replaces it.
+          summary: [summaryText, "", continuity].join("\n"),
+          usage: response.usage,
+        },
+      }
+    } catch (error) {
+      safeLoggerCall(logger, "warn", "branch_summary.context_failed", {
+        error: error instanceof Error ? error.name : "unknown error",
+      })
+      return undefined
     }
   })
 

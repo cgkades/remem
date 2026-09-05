@@ -6,7 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { configurePi } from "../src/cli/index.js"
 import { piIntegrationCheck } from "../src/cli/doctor.js"
-import remem, { isCaptureEligibleInputSource } from "../src/hosts/pi/index.js"
+import remem, { isCaptureEligibleInputSource, raceAbort } from "../src/hosts/pi/index.js"
 import { deriveHostLocation } from "../src/hosts/pi/location.js"
 import { writeAppConfig, type RememAppConfig } from "../src/storage/config-file.js"
 import { packageRoot, piSettingsPath, rememPaths } from "../src/storage/paths.js"
@@ -292,6 +292,270 @@ describe("Pi host extension", () => {
     await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
   })
 
+  it("does not customize tree navigation unless the user requests a summary", async () => {
+    const paths = await installedConfig({ compaction: true })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const complete = vi.fn(() => Promise.reject(new Error("must not be called")))
+    const ctx = fakeContext(fixtureDirectory, { model: { id: "fake-model" }, complete })
+    await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
+
+    const result = await pi.fire(
+      "session_before_tree",
+      {
+        type: "session_before_tree",
+        preparation: { userWantsSummary: false, entriesToSummarize: [] },
+        signal: new AbortController().signal,
+      },
+      ctx,
+    )
+    expect(result).toBeUndefined()
+    expect(complete).not.toHaveBeenCalled()
+
+    await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
+  it("falls back to Pi's default branch summary when no model is configured", async () => {
+    const paths = await installedConfig({ compaction: true })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const ctx = fakeContext(fixtureDirectory)
+    await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
+
+    const result = await pi.fire(
+      "session_before_tree",
+      {
+        type: "session_before_tree",
+        preparation: { userWantsSummary: true, entriesToSummarize: [] },
+        signal: new AbortController().signal,
+      },
+      ctx,
+    )
+    expect(result).toBeUndefined()
+
+    await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
+  it("summarizes an abandoned branch and appends Remem continuity when a model is available", async () => {
+    const paths = await installedConfig({ compaction: true })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const entriesToSummarize = [
+      {
+        type: "message",
+        id: "entry-1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "Investigate the billing schema migration." }],
+        },
+      },
+    ]
+    type SummarizerRequestContext = { messages: Array<{ content: Array<{ text: string }> }> }
+    let receivedContext: SummarizerRequestContext | undefined
+    const complete = (_model: unknown, context: unknown) => {
+      receivedContext = context as SummarizerRequestContext
+      return Promise.resolve({
+        content: [{ type: "text", text: "## Progress\nInvestigated the billing schema." }],
+        usage: { input: 10, output: 5 },
+      })
+    }
+    const ctx = fakeContext(fixtureDirectory, { model: { id: "fake-model" }, complete })
+    await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
+
+    const result = (await pi.fire(
+      "session_before_tree",
+      {
+        type: "session_before_tree",
+        preparation: {
+          userWantsSummary: true,
+          entriesToSummarize,
+          customInstructions: "Focus on migration safety.",
+        },
+        signal: new AbortController().signal,
+      },
+      ctx,
+    )) as { summary?: { summary: string; usage?: unknown } }
+
+    expect(JSON.stringify(receivedContext)).toContain("Investigate the billing schema migration")
+    expect(JSON.stringify(receivedContext)).toContain("Focus on migration safety.")
+    expect(result.summary?.summary).toContain("Investigated the billing schema.")
+    expect(result.summary?.summary).toContain("Remem continuity")
+    expect(result.summary?.usage).toEqual({ input: 10, output: 5 })
+
+    await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
+  it("includes custom_message entries (e.g. another extension's injected context) in the abandoned-branch summary", async () => {
+    const paths = await installedConfig({ compaction: true })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const entriesToSummarize = [
+      {
+        type: "custom_message",
+        id: "entry-1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        customType: "some-other-extension",
+        content: [{ type: "text", text: "Injected context: use the staging database." }],
+        display: false,
+      },
+    ]
+    let receivedContext: unknown
+    const complete = (_model: unknown, context: unknown) => {
+      receivedContext = context
+      return Promise.resolve({
+        content: [{ type: "text", text: "## Progress\nNoted the staging database context." }],
+        usage: { input: 10, output: 5 },
+      })
+    }
+    const ctx = fakeContext(fixtureDirectory, { model: { id: "fake-model" }, complete })
+    await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
+
+    const result = (await pi.fire(
+      "session_before_tree",
+      {
+        type: "session_before_tree",
+        preparation: { userWantsSummary: true, entriesToSummarize },
+        signal: new AbortController().signal,
+      },
+      ctx,
+    )) as { summary?: { summary: string } }
+
+    expect(JSON.stringify(receivedContext)).toContain("use the staging database")
+    expect(result.summary?.summary).toContain("Noted the staging database context.")
+
+    await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
+  it("stops waiting on Remem continuity once tree navigation is aborted, without calling the model", async () => {
+    const paths = await installedConfig({ compaction: true })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const entriesToSummarize = [
+      {
+        type: "message",
+        id: "entry-1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: [{ type: "text", text: "Investigate something." }] },
+      },
+    ]
+    const complete = vi.fn(() => Promise.reject(new Error("must not be called")))
+    const ctx = fakeContext(fixtureDirectory, { model: { id: "fake-model" }, complete })
+    await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
+
+    // A never-resolving continuity fetch stands in for a slow/hung memory
+    // provider: the handler must not hang waiting on it once the caller's
+    // signal aborts, and must never reach the model call afterward. Aborting
+    // synchronously right after firing relies on the handler having already
+    // attached its abort listener before yielding at its first `await`.
+    const controller = new AbortController()
+    const firePromise = pi.fire(
+      "session_before_tree",
+      {
+        type: "session_before_tree",
+        preparation: { userWantsSummary: true, entriesToSummarize },
+        signal: controller.signal,
+      },
+      ctx,
+    )
+    controller.abort()
+    await expect(firePromise).resolves.toBeUndefined()
+    expect(complete).not.toHaveBeenCalled()
+
+    await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
+  it("raceAbort never produces an unhandled rejection when the input promise is already aborted and later rejects", async () => {
+    const rejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => rejections.push(reason)
+    process.on("unhandledRejection", onUnhandledRejection)
+    try {
+      const controller2 = new AbortController()
+      controller2.abort()
+      let reject!: (reason?: unknown) => void
+      const promise = new Promise<string>((_resolve, rej) => {
+        reject = rej
+      })
+
+      const result = raceAbort(promise, controller2.signal)
+      reject(new Error("simulated compactionContext failure"))
+      await expect(result).resolves.toBeUndefined()
+
+      // Flush enough of the event loop for Node to have raised
+      // unhandledRejection if `promise`'s rejection went unconsumed.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await new Promise((resolve) => setImmediate(resolve))
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection)
+    }
+    expect(rejections).toEqual([])
+  })
+
+  it("falls back to Pi's default branch summary when the summarizer call fails", async () => {
+    const paths = await installedConfig({ compaction: true })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const ctx = fakeContext(fixtureDirectory, {
+      model: { id: "fake-model" },
+      complete: () => Promise.reject(new Error("model unavailable")),
+    })
+    await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
+
+    const result = await pi.fire(
+      "session_before_tree",
+      {
+        type: "session_before_tree",
+        preparation: { userWantsSummary: true, entriesToSummarize: [] },
+        signal: new AbortController().signal,
+      },
+      ctx,
+    )
+    expect(result).toBeUndefined()
+
+    await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
+  it("skips branch-summary work when there are no abandoned entries", async () => {
+    const paths = await installedConfig({ compaction: true })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const complete = vi.fn(() => Promise.reject(new Error("must not be called")))
+    const ctx = fakeContext(fixtureDirectory, { model: { id: "fake-model" }, complete })
+    await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
+
+    await expect(
+      pi.fire(
+        "session_before_tree",
+        {
+          type: "session_before_tree",
+          preparation: { userWantsSummary: true, entriesToSummarize: [] },
+          signal: new AbortController().signal,
+        },
+        ctx,
+      ),
+    ).resolves.toBeUndefined()
+    expect(complete).not.toHaveBeenCalled()
+
+    await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
   it("falls back to Pi's default compaction when no model is configured, never discarding history", async () => {
     const paths = await installedConfig({ compaction: true })
     vi.stubEnv("REMEM_CONFIG", paths.configFile)
@@ -339,9 +603,10 @@ describe("Pi host extension", () => {
         content: [{ type: "text", text: "Migrate the billing service to the new schema." }],
       },
     ]
-    let receivedContext: { messages: Array<{ content: Array<{ text: string }> }> } | undefined
+    type SummarizerRequestContext = { messages: Array<{ content: Array<{ text: string }> }> }
+    let receivedContext: SummarizerRequestContext | undefined
     const complete = (_model: unknown, context: unknown) => {
-      receivedContext = context as typeof receivedContext & object
+      receivedContext = context as SummarizerRequestContext
       return Promise.resolve({
         content: [{ type: "text", text: "## Goal\nMigrate the billing service." }],
         usage: { input: 10, output: 5 },

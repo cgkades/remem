@@ -34,15 +34,16 @@ handler below no-ops if that state is unset (before the first `session_start`, o
 `/new`, `/resume`, and `/fork` flows, which re-fire `session_shutdown` then `session_start` against
 the same long-lived extension instance.
 
-| Concern                                                    | Pi event                 | Behavior                                                                                                                                                                                                                                                                                                          |
-| ---------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Build orchestrator, providers, embedding model             | `session_start`          | Reads Remem's own installed app configuration (see [Plugin Configuration](#plugin-configuration) below); logs and no-ops on failure rather than blocking Pi startup.                                                                                                                                              |
-| Inject recalled memory before the agent runs               | `before_agent_start`     | Calls `orchestrator.processPrompt(...)`, returning an injected `message` with the same untrusted-memory attribution used by the OpenCode adapters (`TRUSTED_REMEM_INSTRUCTION`).                                                                                                                                  |
-| `memory_search` / `memory_status` / `memory_explain` tools | `pi.registerTool(...)`   | Registered once at extension load; each handler reads current session state through the closure and fails open when state is unset or the orchestrator call throws.                                                                                                                                               |
-| Capture explicit user statements                           | `input`                  | Fire-and-forget `CaptureCoordinator.enqueue(...)`, gated by the existing `capture.enabled` config flag (disabled by default, unchanged) **and** by `event.source === "interactive"` -- see [Capture Provenance](#capture-provenance) below.                                                                       |
-| Background reembed-on-input                                | `input`                  | Mirrors `src/hosts/opencode/v2.ts`'s `shouldAttemptReembed`/`reembedStale()` fire-and-forget pattern, using the same 5-minute cooldown. Runs regardless of `event.source`: it is opportunistic maintenance, not an assertion about who produced the input.                                                        |
-| Compaction summarization                                   | `session_before_compact` | Gated behind `config.compaction` (off by default) -- see [Compaction](#compaction) below. This fully replaces Pi's own compaction summary, not just OpenCode v1's additive `experimental.session.compacting` context-push, so the adapter has to generate a real conversation summary, not just Remem continuity. |
-| Lifecycle / teardown                                       | `session_shutdown`       | Disposes the capture coordinator and providers, then clears the session state.                                                                                                                                                                                                                                    |
+| Concern                                                    | Pi event                 | Behavior                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------------------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Build orchestrator, providers, embedding model             | `session_start`          | Reads Remem's own installed app configuration (see [Plugin Configuration](#plugin-configuration) below); logs and no-ops on failure rather than blocking Pi startup.                                                                                                                                                                                           |
+| Inject recalled memory before the agent runs               | `before_agent_start`     | Calls `orchestrator.processPrompt(...)`, returning an injected `message` with the same untrusted-memory attribution used by the OpenCode adapters (`TRUSTED_REMEM_INSTRUCTION`).                                                                                                                                                                               |
+| `memory_search` / `memory_status` / `memory_explain` tools | `pi.registerTool(...)`   | Registered once at extension load; each handler reads current session state through the closure and fails open when state is unset or the orchestrator call throws.                                                                                                                                                                                            |
+| Capture explicit user statements                           | `input`                  | Fire-and-forget `CaptureCoordinator.enqueue(...)`, gated by the existing `capture.enabled` config flag (disabled by default, unchanged) **and** by `event.source === "interactive"` -- see [Capture Provenance](#capture-provenance) below.                                                                                                                    |
+| Background reembed-on-input                                | `input`                  | Mirrors `src/hosts/opencode/v2.ts`'s `shouldAttemptReembed`/`reembedStale()` fire-and-forget pattern, using the same 5-minute cooldown. Runs regardless of `event.source`: it is opportunistic maintenance, not an assertion about who produced the input.                                                                                                     |
+| Compaction summarization                                   | `session_before_compact` | Gated behind `config.compaction` (off by default) -- see [Compaction and Branch Summarization](#compaction-and-branch-summarization) below. Fully replaces Pi's own compaction summary, not just OpenCode v1's additive `experimental.session.compacting` context-push, so the adapter has to generate a real conversation summary, not just Remem continuity. |
+| Branch-navigation summarization                            | `session_before_tree`    | Same `config.compaction` gate and same-summary-replacement caveat as compaction, applied to `/tree` navigation -- see [Compaction and Branch Summarization](#compaction-and-branch-summarization) below.                                                                                                                                                       |
+| Lifecycle / teardown                                       | `session_shutdown`       | Disposes the capture coordinator and providers, then clears the session state.                                                                                                                                                                                                                                                                                 |
 
 ## Pi Tools
 
@@ -84,7 +85,7 @@ relaxing that later should only ever apply to `"rpc"` explicitly, never `"extens
 Background reembed-on-input is not gated this way: it is opportunistic maintenance triggered by
 the fact that _some_ input happened, not an assertion about who produced it.
 
-## Compaction
+## Compaction and Branch Summarization
 
 Pi's `session_before_compact` return value is a full _replacement_ for Pi's own compaction
 summary, unlike OpenCode v1's `experimental.session.compacting` hook, which only pushes
@@ -105,6 +106,31 @@ model call per compaction), not just adds a supplementary context block.
 The adapter falls back to Pi's own default compactor (returns `undefined`) whenever it cannot
 safely produce a real summary: no `ctx.model` configured, the summarizer call fails, or the
 summarizer returns empty text. It never returns a Remem-only summary in place of the real one.
+
+The same safety rule applies to `/tree` branch navigation. When both `config.compaction` and
+`preparation.userWantsSummary` are true and there is at least one abandoned entry, the
+`session_before_tree` handler converts `preparation.entriesToSummarize` (Pi `SessionEntry[]`, not
+`AgentMessage[]`) into renderable messages -- conversation entries come from `entry.message`,
+another extension's injected `custom_message` entries (for example Remem's own
+`before_agent_start` recall injection, or any other extension's `sendMessage`/`pi.sendMessage`
+context) contribute their `content`, and prior compaction/branch-summary entries contribute their
+`entry.summary` text -- bounded to the active model's context window (minus a fixed reserve,
+mirroring Pi's own branch-summary budgeting, with a conservative token-per-character estimate
+chosen to overestimate for code-heavy content) so a long-lived branch cannot produce an unbounded
+request. It then summarizes that bounded conversation with the active model and appends bounded
+Remem continuity. `preparation.customInstructions`/`replaceInstructions` are honored the same way
+Pi's own branch summarizer honors them: replacing the default prompt when `replaceInstructions` is
+set, or appended as additional focus otherwise. Fetching Remem continuity
+(`orchestrator.compactionContext(...)`) races against `event.signal`: if tree navigation is
+aborted while that fetch is still in flight, the handler stops waiting on it and falls back to
+`undefined` rather than blocking on (or later acting on) a stale response -- Remem's continuity
+lookup has no cancellation parameter of its own, so this only stops the handler from waiting on
+it, not the lookup itself. Pi's `summary` result is likewise a full replacement for its default
+branch summary, so the handler returns `undefined` (and leaves Pi's default branch-summary flow
+intact) if there are no abandoned entries to summarize, there is no active model, navigation is
+aborted, the completion is aborted or reports `stopReason: "aborted"`/`"error"`, or it produces
+empty text. It never provides continuity alone as a summary of the branch being abandoned. When
+the user declines branch summarization, `session_before_tree` is a no-op.
 
 ## Host Location and `projectId` Derivation
 
