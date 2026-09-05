@@ -54,12 +54,16 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Install pinned OpenCode v1.18.27 runtime
+      - name: Install verified OpenCode v1.18.27 runtime
         run: |
-          mkdir -p "$RUNNER_TEMP/opencode-v1"
+          archive="$RUNNER_TEMP/opencode-linux-x64.tar.gz"
           curl --fail --location --silent --show-error \
             https://github.com/anomalyco/opencode/releases/download/v1.18.27/opencode-linux-x64.tar.gz \
-            | tar -xz -C "$RUNNER_TEMP/opencode-v1"
+            --output "$archive"
+          echo "4af5494f9433f59db8c1e344198f0ee72a50c06ec009fb4a8aeab4c2d4abd702  $archive" \
+            | sha256sum --check --status
+          mkdir -p "$RUNNER_TEMP/opencode-v1"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/opencode-v1"
       - run: npm run test:opencode-v1
         env:
           OPENCODE_BIN: ${{ runner.temp }}/opencode-v1/opencode
