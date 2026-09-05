@@ -75,6 +75,21 @@ describe("CLI provisioning", () => {
     ])
   })
 
+  it("preserves unrelated OpenCode v1 file plugins while replacing the Remem entry", async () => {
+    const paths = await temporaryPaths()
+    const configPath = path.join(paths.configDir, "opencode.json")
+    const otherPlugin = "file:///example/another-plugin/dist/server.js"
+    await mkdir(paths.configDir, { recursive: true })
+    await writeFile(configPath, `${JSON.stringify({ plugin: ["agentic-remem", otherPlugin] })}\n`)
+
+    await configureOpenCode(configPath, "v1")
+
+    expect(parseJson(await readFile(configPath, "utf8"))).toHaveProperty("plugin", [
+      otherPlugin,
+      expect.stringMatching(/^file:.*\/dist\/server\.js$/u),
+    ])
+  })
+
   it("configures and detects the OpenCode v2 package-root plugin entry", async () => {
     const paths = await temporaryPaths()
     const configPath = path.join(paths.configDir, "opencode.json")

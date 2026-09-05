@@ -1,5 +1,7 @@
 import { constants } from "node:fs"
 import { access, readFile, stat } from "node:fs/promises"
+import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { Pool } from "pg"
 import { createProviders } from "../providers/factory.js"
 import { PostgresMemoryProvider } from "../providers/postgres.js"
@@ -91,6 +93,9 @@ export async function openCodeIntegrationCheck(
   hostVersion: "v1" | "v2" = "v2",
 ): Promise<DoctorCheck> {
   const key = hostVersion === "v1" ? "plugin" : "plugins"
+  const v1ServerEntry = pathToFileURL(
+    path.join(packageRoot(import.meta.url), "dist", "server.js"),
+  ).href
   try {
     const parsed: unknown = JSON.parse(await readFile(opencodePath, "utf8"))
     const plugins =
@@ -102,7 +107,7 @@ export async function openCodeIntegrationCheck(
       plugins.some(
         (plugin) =>
           plugin === "agentic-remem" ||
-          (typeof plugin === "string" && plugin.endsWith("/dist/server.js")) ||
+          (hostVersion === "v1" && plugin === v1ServerEntry) ||
           (Array.isArray(plugin) && plugin[0] === "agentic-remem"),
       )
     return {

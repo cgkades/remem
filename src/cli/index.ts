@@ -186,7 +186,7 @@ export async function configureOpenCode(
         (plugin) =>
           !(
             plugin === "agentic-remem" ||
-            (typeof plugin === "string" && plugin.endsWith("/dist/server.js")) ||
+            plugin === serverEntry ||
             (Array.isArray(plugin) && plugin[0] === "agentic-remem")
           ),
       ),
