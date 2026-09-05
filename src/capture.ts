@@ -53,28 +53,41 @@ const FACT_PATTERN =
 const TASK_PATTERN =
   /\b(?:is blocked|is unblocked|is complete|is completed|was fixed|is fixed|was resolved|is resolved)\b/iu
 
+function classifyDurableStatement(text: string): CaptureClassification | undefined {
+  if (CORRECTION_PATTERN.test(text)) {
+    return { kind: "user-correction", confidence: 0.95, reason: "explicit correction" }
+  }
+  if (PREFERENCE_PATTERN.test(text)) {
+    return { kind: "preference", confidence: 0.9, reason: "durable preference" }
+  }
+  if (DECISION_PATTERN.test(text)) {
+    return { kind: "decision", confidence: 0.85, reason: "implicit decision" }
+  }
+  if (TASK_PATTERN.test(text)) {
+    return { kind: "project-state", confidence: 0.8, reason: "project state" }
+  }
+  if (FACT_PATTERN.test(text)) {
+    return { kind: "fact-discovered", confidence: 0.78, reason: "durable project fact" }
+  }
+  return undefined
+}
+
 export const deterministicCapturePolicy: CapturePolicy = {
   classify(text) {
     if (text.includes("?")) return undefined
-    if (DIRECT_REMEMBER_PATTERN.test(text)) {
-      return { kind: "fact-discovered", confidence: 0.98, reason: "explicit remember request" }
+    const directRequest = DIRECT_REMEMBER_PATTERN.exec(text)
+    if (directRequest) {
+      const statement = text.slice(directRequest[0].length)
+      const classification = classifyDurableStatement(statement)
+      return classification
+        ? {
+            ...classification,
+            confidence: 0.98,
+            reason: `explicit remember request: ${classification.reason}`,
+          }
+        : { kind: "fact-discovered", confidence: 0.98, reason: "explicit remember request" }
     }
-    if (CORRECTION_PATTERN.test(text)) {
-      return { kind: "user-correction", confidence: 0.95, reason: "explicit correction" }
-    }
-    if (PREFERENCE_PATTERN.test(text)) {
-      return { kind: "preference", confidence: 0.9, reason: "durable preference" }
-    }
-    if (DECISION_PATTERN.test(text)) {
-      return { kind: "decision", confidence: 0.85, reason: "implicit decision" }
-    }
-    if (TASK_PATTERN.test(text)) {
-      return { kind: "project-state", confidence: 0.8, reason: "project state" }
-    }
-    if (FACT_PATTERN.test(text)) {
-      return { kind: "fact-discovered", confidence: 0.78, reason: "durable project fact" }
-    }
-    return undefined
+    return classifyDurableStatement(text)
   },
 }
 

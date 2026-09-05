@@ -87,6 +87,12 @@ describe("DeterministicCandidateExtractor", () => {
       observation("The release manifest is located in infra/release/manifest.yaml."),
     ])
     const projectState = await extractor.extract([observation("The migration task is complete.")])
+    const directPreference = await extractor.extract([
+      observation("Remember that I prefer PostgreSQL for durable memory."),
+    ])
+    const directDecision = await extractor.extract([
+      observation("Remember that we decided to use logical replication."),
+    ])
 
     expect(correction[0]).toMatchObject({ status: "pending", confidence: 0.95 })
     expect(correction[0]?.memory.provenance?.[0]?.source).toMatchObject({
@@ -97,7 +103,7 @@ describe("DeterministicCandidateExtractor", () => {
     expect(labelledDecision[0]).toMatchObject({ status: "pending", memory: { type: "decision" } })
     expect(directRemember[0]).toMatchObject({
       confidence: 0.98,
-      reasons: ["explicit remember request"],
+      reasons: ["explicit remember request: durable project fact"],
       memory: { type: "semantic" },
     })
     expect(directRemember[0]?.memory.title).toMatch(/^Project fact:/u)
@@ -112,6 +118,16 @@ describe("DeterministicCandidateExtractor", () => {
       memory: { type: "task" },
     })
     expect(projectState[0]?.memory.title).toMatch(/^Project task:/u)
+    expect(directPreference[0]).toMatchObject({
+      reasons: ["explicit remember request: durable preference"],
+      memory: { type: "preference" },
+    })
+    expect(directPreference[0]?.memory.title).toMatch(/^User preference:/u)
+    expect(directDecision[0]).toMatchObject({
+      reasons: ["explicit remember request: implicit decision"],
+      memory: { type: "decision" },
+    })
+    expect(directDecision[0]?.memory.title).toMatch(/^Explicit decision:/u)
   })
 
   it("allows a custom capture policy without making one mandatory", async () => {
