@@ -272,7 +272,7 @@ function registerTools(pi: ExtensionAPI, getState: () => PiSessionState | undefi
  * compaction-context behavior of the OpenCode v1/v2 adapters
  * (`src/hosts/opencode/v1.ts`, `src/hosts/opencode/v2.ts`), mapped onto
  * Pi's `before_agent_start` / `pi.registerTool` / `input` /
- * `session_before_compact` events instead of OpenCode's plugin hooks.
+ * `session_before_compact` / `session_before_tree` events instead of OpenCode's plugin hooks.
  */
 export default function remem(pi: ExtensionAPI): void {
   const logger = piLogger()
@@ -354,6 +354,66 @@ export default function remem(pi: ExtensionAPI): void {
           error: error instanceof Error ? error.name : "unknown error",
         })
       })
+    }
+  })
+
+  pi.on("session_before_tree", async (event, ctx) => {
+    if (!state || !state.config.compaction || !event.preparation.userWantsSummary) return
+    const { preparation, signal } = event
+    const model = ctx.model
+    // Pi's `summary` return value fully replaces its branch summary. Do not
+    // replace abandoned-branch history with Remem-only continuity: if no real
+    // summary can be made, return undefined and let Pi use its default flow.
+    if (!model) return undefined
+    try {
+      const conversationText = renderMessagesForSummary(preparation.entriesToSummarize)
+      const continuity = await state.orchestrator.compactionContext(contextFor(state, ctx))
+      const response = await ctx.modelRegistry.complete(
+        model,
+        {
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: [
+                    "You are a conversation summarizer. Create a comprehensive summary of this",
+                    "abandoned conversation branch that captures goals, decisions, technical",
+                    "details, current state, blockers, and next steps. Format as structured",
+                    "markdown. This summary provides the context from the branch being left, so",
+                    "include everything needed to continue or revisit that work.",
+                    "",
+                    "<conversation>",
+                    conversationText,
+                    "</conversation>",
+                  ].join("\n"),
+                },
+              ],
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        { maxTokens: 8192, signal, cacheRetention: "none", sessionId: randomUUID() },
+      )
+      const summaryText = response.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n")
+        .trim()
+      if (!summaryText) return undefined
+      return {
+        summary: {
+          // Continuity augments the real branch summary; it never replaces it.
+          summary: [summaryText, "", continuity].join("\n"),
+          usage: response.usage,
+        },
+      }
+    } catch (error) {
+      safeLoggerCall(logger, "warn", "branch_summary.context_failed", {
+        error: error instanceof Error ? error.name : "unknown error",
+      })
+      return undefined
     }
   })
 

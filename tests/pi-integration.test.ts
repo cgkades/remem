@@ -292,6 +292,121 @@ describe("Pi host extension", () => {
     await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
   })
 
+  it("does not customize tree navigation unless the user requests a summary", async () => {
+    const paths = await installedConfig({ compaction: true })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const complete = vi.fn(() => Promise.reject(new Error("must not be called")))
+    const ctx = fakeContext(fixtureDirectory, { model: { id: "fake-model" }, complete })
+    await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
+
+    const result = await pi.fire(
+      "session_before_tree",
+      {
+        type: "session_before_tree",
+        preparation: { userWantsSummary: false, entriesToSummarize: [] },
+        signal: new AbortController().signal,
+      },
+      ctx,
+    )
+    expect(result).toBeUndefined()
+    expect(complete).not.toHaveBeenCalled()
+
+    await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
+  it("falls back to Pi's default branch summary when no model is configured", async () => {
+    const paths = await installedConfig({ compaction: true })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const ctx = fakeContext(fixtureDirectory)
+    await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
+
+    const result = await pi.fire(
+      "session_before_tree",
+      {
+        type: "session_before_tree",
+        preparation: { userWantsSummary: true, entriesToSummarize: [] },
+        signal: new AbortController().signal,
+      },
+      ctx,
+    )
+    expect(result).toBeUndefined()
+
+    await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
+  it("summarizes an abandoned branch and appends Remem continuity when a model is available", async () => {
+    const paths = await installedConfig({ compaction: true })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const entriesToSummarize = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Investigate the billing schema migration." }],
+      },
+    ]
+    let receivedContext: { messages: Array<{ content: Array<{ text: string }> }> } | undefined
+    const complete = (_model: unknown, context: unknown) => {
+      receivedContext = context as typeof receivedContext & object
+      return Promise.resolve({
+        content: [{ type: "text", text: "## Progress\nInvestigated the billing schema." }],
+        usage: { input: 10, output: 5 },
+      })
+    }
+    const ctx = fakeContext(fixtureDirectory, { model: { id: "fake-model" }, complete })
+    await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
+
+    const result = (await pi.fire(
+      "session_before_tree",
+      {
+        type: "session_before_tree",
+        preparation: { userWantsSummary: true, entriesToSummarize },
+        signal: new AbortController().signal,
+      },
+      ctx,
+    )) as { summary?: { summary: string; usage?: unknown } }
+
+    expect(JSON.stringify(receivedContext)).toContain("Investigate the billing schema migration")
+    expect(result.summary?.summary).toContain("Investigated the billing schema.")
+    expect(result.summary?.summary).toContain("Remem continuity")
+    expect(result.summary?.usage).toEqual({ input: 10, output: 5 })
+
+    await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
+  it("falls back to Pi's default branch summary when the summarizer call fails", async () => {
+    const paths = await installedConfig({ compaction: true })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const ctx = fakeContext(fixtureDirectory, {
+      model: { id: "fake-model" },
+      complete: () => Promise.reject(new Error("model unavailable")),
+    })
+    await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
+
+    const result = await pi.fire(
+      "session_before_tree",
+      {
+        type: "session_before_tree",
+        preparation: { userWantsSummary: true, entriesToSummarize: [] },
+        signal: new AbortController().signal,
+      },
+      ctx,
+    )
+    expect(result).toBeUndefined()
+
+    await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
   it("falls back to Pi's default compaction when no model is configured, never discarding history", async () => {
     const paths = await installedConfig({ compaction: true })
     vi.stubEnv("REMEM_CONFIG", paths.configFile)
