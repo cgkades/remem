@@ -15,7 +15,7 @@ Remem-native memory.
 
 This project is not affiliated with the unrelated Rust project
 [`majiayu000/remem`](https://github.com/majiayu000/remem). The npm package identity for this
-OpenCode/Pi plugin is `opencode-remem`.
+OpenCode/Pi plugin is `agentic-remem`.
 
 ```text
 recognition -> retrieval planning -> recall -> synthesis -> context injection
@@ -83,12 +83,13 @@ Because the package is not published, point OpenCode at the built v2 package-roo
 ```
 
 With no inline provider options, the plugin reads the configuration created by `remem init`. Restart
-OpenCode after changing plugin configuration. Do not use the bare `opencode-remem` package name until
+OpenCode after changing plugin configuration. Do not use the bare `agentic-remem` package name until
 the package is resolvable in your OpenCode installation.
 
-The package root and `./opencode/v2` are v2 entries. OpenCode `1.18.26` compatibility is isolated at
-`./server` or `./opencode/v1`; it uses the older `chat.message` boundary. See
-[OpenCode integration](docs/opencode-integration.md) and [the examples](examples/).
+The package root and `./opencode/v2` are v2 entries. OpenCode `1.18.27` compatibility is isolated at
+`./server` or `./opencode/v1`; configure it with `remem init --opencode-v1` after installation. It
+uses the older, weaker `chat.message` boundary. See [OpenCode integration](docs/opencode-integration.md)
+and [the examples](examples/).
 
 ## Pi
 
@@ -123,7 +124,7 @@ installation. See [Storage architecture](docs/storage-architecture.md) and
 ## CLI
 
 ```text
-remem init [--mode managed|external] [--database-url URL] [--opencode] [--pi]
+remem init [--mode managed|external] [--database-url URL] [--opencode|--opencode-v1] [--pi]
 remem start
 remem stop
 remem status

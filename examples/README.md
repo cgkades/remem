@@ -1,6 +1,6 @@
 # Remem Examples
 
-`opencode-remem` has not been published to npm. Build it from the repository root:
+`agentic-remem` has not been published to npm. Build it from the repository root:
 
 ```sh
 npm ci

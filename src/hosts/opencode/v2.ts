@@ -319,7 +319,7 @@ async function registerTools(
 }
 
 export const RememPlugin = Plugin.define({
-  id: "opencode-remem",
+  id: "agentic-remem",
   async setup(context) {
     const logger = consoleLogger()
     let providers: MemoryProvider[] = []

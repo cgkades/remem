@@ -34,8 +34,8 @@ try {
   await writeFile(
     path.join(application, "index.ts"),
     [
-      'import { LocalHashEmbeddingModel, type MemoryProvider } from "opencode-remem/core"',
-      'import { runCli } from "opencode-remem/cli"',
+      'import { LocalHashEmbeddingModel, type MemoryProvider } from "agentic-remem/core"',
+      'import { runCli } from "agentic-remem/cli"',
       "const model = new LocalHashEmbeddingModel()",
       "const provider: MemoryProvider | undefined = undefined",
       "void model",
@@ -65,7 +65,7 @@ try {
       stdio: "inherit",
     },
   )
-  execFileSync(process.execPath, ["--input-type=module", "-e", 'import("opencode-remem/core")'], {
+  execFileSync(process.execPath, ["--input-type=module", "-e", 'import("agentic-remem/core")'], {
     cwd: application,
     stdio: "inherit",
   })

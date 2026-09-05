@@ -86,6 +86,39 @@ export async function piIntegrationCheck(piPath: string): Promise<DoctorCheck> {
   }
 }
 
+export async function openCodeIntegrationCheck(
+  opencodePath: string,
+  hostVersion: "v1" | "v2" = "v2",
+): Promise<DoctorCheck> {
+  const key = hostVersion === "v1" ? "plugin" : "plugins"
+  try {
+    const parsed: unknown = JSON.parse(await readFile(opencodePath, "utf8"))
+    const plugins =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)[key]
+        : undefined
+    const configured =
+      Array.isArray(plugins) &&
+      plugins.some(
+        (plugin) =>
+          plugin === "agentic-remem" || (Array.isArray(plugin) && plugin[0] === "agentic-remem"),
+      )
+    return {
+      name: "OpenCode integration",
+      status: configured ? "ok" : "warn",
+      detail: configured
+        ? `OpenCode ${hostVersion} configured in ${opencodePath}`
+        : `add agentic-remem to ${key} in ${opencodePath}`,
+    }
+  } catch {
+    return {
+      name: "OpenCode integration",
+      status: "warn",
+      detail: `run remem init --${hostVersion === "v1" ? "opencode-v1" : "opencode"} or configure the plugin manually`,
+    }
+  }
+}
+
 export async function runDoctor(
   config: RememAppConfig,
   paths: RememPaths,
@@ -279,22 +312,7 @@ export async function runDoctor(
   }
 
   const opencodePath = config.opencode?.configPath ?? openCodeConfigPath()
-  try {
-    const text = await readFile(opencodePath, "utf8")
-    checks.push({
-      name: "OpenCode integration",
-      status: text.includes("opencode-remem") ? "ok" : "warn",
-      detail: text.includes("opencode-remem")
-        ? `configured in ${opencodePath}`
-        : `add opencode-remem to plugins in ${opencodePath}`,
-    })
-  } catch {
-    checks.push({
-      name: "OpenCode integration",
-      status: "warn",
-      detail: "run remem init --opencode or configure the plugin manually",
-    })
-  }
+  checks.push(await openCodeIntegrationCheck(opencodePath, config.opencode?.hostVersion))
 
   const piPath = config.pi?.settingsPath ?? piSettingsPath()
   checks.push(await piIntegrationCheck(piPath))

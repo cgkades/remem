@@ -2,14 +2,25 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { BACKUP_FLAGS, RESTORE_FLAGS, runCli, warnAboutNeuralDownload } from "../src/cli/index.js"
+import {
+  BACKUP_FLAGS,
+  RESTORE_FLAGS,
+  configureOpenCode,
+  runCli,
+  warnAboutNeuralDownload,
+} from "../src/cli/index.js"
 import { withInstallLock } from "../src/cli/lock.js"
 import { managedCommand, managedCompose, writeManagedFiles } from "../src/cli/managed.js"
 import { NodeProcessRunner, type ProcessRunner } from "../src/cli/process.js"
 import { writeAppConfig, type RememAppConfig } from "../src/storage/config-file.js"
 import { rememPaths } from "../src/storage/paths.js"
+import { openCodeIntegrationCheck } from "../src/cli/doctor.js"
 
 const temporaryDirectories: string[] = []
+
+function parseJson(value: string): unknown {
+  return JSON.parse(value) as unknown
+}
 
 async function temporaryPaths() {
   const root = await mkdtemp(path.join(os.tmpdir(), "remem-cli-"))
@@ -29,6 +40,41 @@ afterEach(async () => {
 })
 
 describe("CLI provisioning", () => {
+  it("configures and detects the OpenCode v1 server plugin entry", async () => {
+    const paths = await temporaryPaths()
+    const configPath = path.join(paths.configDir, "opencode.json")
+    await mkdir(paths.configDir, { recursive: true })
+    await writeFile(configPath, `${JSON.stringify({ plugins: ["v2-plugin"] })}\n`)
+
+    await configureOpenCode(configPath, "v1")
+    await configureOpenCode(configPath, "v1")
+
+    const configured = parseJson(await readFile(configPath, "utf8"))
+    expect(configured).toEqual({ plugins: ["v2-plugin"], plugin: ["agentic-remem"] })
+    await expect(openCodeIntegrationCheck(configPath, "v1")).resolves.toMatchObject({
+      status: "ok",
+    })
+    await expect(openCodeIntegrationCheck(configPath, "v2")).resolves.toMatchObject({
+      status: "warn",
+    })
+  })
+
+  it("configures and detects the OpenCode v2 package-root plugin entry", async () => {
+    const paths = await temporaryPaths()
+    const configPath = path.join(paths.configDir, "opencode.json")
+
+    await configureOpenCode(configPath, "v2")
+
+    const configured = parseJson(await readFile(configPath, "utf8"))
+    expect(configured).toEqual({ plugins: ["agentic-remem"] })
+    await expect(openCodeIntegrationCheck(configPath, "v2")).resolves.toMatchObject({
+      status: "ok",
+    })
+    await expect(openCodeIntegrationCheck(configPath, "v1")).resolves.toMatchObject({
+      status: "warn",
+    })
+  })
+
   it("generates a pinned loopback-only Compose stack and protected credentials", async () => {
     const paths = await temporaryPaths()
     await writeManagedFiles(paths, {

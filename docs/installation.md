@@ -2,7 +2,7 @@
 
 ## Status and Requirements
 
-`opencode-remem` has not been published to npm. Install from a source checkout.
+`agentic-remem` has not been published to npm. Install from a source checkout.
 
 Required for all modes:
 
@@ -83,7 +83,7 @@ updates, availability, physical recovery, and backup scheduling remain operator 
 
 ## Configure OpenCode v2
 
-Source users should add the built package-root entry to OpenCode's `plugins` list:
+`remem init --opencode` configures the current v2 adapter. Source users should add the built package-root entry to OpenCode's `plugins` list:
 
 ```json
 {
@@ -99,13 +99,33 @@ Source users should add the built package-root entry to OpenCode's `plugins` lis
 With no inline provider options, the plugin reads the application config created by `remem init`.
 Restart OpenCode after editing its configuration.
 
-`remem init --opencode` adds the bare package string `opencode-remem`. Because the package is not
+`remem init --opencode` adds the bare package string `agentic-remem`. Because the package is not
 published, use that flag only when your OpenCode installation can already resolve a local package
 with that name. The explicit file URL above is the reliable source-checkout path.
 
-For OpenCode `1.18.26`, use the isolated package export `./server` or `./opencode/v1`; a source build
-uses `dist/server.js`. The v1 trust boundary is weaker. See
-[OpenCode integration](opencode-integration.md).
+## Configure OpenCode v1.18.27
+
+Use `remem init --opencode-v1` for OpenCode v1. It writes the legacy singular `plugin` key,
+not v2's `plugins` key. Once the package is published, OpenCode resolves its `./server` export
+from the package-root specifier:
+
+```json
+{
+  "plugin": ["agentic-remem"]
+}
+```
+
+For a source checkout, point directly at the built v1 server module instead:
+
+```json
+{
+  "plugin": ["file:///absolute/path/to/remem/dist/server.js"]
+}
+```
+
+The v1 adapter is tested against OpenCode `1.18.27`. It has a weaker trust boundary than v2:
+recalled memory is appended to `UserMessage.system`. Treat v1 as compatibility support and prefer
+v2 where available. See [OpenCode integration](opencode-integration.md).
 
 ## Platform Locations
 
@@ -140,9 +160,9 @@ remem doctor
 - pending schema migrations;
 - database write access;
 - embedding model ID and 384 dimensions; and
-- whether an OpenCode config contains `opencode-remem`.
+- whether an OpenCode config contains `agentic-remem`.
 
-The OpenCode check is a string-presence check for `opencode-remem`. It cannot prove that the beta host
+The OpenCode check is a string-presence check for `agentic-remem`. It cannot prove that the beta host
 loaded the plugin or that a local file URL is correct. A source file URL whose path does not contain
 that exact package name can produce a warning even when configured correctly.
 

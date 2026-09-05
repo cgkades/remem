@@ -146,7 +146,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Known Limitations
 
-- `opencode-remem` has not yet been published to npm.
+- `agentic-remem` has not yet been published to npm.
 - The default semantic model is deterministic feature hashing with a small concept vocabulary, not a
   general neural embedding model.
 - Session observation, candidate tables, and consolidation interfaces do not automatically capture

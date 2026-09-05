@@ -25,7 +25,7 @@ registration, and disposal APIs.
 
 ```ts
 Plugin.define({
-  id: "opencode-remem",
+  id: "agentic-remem",
   async setup(ctx) {
     const registration = await ctx.session.hook("context", async (event) => {
       // Run bounded recognition and recall.
@@ -78,7 +78,7 @@ for how a human reviews and approves a correction out of band (currently the
 ## v2 Configuration
 
 The v2 key is `plugins`, plural. An entry can be a package string or an object with `package` and
-`options`. Because `opencode-remem` is not published yet, source installations must point to the
+`options`. Because `agentic-remem` is not published yet, source installations must point to the
 built package-root entry:
 
 ```json
@@ -121,16 +121,21 @@ Providing `options.providers`, including an empty array, takes precedence over t
 configuration. Relative Markdown paths resolve from the OpenCode worktree. Restart OpenCode after
 changing plugin configuration.
 
-`remem init --opencode` currently writes the bare package name `opencode-remem` to the platform
+`remem init --opencode` currently writes the bare package name `agentic-remem` to the platform
 OpenCode config. Use it only when that package is resolvable by OpenCode; source-only users should
 configure the file URL manually.
 
-## OpenCode 1.18.26 Compatibility
+## OpenCode 1.18.27 Compatibility
 
 The v1 adapter is isolated in `src/hosts/opencode/v1.ts` and depends on the aliased
-`@opencode-ai/plugin@1.18.26`. Use the package export `./server` for the legacy `{ id, server }`
-module or `./opencode/v1` for the direct adapter. `dist/server.js` is the corresponding source-build
-entry.
+`@opencode-ai/plugin@1.18.26` declarations. It is runtime-tested against OpenCode `1.18.27`.
+OpenCode v1 resolves this package's `./server` export from the package-root specifier, so a published
+install uses the legacy singular key: `{ "plugin": ["agentic-remem"] }`. A source build can use
+`{ "plugin": ["file:///absolute/path/to/remem/dist/server.js"] }`. `remem init --opencode-v1`
+writes the package form; `remem init --opencode` remains the v2 setup command.
+
+Use the package export `./server` for the legacy `{ id, server }` module or `./opencode/v1` for the
+direct adapter. `dist/server.js` is the corresponding source-build entry.
 
 v1 performs recall during `chat.message` and appends catalog and memory data to
 `UserMessage.system`. This is persisted for the admitted turn and reused in that turn's tool loop,
@@ -138,18 +143,19 @@ but it is a weaker instruction/data boundary than v2. Its optional
 `experimental.session.compacting` hook adds catalog-only continuity guidance. Hook failure still
 fails open.
 
-The v1 compatibility contract is pinned to the official OpenCode `v1.18.26` release at commit
-[`774cc7c`](https://github.com/anomalyco/opencode/commit/774cc7c1914e4329eefde5a669f938b0cf566661):
+The v1 compatibility contract is based on the official OpenCode `v1.18.26` plugin declarations at commit
+[`774cc7c`](https://github.com/anomalyco/opencode/commit/774cc7c1914e4329eefde5a669f938b0cf566661) and is
+runtime-tested against `v1.18.27`:
 
 - [`chat.message` and hook declarations](https://github.com/anomalyco/opencode/blob/v1.18.26/packages/plugin/src/index.ts)
 - [prompt admission and dispatch preparation](https://github.com/anomalyco/opencode/blob/v1.18.26/packages/opencode/src/session/prompt.ts)
 
 ## Entry Points
 
-- `opencode-remem` or `opencode-remem/opencode/v2`: current v2 plugin.
-- `opencode-remem/server`: isolated v1 `{ id, server }` module.
-- `opencode-remem/opencode/v1`: isolated direct v1 adapter.
-- `opencode-remem/core`: host-independent library API.
+- `agentic-remem` or `agentic-remem/opencode/v2`: current v2 plugin.
+- `agentic-remem/server`: isolated v1 `{ id, server }` module (the OpenCode v1 package-loader entry).
+- `agentic-remem/opencode/v1`: isolated direct v1 adapter.
+- `agentic-remem/core`: host-independent library API.
 - `dist/`: source-build v2 plugin directory.
 - `dist/server.js`: source-build v1 server entry.
 
@@ -158,7 +164,7 @@ The v1 compatibility contract is pinned to the official OpenCode `v1.18.26` rele
 - Core orchestration imports no OpenCode types.
 - v2 beta and v1 release dependencies are pinned separately.
 - v2 is primary; v1 compatibility can be retired without changing the core.
-- The package declares Node.js `>=22` and OpenCode `>=1.18.26`.
+- The package declares Node.js `>=22` and OpenCode `>=1.18.26`; v1.18.27 is the tested v1 runtime.
 - CI exercises the package on Node.js 22 and 24 with PostgreSQL/pgvector integration tests.
 - A Linux Node.js 22 E2E job packages Remem, installs the pinned
   `@opencode-ai/cli@0.0.0-beta-18743` runtime, and drives its HTTP API against a local deterministic

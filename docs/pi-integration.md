@@ -165,7 +165,7 @@ see below) to configure providers, capture, and compaction, then restart Pi.
 
 ## Installing the Extension
 
-`opencode-remem` declares itself as a [Pi package](https://github.com/earendil-works/pi-coding-agent/blob/main/docs/packages.md)
+`agentic-remem` declares itself as a [Pi package](https://github.com/earendil-works/pi-coding-agent/blob/main/docs/packages.md)
 via `package.json#pi.extensions`, pointing at the built `dist/hosts/pi/index.js`. `remem init --pi`
 adds this package's own installed root directory as a local-path entry to Pi's global `packages`
 setting (`~/.pi/agent/settings.json` by default, or `${PI_CODING_AGENT_DIR}/settings.json` when that
@@ -173,7 +173,7 @@ environment variable is set):
 
 ```json
 {
-  "packages": ["/absolute/path/to/opencode-remem"]
+  "packages": ["/absolute/path/to/agentic-remem"]
 }
 ```
 
@@ -188,8 +188,8 @@ Restart Pi (or run `/reload`) after changing its settings for the extension chan
 
 ## Entry Points
 
-- `opencode-remem/pi`: the Pi extension (`export default function(pi: ExtensionAPI)`).
-- `opencode-remem/core`: host-independent library API (shared with the OpenCode adapters).
+- `agentic-remem/pi`: the Pi extension (`export default function(pi: ExtensionAPI)`).
+- `agentic-remem/core`: host-independent library API (shared with the OpenCode adapters).
 - `dist/hosts/pi/index.js`: source-build entry Pi's package loader discovers via
   `package.json#pi.extensions`.
 

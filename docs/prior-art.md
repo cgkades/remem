@@ -79,7 +79,7 @@ their records into Remem.
 
 [`majiayu000/remem`](https://github.com/majiayu000/remem) is an existing, unrelated Rust project for
 local-first Claude Code and Codex memory. This project retains the user-selected Remem name but uses
-the distinct `opencode-remem` npm identity and documents the difference to reduce confusion.
+the distinct `agentic-remem` npm identity and documents the difference to reduce confusion.
 
 ## MCP and Agent Memory
 
