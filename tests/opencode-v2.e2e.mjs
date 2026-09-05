@@ -9,7 +9,11 @@ import process from "node:process"
 import { setTimeout as sleep } from "node:timers/promises"
 import { URL, fileURLToPath, pathToFileURL } from "node:url"
 
+// Deliberately update this pin only after validating the target beta locally and
+// in CI. The registry install below retries transient failures, but a removed
+// beta version requires an intentional pin update rather than retries.
 const RUNTIME_VERSION = "0.0.0-beta-18743"
+const RUNTIME_INSTALL_ATTEMPTS = 3
 const SENTINEL = "REMEM_E2E_PHOENIX_SENTINEL"
 const RELATED_PROMPT = "Let's continue the Phoenix database work."
 const UNRELATED_PROMPT = "Summarize this unrelated weather report."
@@ -64,6 +68,19 @@ const repository = fileURLToPath(new URL("..", import.meta.url))
 
 function delay(milliseconds) {
   return sleep(milliseconds)
+}
+
+async function installRuntime(args, options) {
+  let failure
+  for (let attempt = 1; attempt <= RUNTIME_INSTALL_ATTEMPTS; attempt++) {
+    try {
+      return await command("npm", args, options)
+    } catch (error) {
+      failure = error
+      if (attempt < RUNTIME_INSTALL_ATTEMPTS) await delay(1_000 * 2 ** (attempt - 1))
+    }
+  }
+  throw failure
 }
 
 function command(commandName, args, options = {}) {
@@ -650,8 +667,7 @@ async function main() {
       ],
       { cwd: application, env: npmEnvironment },
     )
-    await command(
-      "npm",
+    await installRuntime(
       [
         "install",
         "--ignore-scripts=true",

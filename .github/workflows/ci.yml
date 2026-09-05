@@ -67,6 +67,9 @@ jobs:
       - run: npm run test:opencode-v1
         env:
           OPENCODE_BIN: ${{ runner.temp }}/opencode-v1/opencode
+      - run: npm run test:opencode-v1:package
+        env:
+          OPENCODE_BIN: ${{ runner.temp }}/opencode-v1/opencode
 
   opencode-v2-e2e:
     name: OpenCode v2 beta E2E
