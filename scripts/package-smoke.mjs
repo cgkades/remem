@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import process from "node:process"
@@ -31,6 +31,11 @@ try {
     env: npmEnvironment,
     stdio: "inherit",
   })
+  const executable = path.join(application, "node_modules", ".bin", "remem")
+  if (!((await stat(executable)).mode & 0o111)) {
+    throw new Error("installed remem bin is not executable")
+  }
+  execFileSync(executable, ["--help"], { cwd: application, stdio: "inherit" })
   await writeFile(
     path.join(application, "index.ts"),
     [

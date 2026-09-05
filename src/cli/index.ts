@@ -59,6 +59,8 @@ export const RESTORE_FLAGS = [
 ] as const
 
 function parseArguments(args: string[]): ParsedArguments {
+  if (args[0] === "--help" || args[0] === "-h")
+    return { command: "help", positionals: [], flags: new Map() }
   const [command = "help", ...rest] = args
   const flags = new Map<string, string | true>()
   const positionals: string[] = []
