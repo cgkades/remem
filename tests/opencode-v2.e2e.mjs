@@ -25,6 +25,18 @@ const OUTAGE_PROMPT = "Continue even if long-term memory is unavailable."
 // firing the capture hook is independently observable in remem.candidate_memories,
 // alongside the re-embed hook's effect on a pre-seeded stale row.
 const HOOKS_PROMPT = "Decision: we decided to use blue-green deployments for the Phoenix rollout."
+// Issue #9: the suite's only coverage of the postgres provider type was the
+// forced-outage/fail-open scenario, which is one-sided -- it never proved a
+// real, reachable PostgreSQL/pgvector provider participates successfully in
+// retrieval against the live v2 runtime, only that the plugin degrades
+// gracefully when one is unreachable. This memory is written directly
+// through a real PostgresMemoryProvider (not the markdown fixture), and its
+// title is a literal substring of the prompt below so the deterministic
+// planner's phrase-match scores it high confidence without depending on
+// semantic/token-overlap heuristics.
+const POSTGRES_SENTINEL = "REMEM_E2E_AURORA_SENTINEL"
+const POSTGRES_MEMORY_TITLE = "Aurora database migration"
+const POSTGRES_RETRIEVAL_PROMPT = "Let's continue the Aurora database migration work."
 // Issue #11 regression coverage: after the native "read" tool loop completes,
 // call the Remem-registered memory_status tool by its bare name to verify it
 // is actually invocable (not just present in the advertised tool schema) now
@@ -747,6 +759,16 @@ async function main() {
         scope: { kind: "workspace", id: "hooks" },
         type: "decision",
       })
+      // Global scope, not "workspace": a workspace-scoped write would need
+      // its scope.id to match whatever context.worktree the live runtime
+      // resolves for this temp directory, which this script cannot predict
+      // in advance (and doesn't need to -- global scope has no id to match).
+      await seedProvider.write({
+        title: POSTGRES_MEMORY_TITLE,
+        content: `Use logical replication for the Aurora migration. ${POSTGRES_SENTINEL}`,
+        scope: { kind: "global" },
+        type: "decision",
+      })
       const staled = await hooksPool.query(
         "UPDATE remem.memory_embeddings SET model = 'e2e-stale-marker' WHERE memory_id = $1",
         [seeded.id],
@@ -787,6 +809,32 @@ async function main() {
         )
         return result.rows.length === 1 && result.rows[0].model !== "e2e-stale-marker"
       })
+
+      // A separate session from the hooks-verification one above: this
+      // asserts dispatch injection specifically, and mixing it into the
+      // same session risks the earlier HOOKS_PROMPT's dispatch (recorded
+      // before this memory existed) confusing which request to inspect.
+      const retrievalSession = await createSession(serverURL, hooksWorkspace)
+      await prompt(serverURL, retrievalSession, POSTGRES_RETRIEVAL_PROMPT)
+      const retrievalRequests = model.requests.filter((body) =>
+        body.messages.some(
+          (message) =>
+            typeof message.content === "string" &&
+            message.content.includes(POSTGRES_RETRIEVAL_PROMPT),
+        ),
+      )
+      if (retrievalRequests.length === 0) {
+        throw new Error("the PostgreSQL retrieval prompt did not reach the mock model")
+      }
+      if (
+        !retrievalRequests.some((body) => JSON.stringify(body.messages).includes(POSTGRES_SENTINEL))
+      ) {
+        throw new Error(
+          "a memory written through a real, reachable PostgreSQL provider was not retrieved " +
+            "and injected into dispatch (issue #9) -- the suite's only prior postgres coverage " +
+            `was the unreachable-provider fail-open path\n${JSON.stringify(retrievalRequests)}`,
+        )
+      }
     } else {
       process.stderr.write(
         "REMEM_TEST_DATABASE_URL not set; skipping the independent-hook-registration " +
