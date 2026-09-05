@@ -7,6 +7,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Published CLI entry points now preserve executable permissions, so `npm install -g agentic-remem`
+  creates a runnable `remem` command on POSIX systems. `remem --help` and `remem -h` now work before
+  initialization. Resolves [#70](https://github.com/cgkades/remem/issues/70).
+
 ### Added
 
 - `BgeSmallEmbeddingModel`, a local `bge-small-en-v1.5` neural embedding model run via
