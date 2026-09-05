@@ -392,6 +392,91 @@ describe("Pi host extension", () => {
     await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
   })
 
+  it("includes custom_message entries (e.g. another extension's injected context) in the abandoned-branch summary", async () => {
+    const paths = await installedConfig({ compaction: true })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const entriesToSummarize = [
+      {
+        type: "custom_message",
+        id: "entry-1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        customType: "some-other-extension",
+        content: [{ type: "text", text: "Injected context: use the staging database." }],
+        display: false,
+      },
+    ]
+    let receivedContext: unknown
+    const complete = (_model: unknown, context: unknown) => {
+      receivedContext = context
+      return Promise.resolve({
+        content: [{ type: "text", text: "## Progress\nNoted the staging database context." }],
+        usage: { input: 10, output: 5 },
+      })
+    }
+    const ctx = fakeContext(fixtureDirectory, { model: { id: "fake-model" }, complete })
+    await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
+
+    const result = (await pi.fire(
+      "session_before_tree",
+      {
+        type: "session_before_tree",
+        preparation: { userWantsSummary: true, entriesToSummarize },
+        signal: new AbortController().signal,
+      },
+      ctx,
+    )) as { summary?: { summary: string } }
+
+    expect(JSON.stringify(receivedContext)).toContain("use the staging database")
+    expect(result.summary?.summary).toContain("Noted the staging database context.")
+
+    await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
+  it("stops waiting on Remem continuity once tree navigation is aborted, without calling the model", async () => {
+    const paths = await installedConfig({ compaction: true })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const entriesToSummarize = [
+      {
+        type: "message",
+        id: "entry-1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: [{ type: "text", text: "Investigate something." }] },
+      },
+    ]
+    const complete = vi.fn(() => Promise.reject(new Error("must not be called")))
+    const ctx = fakeContext(fixtureDirectory, { model: { id: "fake-model" }, complete })
+    await pi.fire("session_start", { type: "session_start", reason: "startup" }, ctx)
+
+    // A never-resolving continuity fetch stands in for a slow/hung memory
+    // provider: the handler must not hang waiting on it once the caller's
+    // signal aborts, and must never reach the model call afterward. Aborting
+    // synchronously right after firing relies on the handler having already
+    // attached its abort listener before yielding at its first `await`.
+    const controller = new AbortController()
+    const firePromise = pi.fire(
+      "session_before_tree",
+      {
+        type: "session_before_tree",
+        preparation: { userWantsSummary: true, entriesToSummarize },
+        signal: controller.signal,
+      },
+      ctx,
+    )
+    controller.abort()
+    await expect(firePromise).resolves.toBeUndefined()
+    expect(complete).not.toHaveBeenCalled()
+
+    await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
   it("falls back to Pi's default branch summary when the summarizer call fails", async () => {
     const paths = await installedConfig({ compaction: true })
     vi.stubEnv("REMEM_CONFIG", paths.configFile)

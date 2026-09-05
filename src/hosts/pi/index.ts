@@ -117,21 +117,54 @@ function branchMessagesForSummary(entries: readonly unknown[], tokenBudget: numb
     const message =
       type === "message" && "message" in entry
         ? entry.message
-        : (type === "compaction" || type === "branch_summary") &&
-            "summary" in entry &&
-            typeof entry.summary === "string"
-          ? { role: "summary", content: entry.summary }
-          : undefined
+        : type === "custom_message" && "content" in entry
+          ? {
+              role: `custom:${"customType" in entry ? String(entry.customType) : "message"}`,
+              content: entry.content,
+            }
+          : (type === "compaction" || type === "branch_summary") &&
+              "summary" in entry &&
+              typeof entry.summary === "string"
+            ? { role: "summary", content: entry.summary }
+            : undefined
     if (!message) continue
     // Pi's own branch preparation retains the newest messages that fit its
     // context budget. This conservative estimate avoids an unbounded request
-    // without importing Pi's runtime-only token helpers.
-    const estimatedTokens = Math.ceil(JSON.stringify(message).length / 4)
+    // without importing Pi's runtime-only token helpers. Dividing by 3
+    // (rather than a more typical ~4 chars/token) intentionally overestimates
+    // for code-heavy/symbol-dense conversation content so the request stays
+    // safely within the model's real context window.
+    const estimatedTokens = Math.ceil(JSON.stringify(message).length / 3)
     if (tokens + estimatedTokens > tokenBudget) break
     messages.unshift(message)
     tokens += estimatedTokens
   }
   return messages
+}
+
+/**
+ * Resolve `promise`, but resolve to `undefined` early if `signal` aborts
+ * first. Does not cancel `promise`'s underlying work (Remem's
+ * `compactionContext` has no cancellation parameter) -- it only stops the
+ * caller from waiting on and acting on a result that arrives after the
+ * caller no longer wants it.
+ */
+function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
+  if (signal.aborted) return Promise.resolve(undefined)
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve(undefined)
+    signal.addEventListener("abort", onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort)
+        resolve(value)
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort)
+        reject(error)
+      },
+    )
+  })
 }
 
 function piLogger(): RememLogger {
@@ -406,8 +439,11 @@ export default function remem(pi: ExtensionAPI): void {
       )
       if (messages.length === 0) return undefined
       const conversationText = renderMessagesForSummary(messages)
-      const continuity = await state.orchestrator.compactionContext(contextFor(state, ctx))
-      if (signal.aborted) return undefined
+      const continuity = await raceAbort(
+        state.orchestrator.compactionContext(contextFor(state, ctx)),
+        signal,
+      )
+      if (signal.aborted || continuity === undefined) return undefined
       const customInstructions = preparation.customInstructions
       const instructions =
         preparation.replaceInstructions && customInstructions

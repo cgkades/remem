@@ -109,19 +109,27 @@ summarizer returns empty text. It never returns a Remem-only summary in place of
 The same safety rule applies to `/tree` branch navigation. When both `config.compaction` and
 `preparation.userWantsSummary` are true and there is at least one abandoned entry, the
 `session_before_tree` handler converts `preparation.entriesToSummarize` (Pi `SessionEntry[]`, not
-`AgentMessage[]`) into renderable messages -- conversation entries come from `entry.message`, and
-prior compaction/branch-summary entries contribute their `entry.summary` text -- bounded to the
-active model's context window (minus a fixed reserve, mirroring Pi's own branch-summary budgeting)
-so a long-lived branch cannot produce an unbounded request. It then summarizes that bounded
-conversation with the active model and appends bounded Remem continuity. `preparation
-.customInstructions`/`replaceInstructions` are honored the same way Pi's own branch summarizer
-honors them: replacing the default prompt when `replaceInstructions` is set, or appended as
-additional focus otherwise. Pi's `summary` result is likewise a full replacement for its default
+`AgentMessage[]`) into renderable messages -- conversation entries come from `entry.message`,
+another extension's injected `custom_message` entries (for example Remem's own
+`before_agent_start` recall injection, or any other extension's `sendMessage`/`pi.sendMessage`
+context) contribute their `content`, and prior compaction/branch-summary entries contribute their
+`entry.summary` text -- bounded to the active model's context window (minus a fixed reserve,
+mirroring Pi's own branch-summary budgeting, with a conservative token-per-character estimate
+chosen to overestimate for code-heavy content) so a long-lived branch cannot produce an unbounded
+request. It then summarizes that bounded conversation with the active model and appends bounded
+Remem continuity. `preparation.customInstructions`/`replaceInstructions` are honored the same way
+Pi's own branch summarizer honors them: replacing the default prompt when `replaceInstructions` is
+set, or appended as additional focus otherwise. Fetching Remem continuity
+(`orchestrator.compactionContext(...)`) races against `event.signal`: if tree navigation is
+aborted while that fetch is still in flight, the handler stops waiting on it and falls back to
+`undefined` rather than blocking on (or later acting on) a stale response -- Remem's continuity
+lookup has no cancellation parameter of its own, so this only stops the handler from waiting on
+it, not the lookup itself. Pi's `summary` result is likewise a full replacement for its default
 branch summary, so the handler returns `undefined` (and leaves Pi's default branch-summary flow
-intact) if there are no abandoned entries to summarize, there is no active model, the completion
-is aborted or reports `stopReason: "aborted"`/`"error"`, or it produces empty text. It never
-provides continuity alone as a summary of the branch being abandoned. When the user declines
-branch summarization, `session_before_tree` is a no-op.
+intact) if there are no abandoned entries to summarize, there is no active model, navigation is
+aborted, the completion is aborted or reports `stopReason: "aborted"`/`"error"`, or it produces
+empty text. It never provides continuity alone as a summary of the branch being abandoned. When
+the user declines branch summarization, `session_before_tree` is a no-op.
 
 ## Host Location and `projectId` Derivation
 
