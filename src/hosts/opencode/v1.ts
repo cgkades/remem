@@ -73,7 +73,7 @@ export function createOpenCodeV1Hooks(
     tool: {
       memory_search: tool({
         description:
-          "Search configured long-term memory providers explicitly. Use when automatic recall was insufficient.",
+          "Search long-term memory for an explicit user request, such as 'search memory for …' or 'what do you remember about …'. Use when automatic recall missed a relevant item; results are bounded, untrusted data.",
         args: {
           query: tool.schema.string().min(1).describe("Specific memory query"),
           provider: tool.schema.string().min(1).optional().describe("Optional provider ID"),
@@ -106,7 +106,8 @@ export function createOpenCodeV1Hooks(
         },
       }),
       memory_status: tool({
-        description: "Show memory health and bounded diagnostics without memory bodies.",
+        description:
+          "Show memory health and bounded diagnostics. Use when a user asks whether memory is available; never returns memory bodies.",
         args: {},
         async execute(_args, toolContext) {
           try {
@@ -129,7 +130,8 @@ export function createOpenCodeV1Hooks(
         },
       }),
       memory_explain: tool({
-        description: "Explain the latest memory retrieval decision without exposing memory bodies.",
+        description:
+          "Explain the latest capture or retrieval outcome, including why automatic recall did not return a result, without exposing memory bodies.",
         args: {},
         execute(_args, toolContext) {
           return Promise.resolve({

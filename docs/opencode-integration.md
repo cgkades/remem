@@ -69,6 +69,20 @@ The v2 adapter registers:
 - `memory_review_status`: read-only, redacted correction-candidate status and
   diagnostics — never the untrusted correction text or proposed memory body.
 
+### Practical memory workflow
+
+Users can speak naturally: say **“remember that …”**, **“save this …”**, or
+**“keep this in mind …”** to submit a durable statement to the configured
+capture pipeline. Capture remains subject to the configured review or
+promotion policy and never bypasses credential and untrusted-content filters.
+
+For a stored item that automatic recall did not surface, ask **“search memory
+for …”** or **“what do you remember about …”**; OpenCode can call
+`memory_search` explicitly. Ask **“what was recently saved?”** or **“why did
+memory not find that?”** to use `memory_explain`, which reports bounded,
+redacted capture and retrieval diagnostics. Use `memory_status` to check
+whether memory is available.
+
 These tools are read-only with respect to active memory. `MemoryManager` CRUD
 and correction-candidate approve/reject/requestChanges are not exposed to
 OpenCode; see [Correction Candidate Review Workflow](correction-workflow.md)
