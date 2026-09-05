@@ -20,6 +20,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `remem init --opencode-v1` now enables automatic capture and promotion of screened explicit user
+  decisions, preferences, and corrections. The existing review-based candidate workflow remains
+  available through `remem init --capture` or `capture.autoPromote: false`.
+
 - `BgeSmallEmbeddingModel`, a local `bge-small-en-v1.5` neural embedding model run via
   `@huggingface/transformers`, selected by default for `remem init --mode managed|external` and
   configurable through the OpenCode plugin's `embedding` option, with automatic fail-open fallback

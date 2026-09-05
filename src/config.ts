@@ -21,6 +21,8 @@ export interface SemanticPlannerConfig {
 
 export interface CaptureConfig {
   enabled: boolean
+  /** Promote screened explicit user statements immediately instead of creating review candidates. */
+  autoPromote: boolean
   queueLimit: number
   maxInputCharacters: number
   maxCandidateCharacters: number
@@ -321,6 +323,7 @@ export function parseConfig(options: unknown): ParsedConfig {
       compaction: root.compaction !== false,
       capture: {
         enabled: captureOptions.enabled === true,
+        autoPromote: captureOptions.autoPromote === true,
         queueLimit: finiteNumber(captureOptions.queueLimit, 32, 1, 1_000),
         maxInputCharacters: finiteNumber(captureOptions.maxInputCharacters, 2_000, 256, 20_000),
         maxCandidateCharacters: finiteNumber(

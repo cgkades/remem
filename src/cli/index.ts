@@ -235,6 +235,7 @@ export async function configurePi(settingsPath: string): Promise<void> {
 function appConfig(
   storage: RememAppConfig["storage"],
   capture: boolean,
+  autoPromote: boolean,
   opencode?: RememAppConfig["opencode"],
   pi?: RememAppConfig["pi"],
 ): RememAppConfig {
@@ -252,7 +253,7 @@ function appConfig(
       },
     ],
     embedding: { provider: "neural", model: "bge-small-en-v1.5", dimensions: 384 },
-    capture: { enabled: capture },
+    capture: { enabled: capture, autoPromote },
     ...(opencode ? { opencode } : {}),
     ...(pi ? { pi } : {}),
   }
@@ -288,8 +289,19 @@ async function initialize(
   try {
     let existing = await readAppConfig(paths)
     output(`Remem is already initialized in ${paths.configDir}.`)
-    if (hasFlag(parsed, "capture") && existing.capture?.enabled !== true) {
-      existing = { ...existing, capture: { ...existing.capture, enabled: true } }
+    if (
+      (hasFlag(parsed, "capture") || requestedHost === "v1") &&
+      (existing.capture?.enabled !== true ||
+        (requestedHost === "v1" && existing.capture?.autoPromote !== true))
+    ) {
+      existing = {
+        ...existing,
+        capture: {
+          ...existing.capture,
+          enabled: true,
+          ...(requestedHost === "v1" ? { autoPromote: true } : {}),
+        },
+      }
       await writeAppConfig(existing, paths)
     }
     if (requestedHost) {
@@ -333,7 +345,8 @@ async function initialize(
     }
     config = appConfig(
       { mode: "external", connectionString },
-      hasFlag(parsed, "capture"),
+      hasFlag(parsed, "capture") || requestedHost === "v1",
+      requestedHost === "v1",
       configureHost
         ? { configured: true, hostVersion: requestedHost, configPath: opencodePath }
         : undefined,
@@ -360,7 +373,8 @@ async function initialize(
     }
     config = appConfig(
       storage,
-      hasFlag(parsed, "capture"),
+      hasFlag(parsed, "capture") || requestedHost === "v1",
+      requestedHost === "v1",
       configureHost
         ? { configured: true, hostVersion: requestedHost, configPath: opencodePath }
         : undefined,
@@ -554,6 +568,7 @@ function usage(): string {
 
 Commands:
   init [--mode managed|external] [--database-url URL] [--opencode|--opencode-v1] [--pi] [--capture]
+    --opencode-v1 enables automatic capture and promotion; --capture enables review-based capture
   start | stop | status | doctor | migrate
   candidates [--status STATUS]
   review <CANDIDATE_ID> --approve|--reject
