@@ -54,6 +54,10 @@ const TOOL_CALL_STEPS = [
 // of a provider-side error. This prompt drives a deterministic non-2xx
 // response from the mock.
 const ERROR_PROMPT = "Trigger a simulated provider outage for this turn."
+// Issue #8: shared by the environment passed to the real opencode2 process
+// (REMEM_E2E_MOCK_KEY) and the mock's auth-header assertion, so the two
+// can't silently drift apart.
+const MOCK_PROVIDER_CREDENTIAL = "e2e"
 const SERVER_PASSWORD = "remem-e2e"
 const SERVER_AUTHORIZATION = `Basic ${Buffer.from(`opencode:${SERVER_PASSWORD}`).toString("base64")}`
 const repository = fileURLToPath(new URL("..", import.meta.url))
@@ -200,7 +204,11 @@ async function handleModelRequest(incoming, response, state) {
   // Issue #8: a regression that drops the configured auth header before it
   // reaches the real provider would not be caught if the mock never checked
   // for it -- record every request's Authorization header alongside its
-  // body so tests can assert on it.
+  // body so tests can assert on it. (Node's http parser keeps only the first
+  // occurrence of a duplicated "authorization" header rather than arrayifying
+  // it, so a client that sent it twice would not be distinguishable here --
+  // acceptable for this fixture, which only needs to confirm the header is
+  // forwarded at all, not detect duplication.)
   state.authorizationHeaders.push(incoming.headers.authorization)
   const chunks = []
   for await (const chunk of incoming) chunks.push(chunk)
@@ -214,14 +222,10 @@ async function handleModelRequest(incoming, response, state) {
     )
   ) {
     response.writeHead(500, { "content-type": "text/event-stream" })
-    response.end(
-      `data: ${JSON.stringify({
-        error: {
-          message: "simulated provider outage (issue #8 E2E fixture)",
-          type: "server_error",
-        },
-      })}\n\ndata: [DONE]\n\n`,
-    )
+    sse(response, {
+      error: { message: "simulated provider outage (issue #8 E2E fixture)", type: "server_error" },
+    })
+    response.end("data: [DONE]\n\n")
     return
   }
   state.requests.push(body)
@@ -561,7 +565,12 @@ async function prompt(serverURL, sessionID, text, waitTimeoutMs = 30_000) {
   })
   // The beta API admits the prompt before its execution coordinator claims the session, so a
   // /wait call can race ahead of the coordinator and return early. Retry /wait itself, rather
-  // than gambling on a single fixed delay being long enough under CI load.
+  // than gambling on a single fixed delay being long enough under CI load. This outer 10s
+  // deadline only bounds how long we keep *retrying a failed/early* /wait -- it's checked
+  // between iterations, so a single in-flight /wait call is still allowed to run for the full
+  // waitTimeoutMs (e.g. issue #8's error scenario passes 60_000 because the real runtime's
+  // internal provider-retry budget before it gives up and surfaces the error empirically took
+  // ~29s, uncomfortably close to this function's 30s default).
   const deadline = Date.now() + 10_000
   let lastError
   while (Date.now() < deadline) {
@@ -683,7 +692,7 @@ async function main() {
       OPENCODE_DISABLE_AUTOUPDATE: "true",
       OPENCODE_DISABLE_MODELS_FETCH: "true",
       OPENCODE_SERVER_PASSWORD: SERVER_PASSWORD,
-      REMEM_E2E_MOCK_KEY: "e2e",
+      REMEM_E2E_MOCK_KEY: MOCK_PROVIDER_CREDENTIAL,
     }
     const server = await startOpenCodeServer(executable, workspace, environment)
     opencode = server.handle
@@ -728,10 +737,11 @@ async function main() {
     if (model.authorizationHeaders.length === 0) {
       throw new Error("the mock model never received any requests to check for an auth header")
     }
-    if (!model.authorizationHeaders.every((header) => header === "Bearer e2e")) {
+    const expectedAuthorizationHeader = `Bearer ${MOCK_PROVIDER_CREDENTIAL}`
+    if (!model.authorizationHeaders.every((header) => header === expectedAuthorizationHeader)) {
       throw new Error(
         `expected every mock model request to carry the configured credential: ` +
-          `${JSON.stringify(model.authorizationHeaders)}`,
+          `${JSON.stringify(model.authorizationHeaders.map((header) => header ?? "<missing>"))}`,
       )
     }
     for (const step of TOOL_CALL_STEPS) {
