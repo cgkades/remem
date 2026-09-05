@@ -84,7 +84,11 @@ function title(kind: SessionEventKind, text: string): string {
       ? "User correction"
       : kind === "preference"
         ? "User preference"
-        : "Explicit decision"
+        : kind === "fact-discovered"
+          ? "Project fact"
+          : kind === "project-state" || kind === "task-opened" || kind === "task-resolved"
+            ? "Project task"
+            : "Explicit decision"
   const subject = text.replace(/\s+/gu, " ").trim().slice(0, 100)
   return subject ? `${prefix}: ${subject}` : prefix
 }
@@ -136,9 +140,13 @@ export class DeterministicCandidateExtractor implements CandidateExtractor {
     const type =
       classification.kind === "preference"
         ? "preference"
-        : classification.kind === "task-opened" || classification.kind === "task-resolved"
-          ? "task"
-          : "decision"
+        : classification.kind === "fact-discovered"
+          ? "semantic"
+          : classification.kind === "project-state" ||
+              classification.kind === "task-opened" ||
+              classification.kind === "task-resolved"
+            ? "task"
+            : "decision"
     return Promise.resolve([
       {
         id: stableId("candidate", observation.id),
@@ -190,7 +198,9 @@ export class CaptureCoordinator {
   private readonly queue: SessionObservation[] = []
   private drainPromise: Promise<void> | undefined
   private readonly shutdown = new AbortController()
+  private static readonly maxExplanations = 100
   private readonly explanations = new Map<string, CaptureExplanation>()
+  private readonly activeCaptureIds = new Map<string, string>()
   private closed = false
 
   constructor(
@@ -206,19 +216,38 @@ export class CaptureCoordinator {
     return this.explanations.get(sessionId) ?? { outcome: "idle" }
   }
 
+  private recordExplanation(sessionId: string, explanation: CaptureExplanation): void {
+    this.explanations.delete(sessionId)
+    this.explanations.set(sessionId, explanation)
+    while (this.explanations.size > CaptureCoordinator.maxExplanations) {
+      const oldest = this.explanations.keys().next().value
+      if (oldest === undefined) break
+      this.explanations.delete(oldest)
+    }
+  }
+
+  private finishCapture(observation: SessionObservation, explanation?: CaptureExplanation): void {
+    const sessionId = observation.context.sessionId
+    if (!sessionId || this.activeCaptureIds.get(sessionId) !== observation.id) return
+    this.activeCaptureIds.delete(sessionId)
+    if (explanation) this.recordExplanation(sessionId, explanation)
+  }
+
   enqueue(input: UserPromptCapture): void {
     if (this.closed) return
     const text = input.text.trim()
     const classification = this.extractor.classify(text)
     if (!classification) {
-      this.explanations.set(input.sessionId, {
+      this.activeCaptureIds.delete(input.sessionId)
+      this.recordExplanation(input.sessionId, {
         outcome: "excluded",
         reason: "not a durable statement",
       })
       return
     }
     if (!safeToCapture(text, this.config)) {
-      this.explanations.set(input.sessionId, {
+      this.activeCaptureIds.delete(input.sessionId)
+      this.recordExplanation(input.sessionId, {
         outcome: "excluded",
         kind: classification.kind,
         confidence: classification.confidence,
@@ -228,7 +257,8 @@ export class CaptureCoordinator {
     }
     if (this.queue.length >= this.config.queueLimit) {
       logFailure(this.logger, "capture.dropped", { reason: "queue_full" })
-      this.explanations.set(input.sessionId, {
+      this.activeCaptureIds.delete(input.sessionId)
+      this.recordExplanation(input.sessionId, {
         outcome: "failed",
         kind: classification.kind,
         confidence: classification.confidence,
@@ -240,6 +270,7 @@ export class CaptureCoordinator {
       ? stableId("observation", input.host, input.sessionId, input.messageId)
       : randomUUID()
     const source = `remem://${input.host}/sessions/${encodeURIComponent(input.sessionId)}/messages/${encodeURIComponent(input.messageId ?? id)}`
+    this.activeCaptureIds.set(input.sessionId, id)
     this.queue.push({
       id,
       kind: classification.kind,
@@ -252,7 +283,7 @@ export class CaptureCoordinator {
         ...(input.messageId ? { messageId: input.messageId } : {}),
       },
     })
-    this.explanations.set(input.sessionId, {
+    this.recordExplanation(input.sessionId, {
       outcome: "pending",
       kind: classification.kind,
       confidence: classification.confidence,
@@ -275,6 +306,9 @@ export class CaptureCoordinator {
       logFailure(this.logger, "capture.shutdown_timeout", {
         error: error instanceof Error ? error.name : "unknown error",
       })
+    } finally {
+      this.activeCaptureIds.clear()
+      this.explanations.clear()
     }
   }
 
@@ -298,7 +332,7 @@ export class CaptureCoordinator {
                 (signal) => promote(approved, signal),
                 this.shutdown.signal,
               )
-              this.explanations.set(observation.context.sessionId ?? "", {
+              this.finishCapture(observation, {
                 outcome: "promoted",
                 kind: observation.kind,
                 confidence: candidate.confidence,
@@ -316,8 +350,9 @@ export class CaptureCoordinator {
               this.shutdown.signal,
             )
           }
+          this.finishCapture(observation)
         } catch (error) {
-          this.explanations.set(observation.context.sessionId ?? "", {
+          this.finishCapture(observation, {
             outcome: "failed",
             kind: observation.kind,
             reason: "capture processing failed",
