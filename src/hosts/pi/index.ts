@@ -112,6 +112,15 @@ function renderMessagesForSummary(messages: readonly unknown[]): string {
 const BRANCH_SUMMARY_RESERVE_TOKENS = 16_384
 
 /**
+ * Conservative chars-per-token divisor for `branchMessagesForSummary`'s
+ * token-budget estimate. A more typical average is ~4 chars/token; dividing
+ * by 3 instead intentionally overestimates for code-heavy/symbol-dense
+ * conversation content so the request stays safely within the model's real
+ * context window.
+ */
+const BRANCH_SUMMARY_CHARS_PER_TOKEN_ESTIMATE = 3
+
+/**
  * Pi's tree hook supplies session entries, while compaction supplies agent
  * messages. Keep the tree conversion local: Pi only exports its conversion
  * helpers through its top-level runtime entry, which may load an undeclared
@@ -151,11 +160,10 @@ function branchMessagesForSummary(entries: readonly unknown[], tokenBudget: numb
     if (!message) continue
     // Pi's own branch preparation retains the newest messages that fit its
     // context budget. This conservative estimate avoids an unbounded request
-    // without importing Pi's runtime-only token helpers. Dividing by 3
-    // (rather than a more typical ~4 chars/token) intentionally overestimates
-    // for code-heavy/symbol-dense conversation content so the request stays
-    // safely within the model's real context window.
-    const estimatedTokens = Math.ceil(JSON.stringify(message).length / 3)
+    // without importing Pi's runtime-only token helpers.
+    const estimatedTokens = Math.ceil(
+      JSON.stringify(message).length / BRANCH_SUMMARY_CHARS_PER_TOKEN_ESTIMATE,
+    )
     if (tokens + estimatedTokens > tokenBudget) break
     messages.unshift(message)
     tokens += estimatedTokens

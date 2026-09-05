@@ -358,9 +358,10 @@ describe("Pi host extension", () => {
         },
       },
     ]
-    let receivedContext: { messages: Array<{ content: Array<{ text: string }> }> } | undefined
+    type SummarizerRequestContext = { messages: Array<{ content: Array<{ text: string }> }> }
+    let receivedContext: SummarizerRequestContext | undefined
     const complete = (_model: unknown, context: unknown) => {
-      receivedContext = context as typeof receivedContext & object
+      receivedContext = context as SummarizerRequestContext
       return Promise.resolve({
         content: [{ type: "text", text: "## Progress\nInvestigated the billing schema." }],
         usage: { input: 10, output: 5 },
@@ -602,9 +603,10 @@ describe("Pi host extension", () => {
         content: [{ type: "text", text: "Migrate the billing service to the new schema." }],
       },
     ]
-    let receivedContext: { messages: Array<{ content: Array<{ text: string }> }> } | undefined
+    type SummarizerRequestContext = { messages: Array<{ content: Array<{ text: string }> }> }
+    let receivedContext: SummarizerRequestContext | undefined
     const complete = (_model: unknown, context: unknown) => {
-      receivedContext = context as typeof receivedContext & object
+      receivedContext = context as SummarizerRequestContext
       return Promise.resolve({
         content: [{ type: "text", text: "## Goal\nMigrate the billing service." }],
         usage: { input: 10, output: 5 },
