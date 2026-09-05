@@ -176,7 +176,7 @@ function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | und
       },
       (error: unknown) => {
         signal.removeEventListener("abort", onAbort)
-        reject(error)
+        reject(error instanceof Error ? error : new Error(String(error)))
       },
     )
   })
