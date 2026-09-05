@@ -49,6 +49,11 @@ const TOOL_CALL_STEPS = [
   { id: "call_read", name: "read", arguments: '{"path":"tool-loop.txt"}' },
   { id: "call_memory_status", name: "memory_status", arguments: "{}" },
 ]
+// Issue #8: the mock model previously always returned a 200 streaming
+// response, so no scenario ever exercised the dispatch/tool-loop's handling
+// of a provider-side error. This prompt drives a deterministic non-2xx
+// response from the mock.
+const ERROR_PROMPT = "Trigger a simulated provider outage for this turn."
 const SERVER_PASSWORD = "remem-e2e"
 const SERVER_AUTHORIZATION = `Basic ${Buffer.from(`opencode:${SERVER_PASSWORD}`).toString("base64")}`
 const repository = fileURLToPath(new URL("..", import.meta.url))
@@ -182,7 +187,7 @@ function sse(response, payload) {
   response.write(`data: ${JSON.stringify(payload)}\n\n`)
 }
 
-async function handleModelRequest(incoming, response, requests) {
+async function handleModelRequest(incoming, response, state) {
   if (incoming.method === "GET" && incoming.url === "/v1/models") {
     response.writeHead(200, { "content-type": "application/json" })
     response.end(JSON.stringify({ object: "list", data: [{ id: "mock-1", object: "model" }] }))
@@ -192,10 +197,34 @@ async function handleModelRequest(incoming, response, requests) {
     response.writeHead(404).end()
     return
   }
+  // Issue #8: a regression that drops the configured auth header before it
+  // reaches the real provider would not be caught if the mock never checked
+  // for it -- record every request's Authorization header alongside its
+  // body so tests can assert on it.
+  state.authorizationHeaders.push(incoming.headers.authorization)
   const chunks = []
   for await (const chunk of incoming) chunks.push(chunk)
   const body = JSON.parse(Buffer.concat(chunks).toString("utf8"))
-  requests.push(body)
+  // Issue #8: exercise the dispatch/tool-loop's error-handling path against
+  // a real non-2xx provider response, not just the success path -- this
+  // mock previously always returned 200.
+  if (
+    body.messages.some(
+      (message) => typeof message.content === "string" && message.content.includes(ERROR_PROMPT),
+    )
+  ) {
+    response.writeHead(500, { "content-type": "text/event-stream" })
+    response.end(
+      `data: ${JSON.stringify({
+        error: {
+          message: "simulated provider outage (issue #8 E2E fixture)",
+          type: "server_error",
+        },
+      })}\n\ndata: [DONE]\n\n`,
+    )
+    return
+  }
+  state.requests.push(body)
   const messages = JSON.stringify(body.messages)
   const isRelated = messages.includes(RELATED_PROMPT)
   const resultIds = new Set(
@@ -222,6 +251,15 @@ async function handleModelRequest(incoming, response, requests) {
     model: "mock-1",
   }
   if (nextStep) {
+    // Issue #8: real OpenAI/AI-SDK-compatible providers stream
+    // function.arguments as incremental string deltas across multiple SSE
+    // chunks -- only the first delta carries id/type/function.name. A mock
+    // that always sends the whole JSON blob in one chunk would never catch a
+    // regression in the client's delta-accumulation logic. Split the
+    // argument string roughly in half to force at least two fragments.
+    const midpoint = Math.max(1, Math.floor(nextStep.arguments.length / 2))
+    const firstFragment = nextStep.arguments.slice(0, midpoint)
+    const secondFragment = nextStep.arguments.slice(midpoint)
     sse(response, {
       ...base,
       choices: [
@@ -234,9 +272,21 @@ async function handleModelRequest(incoming, response, requests) {
                 index: 0,
                 id: nextStep.id,
                 type: "function",
-                function: { name: nextStep.name, arguments: nextStep.arguments },
+                function: { name: nextStep.name, arguments: firstFragment },
               },
             ],
+          },
+          finish_reason: null,
+        },
+      ],
+    })
+    sse(response, {
+      ...base,
+      choices: [
+        {
+          index: 0,
+          delta: {
+            tool_calls: [{ index: 0, function: { arguments: secondFragment } }],
           },
           finish_reason: null,
         },
@@ -255,14 +305,29 @@ async function handleModelRequest(incoming, response, requests) {
       ],
     })
     sse(response, { ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })
+    // Issue #8: real providers emit a final usage-only frame (empty
+    // `choices`) before [DONE] when the request opts into
+    // stream_options.include_usage. Verified against the real opencode2
+    // runtime: sending this frame after a tool_calls finish, rather than a
+    // stop finish, makes the client immediately fail the turn with a
+    // spurious "Compaction produced no summary" error -- so this fixture
+    // only emits it for a terminal (non-tool-call) turn, matching what the
+    // client can actually tolerate.
+    if (body.stream_options?.include_usage) {
+      sse(response, {
+        ...base,
+        choices: [],
+        usage: { prompt_tokens: 42, completion_tokens: 7, total_tokens: 49 },
+      })
+    }
   }
   response.end("data: [DONE]\n\n")
 }
 
 async function mockModel() {
-  const requests = []
+  const state = { requests: [], authorizationHeaders: [] }
   const server = createServer((incoming, response) => {
-    handleModelRequest(incoming, response, requests).catch((error) => {
+    handleModelRequest(incoming, response, state).catch((error) => {
       if (!response.headersSent) response.writeHead(500, { "content-type": "application/json" })
       response.end(
         JSON.stringify({ error: error instanceof Error ? error.message : "mock model failure" }),
@@ -276,7 +341,8 @@ async function mockModel() {
   const address = server.address()
   if (!address || typeof address === "string") throw new Error("mock model did not bind a port")
   return {
-    requests,
+    requests: state.requests,
+    authorizationHeaders: state.authorizationHeaders,
     url: `http://127.0.0.1:${address.port}/v1`,
     close: () => new Promise((resolve) => server.close(resolve)),
   }
@@ -488,7 +554,7 @@ async function createSession(serverURL, workspace) {
   return created.data.id
 }
 
-async function prompt(serverURL, sessionID, text) {
+async function prompt(serverURL, sessionID, text, waitTimeoutMs = 30_000) {
   await request(serverURL, `/api/session/${sessionID}/prompt`, {
     method: "POST",
     body: JSON.stringify({ text }),
@@ -500,7 +566,10 @@ async function prompt(serverURL, sessionID, text) {
   let lastError
   while (Date.now() < deadline) {
     try {
-      await request(serverURL, `/api/session/${sessionID}/wait`, { method: "POST" })
+      await request(serverURL, `/api/session/${sessionID}/wait`, {
+        method: "POST",
+        signal: globalThis.AbortSignal.timeout(waitTimeoutMs),
+      })
       return
     } catch (error) {
       lastError = error
@@ -651,6 +720,20 @@ async function main() {
         `related model dispatch did not receive injected Remem memory\n${JSON.stringify(relatedRequests)}\n${opencode.output()}`,
       )
     }
+    // Issue #8: confirm the configured provider credential (REMEM_E2E_MOCK_KEY,
+    // set via the "mock" provider's env option) actually reaches the mock as
+    // an Authorization header, rather than only being present in the plugin
+    // config that OpenCode never forwards. Verified against the real
+    // opencode2 runtime: it sends this as a "Bearer <key>" header.
+    if (model.authorizationHeaders.length === 0) {
+      throw new Error("the mock model never received any requests to check for an auth header")
+    }
+    if (!model.authorizationHeaders.every((header) => header === "Bearer e2e")) {
+      throw new Error(
+        `expected every mock model request to carry the configured credential: ` +
+          `${JSON.stringify(model.authorizationHeaders)}`,
+      )
+    }
     for (const step of TOOL_CALL_STEPS) {
       if (
         !relatedRequests.some((body) =>
@@ -727,6 +810,34 @@ async function main() {
     }
     if (unavailable.attempts() <= outageAttempts) {
       throw new Error("the controlled PostgreSQL outage was not attempted")
+    }
+
+    // Issue #8: confirm the dispatch/tool-loop's handling of a non-2xx
+    // provider response, not just the success path. Empirically (verified
+    // against the real opencode2 runtime), the beta API surfaces this
+    // asynchronously as the assistant message's terminal `error` field --
+    // not synchronously via the /prompt response, and not with the
+    // provider's own error message text, just a generic HTTP-status summary
+    // -- rather than via a thrown /wait error.
+    // The real runtime retries the failed provider call internally before
+    // giving up, which empirically took ~29s -- close enough to request()'s
+    // default 30s abort timeout to race it, so this scenario needs a longer
+    // wait budget than the other prompt() calls in this suite.
+    const errorSession = await createSession(serverURL, workspace)
+    await prompt(serverURL, errorSession, ERROR_PROMPT, 60_000)
+    const errorMessages = await request(serverURL, `/api/session/${errorSession}/message?order=asc`)
+    const errorMessage = errorMessages.data?.find((message) => message.finish === "error")
+    if (!errorMessage) {
+      throw new Error(
+        `expected the simulated provider outage to surface as a terminal assistant error: ` +
+          `${JSON.stringify(errorMessages)}`,
+      )
+    }
+    if (errorMessage.error?.status !== 500) {
+      throw new Error(
+        `expected the surfaced error to reflect the mock's HTTP 500 response: ` +
+          `${JSON.stringify(errorMessage)}`,
+      )
     }
 
     const databaseUrl = process.env.REMEM_TEST_DATABASE_URL

@@ -164,7 +164,16 @@ The v1 compatibility contract is pinned to the official OpenCode `v1.18.26` rele
   `@opencode-ai/cli@0.0.0-beta-18743` runtime, and drives its HTTP API against a local deterministic
   OpenAI-compatible mock. It verifies plugin loading, dispatch injection, tool-loop continuity,
   transcript isolation, unrelated-prompt isolation, and fail-open behavior with an unavailable
-  PostgreSQL provider. When `REMEM_TEST_DATABASE_URL` is set (CI always sets it; local runs can
+  PostgreSQL provider. The mock also matches several real provider behaviors that earlier revisions
+  glossed over (issue #8): it streams tool-call `function.arguments` as incremental deltas across
+  multiple SSE chunks rather than one complete blob, it emits a final usage-only SSE frame when a
+  request opts into `stream_options.include_usage` (only after a `stop` finish — empirically, the
+  live runtime mishandles that frame immediately following a `tool_calls` finish), it returns a
+  simulated non-2xx provider error for a dedicated prompt and the suite confirms the failure
+  surfaces as the assistant message's terminal `error` field, and it records each request's
+  `Authorization` header so the suite can confirm the configured provider credential
+  (`REMEM_E2E_MOCK_KEY`) actually reaches the provider as a `Bearer` token. When
+  `REMEM_TEST_DATABASE_URL` is set (CI always sets it; local runs can
   point it at `npm run test:postgres:up`'s instance), it also settles two open questions
   empirically against a real, reachable PostgreSQL provider rather than the forced-outage
   fixture: it seeds a stale embedding, sends one prompt with capture enabled, and confirms both
