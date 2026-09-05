@@ -102,6 +102,16 @@ function renderMessagesForSummary(messages: readonly unknown[]): string {
 }
 
 /**
+ * Tokens reserved when bounding rendered branch history before
+ * summarization, mirroring Pi's own default `reserveTokens` for
+ * compaction/branch-summary budgeting (`docs/compaction.md`'s
+ * `reserveTokens` setting, default 16384). Named here so both this reserve
+ * and its rationale stay in one place if it needs tuning later, rather than
+ * being an inline magic number at the call site.
+ */
+const BRANCH_SUMMARY_RESERVE_TOKENS = 16_384
+
+/**
  * Pi's tree hook supplies session entries, while compaction supplies agent
  * messages. Keep the tree conversion local: Pi only exports its conversion
  * helpers through its top-level runtime entry, which may load an undeclared
@@ -125,7 +135,12 @@ function branchMessagesForSummary(entries: readonly unknown[], tokenBudget: numb
           : (type === "compaction" || type === "branch_summary") &&
               "summary" in entry &&
               typeof entry.summary === "string"
-            ? { role: "summary", content: entry.summary }
+            ? // Synthetic, rendering-only role: `renderMessagesForSummary` only
+              // reads `role`/`content` for display in the summarizer prompt, so
+              // this never needs to match a real Pi/LLM message role -- it just
+              // needs to label prior compaction/branch-summary text distinctly
+              // from ordinary conversation turns.
+              { role: "summary", content: entry.summary }
             : undefined
     if (!message) continue
     // Pi's own branch preparation retains the newest messages that fit its
@@ -435,7 +450,7 @@ export default function remem(pi: ExtensionAPI): void {
     try {
       const messages = branchMessagesForSummary(
         preparation.entriesToSummarize,
-        Math.max(0, model.contextWindow - 16_384),
+        Math.max(0, model.contextWindow - BRANCH_SUMMARY_RESERVE_TOKENS),
       )
       if (messages.length === 0) return undefined
       const conversationText = renderMessagesForSummary(messages)
