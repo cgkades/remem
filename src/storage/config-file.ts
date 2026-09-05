@@ -58,6 +58,8 @@ export interface RememAppConfig {
   embedding: EmbeddingAppConfig
   opencode?: {
     configured: boolean
+    /** OpenCode plugin API selected during `remem init`. */
+    hostVersion?: "v1" | "v2"
     configPath?: string
   }
   pi?: {

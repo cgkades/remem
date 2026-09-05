@@ -147,7 +147,17 @@ async function migrate(config: RememAppConfig) {
   }
 }
 
-async function configureOpenCode(configPath: string): Promise<void> {
+export type OpenCodeHostVersion = "v1" | "v2"
+
+/**
+ * Adds Remem to the plugin array used by the selected OpenCode host API.
+ * OpenCode v1.18.27 reads `plugin` (singular) and resolves this package's
+ * `./server` export; v2 reads `plugins` (plural) and loads the package root.
+ */
+export async function configureOpenCode(
+  configPath: string,
+  hostVersion: OpenCodeHostVersion = "v2",
+): Promise<void> {
   await mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 })
   let value: Record<string, unknown> = {}
   try {
@@ -159,11 +169,10 @@ async function configureOpenCode(configPath: string): Promise<void> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
   }
-  const plugins: unknown[] = Array.isArray(value.plugins)
-    ? Array.from(value.plugins as unknown[])
-    : []
-  if (!plugins.some((plugin) => plugin === "opencode-remem")) plugins.push("opencode-remem")
-  value.plugins = plugins
+  const key = hostVersion === "v1" ? "plugin" : "plugins"
+  const plugins: unknown[] = Array.isArray(value[key]) ? Array.from(value[key] as unknown[]) : []
+  if (!plugins.some((plugin) => plugin === "agentic-remem")) plugins.push("agentic-remem")
+  value[key] = plugins
   const temporary = `${configPath}.${process.pid}.tmp`
   await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
   await rename(temporary, configPath)
@@ -237,12 +246,22 @@ export function warnAboutNeuralDownload(
   }
 }
 
+function requestedOpenCodeHost(parsed: ParsedArguments): OpenCodeHostVersion | undefined {
+  const v1 = hasFlag(parsed, "opencode-v1")
+  const v2 = hasFlag(parsed, "opencode")
+  if (v1 && v2) throw new Error("use either --opencode (v2) or --opencode-v1, not both")
+  if (v1) return "v1"
+  if (v2) return "v2"
+  return undefined
+}
+
 async function initialize(
   parsed: ParsedArguments,
   paths: RememPaths,
   runner: ProcessRunner,
   output: (line: string) => void,
 ): Promise<RememAppConfig> {
+  const requestedHost = requestedOpenCodeHost(parsed)
   try {
     let existing = await readAppConfig(paths)
     output(`Remem is already initialized in ${paths.configDir}.`)
@@ -250,10 +269,16 @@ async function initialize(
       existing = { ...existing, capture: { ...existing.capture, enabled: true } }
       await writeAppConfig(existing, paths)
     }
-    if (hasFlag(parsed, "opencode") && !existing.opencode?.configured) {
+    if (
+      requestedHost &&
+      (!existing.opencode?.configured || existing.opencode.hostVersion !== requestedHost)
+    ) {
       const configPath = openCodeConfigPath()
-      await configureOpenCode(configPath)
-      existing = { ...existing, opencode: { configured: true, configPath } }
+      await configureOpenCode(configPath, requestedHost)
+      existing = {
+        ...existing,
+        opencode: { configured: true, hostVersion: requestedHost, configPath },
+      }
       await writeAppConfig(existing, paths)
     }
     if (hasFlag(parsed, "pi") && !existing.pi?.configured) {
@@ -272,7 +297,7 @@ async function initialize(
   await mkdir(paths.configDir, { recursive: true, mode: 0o700 })
   await mkdir(paths.dataDir, { recursive: true, mode: 0o700 })
   await mkdir(paths.backupDir, { recursive: true, mode: 0o700 })
-  const configureHost = hasFlag(parsed, "opencode")
+  const configureHost = requestedHost !== undefined
   const opencodePath = openCodeConfigPath()
   const configurePiHost = hasFlag(parsed, "pi")
   const piPath = piSettingsPath()
@@ -287,7 +312,9 @@ async function initialize(
     config = appConfig(
       { mode: "external", connectionString },
       hasFlag(parsed, "capture"),
-      configureHost ? { configured: true, configPath: opencodePath } : undefined,
+      configureHost
+        ? { configured: true, hostVersion: requestedHost, configPath: opencodePath }
+        : undefined,
       configurePiHost ? { configured: true, settingsPath: piPath } : undefined,
     )
     warnAboutNeuralDownload(config, output)
@@ -312,7 +339,9 @@ async function initialize(
     config = appConfig(
       storage,
       hasFlag(parsed, "capture"),
-      configureHost ? { configured: true, configPath: opencodePath } : undefined,
+      configureHost
+        ? { configured: true, hostVersion: requestedHost, configPath: opencodePath }
+        : undefined,
       configurePiHost ? { configured: true, settingsPath: piPath } : undefined,
     )
     warnAboutNeuralDownload(config, output)
@@ -320,7 +349,7 @@ async function initialize(
     throw new Error("--mode must be managed or external")
   }
 
-  if (configureHost) await configureOpenCode(opencodePath)
+  if (requestedHost) await configureOpenCode(opencodePath, requestedHost)
   if (configurePiHost) await configurePi(piPath)
   await writeAppConfig(config, paths)
   await start(config, runner)
@@ -502,7 +531,7 @@ function usage(): string {
   return `Usage: remem <command> [options]
 
 Commands:
-  init [--mode managed|external] [--database-url URL] [--opencode] [--pi] [--capture]
+  init [--mode managed|external] [--database-url URL] [--opencode|--opencode-v1] [--pi] [--capture]
   start | stop | status | doctor | migrate
   candidates [--status STATUS]
   review <CANDIDATE_ID> --approve|--reject

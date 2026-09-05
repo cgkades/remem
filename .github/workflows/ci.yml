@@ -43,6 +43,27 @@ jobs:
       - run: npm run pack:check
       - run: npm run pack:smoke
 
+  opencode-v1-e2e:
+    name: OpenCode v1.18.27 E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install pinned OpenCode v1.18.27 runtime
+        run: |
+          mkdir -p "$RUNNER_TEMP/opencode-v1"
+          curl --fail --location --silent --show-error \
+            https://github.com/anomalyco/opencode/releases/download/v1.18.27/opencode-linux-x64.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP/opencode-v1"
+      - run: npm run test:opencode-v1
+        env:
+          OPENCODE_BIN: ${{ runner.temp }}/opencode-v1/opencode
+
   opencode-v2-e2e:
     name: OpenCode v2 beta E2E
     runs-on: ubuntu-latest

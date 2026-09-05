@@ -672,7 +672,7 @@ async function main() {
     }
     model = await mockModel()
     unavailable = await unavailablePostgres()
-    const plugin = path.join(application, "node_modules", "opencode-remem", "dist")
+    const plugin = path.join(application, "node_modules", "agentic-remem", "dist")
     const workspace = await createWorkspace(
       temporary,
       "workspace",
@@ -713,7 +713,7 @@ async function main() {
     )
     if (
       !plugins.data?.some(
-        (pluginInfo) => pluginInfo.id === "opencode-remem" && pluginInfo.state?.status === "active",
+        (pluginInfo) => pluginInfo.id === "agentic-remem" && pluginInfo.state?.status === "active",
       )
     ) {
       throw new Error(`Remem plugin did not load: ${JSON.stringify(plugins)}`)
@@ -807,7 +807,7 @@ async function main() {
     )
     if (
       !outagePlugins.data?.some(
-        (pluginInfo) => pluginInfo.id === "opencode-remem" && pluginInfo.state?.status === "active",
+        (pluginInfo) => pluginInfo.id === "agentic-remem" && pluginInfo.state?.status === "active",
       )
     ) {
       throw new Error(

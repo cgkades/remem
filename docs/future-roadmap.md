@@ -6,7 +6,7 @@ roadmap claims.
 
 ## Phase 1: Harden Distribution and Operations
 
-- Publish `opencode-remem` after package and beta-host compatibility validation.
+- Publish `agentic-remem` after package and beta-host compatibility validation.
 - Replace source-only OpenCode setup with tested package installation and upgrade instructions.
 - Validate supported external PostgreSQL/pgvector version ranges and privilege combinations
   explicitly in `doctor`.

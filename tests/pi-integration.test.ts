@@ -747,7 +747,7 @@ describe("Pi CLI and doctor wiring", () => {
     // whose `packages` array contains a backslash-heavy (Windows-style) path
     // must still be recognized via array membership, not a raw substring
     // match against the JSON-escaped file text.
-    const windowsStylePath = "C:\\Users\\example\\opencode-remem"
+    const windowsStylePath = "C:\\Users\\example\\agentic-remem"
     await writeAppConfigLikeSettings(settingsPath, { packages: [windowsStylePath] })
     const windowsStyle = await piIntegrationCheck(settingsPath)
     const written = JSON.parse(await readFile(settingsPath, "utf8")) as { packages: unknown[] }
