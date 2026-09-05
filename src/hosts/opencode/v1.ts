@@ -6,6 +6,7 @@ import { createProviders } from "../../providers/factory.js"
 import { loadInstalledPluginOptions } from "../../storage/config-file.js"
 import { createEmbeddingModel } from "../../storage/embedding-neural.js"
 import type { MemoryContext, RememLogger } from "../../types.js"
+import { formatMemoryExplain } from "./memory-ux.js"
 import {
   disposeProviders,
   memoryContext,
@@ -137,10 +138,10 @@ export function createOpenCodeV1Hooks(
           return Promise.resolve({
             title: "Memory retrieval explanation",
             output: JSON.stringify(
-              {
-                retrieval: orchestrator.explain(toolContext.sessionID),
-                capture: capture?.explain(toolContext.sessionID) ?? { outcome: "idle" },
-              },
+              formatMemoryExplain(
+                orchestrator.explain(toolContext.sessionID),
+                capture?.explain(toolContext.sessionID) ?? { outcome: "idle" },
+              ),
               null,
               2,
             ),

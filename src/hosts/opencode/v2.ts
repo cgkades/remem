@@ -17,6 +17,7 @@ import { shouldAttemptReembed } from "../../reembedding.js"
 import { loadInstalledPluginOptions } from "../../storage/config-file.js"
 import { createEmbeddingModel } from "../../storage/embedding-neural.js"
 import type { MemoryContext, MemoryProvider, RememLogger } from "../../types.js"
+import { formatMemoryExplain } from "./memory-ux.js"
 import {
   TRUSTED_REMEM_INSTRUCTION,
   currentTurnId,
@@ -207,10 +208,10 @@ async function registerTools(
       execute(_input, toolContext) {
         return Promise.resolve({
           content: JSON.stringify(
-            {
-              retrieval: orchestrator.explain(toolContext.sessionID),
-              capture: capture?.explain(toolContext.sessionID) ?? { outcome: "idle" },
-            },
+            formatMemoryExplain(
+              orchestrator.explain(toolContext.sessionID),
+              capture?.explain(toolContext.sessionID) ?? { outcome: "idle" },
+            ),
             null,
             2,
           ),

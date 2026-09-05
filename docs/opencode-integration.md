@@ -80,8 +80,9 @@ For a stored item that automatic recall did not surface, ask **“search memory
 for …”** or **“what do you remember about …”**; OpenCode can call
 `memory_search` explicitly. Ask **“what was recently saved?”** or **“why did
 memory not find that?”** to use `memory_explain`, which reports bounded,
-redacted capture and retrieval diagnostics. Use `memory_status` to check
-whether memory is available.
+redacted capture and retrieval diagnostics. A recall miss is classified as no
+matching memory, scope mismatch, capture exclusion, or a ranking/budget
+decision. Use `memory_status` to check whether memory is available.
 
 These tools are read-only with respect to active memory. `MemoryManager` CRUD
 and correction-candidate approve/reject/requestChanges are not exposed to
