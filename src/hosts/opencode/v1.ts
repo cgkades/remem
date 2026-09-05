@@ -134,7 +134,14 @@ export function createOpenCodeV1Hooks(
         execute(_args, toolContext) {
           return Promise.resolve({
             title: "Memory retrieval explanation",
-            output: JSON.stringify(orchestrator.explain(toolContext.sessionID), null, 2),
+            output: JSON.stringify(
+              {
+                retrieval: orchestrator.explain(toolContext.sessionID),
+                capture: capture?.explain(toolContext.sessionID) ?? { outcome: "idle" },
+              },
+              null,
+              2,
+            ),
           })
         },
       }),

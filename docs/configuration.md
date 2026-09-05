@@ -105,7 +105,9 @@ overrides only the supplied capture fields and retains the installed provider co
 }
 ```
 
-Only explicit user corrections, decisions, and preferences qualify. Prompts containing reusable
+Only screened user-authored durable statements qualify. Direct requests such as `Remember that
+Atlas uses PostgreSQL`, plus ordinary decisions, preferences, corrections, project facts, and task
+state can be captured without a special trigger phrase. Questions, chitchat, prompts containing reusable
 credentials, reported quoted/retrieved text, or tool output are excluded. Capture never reads model or tool
 responses. With `autoPromote: true`, screened statements are immediately consolidated into durable
 memory using the same duplicate/conflict handling as the manual flow. With the default `false`, capture

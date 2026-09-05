@@ -77,6 +77,15 @@ describe("DeterministicCandidateExtractor", () => {
     const labelledDecision = await extractor.extract([
       observation("Decision: use logical replication for Phoenix."),
     ])
+    const directRemember = await extractor.extract([
+      observation("Remember that Atlas uses PostgreSQL for durable memory."),
+    ])
+    const implicitDecision = await extractor.extract([
+      observation("Going forward, switch Atlas deployments to the staging bastion."),
+    ])
+    const projectFact = await extractor.extract([
+      observation("The release manifest is located in infra/release/manifest.yaml."),
+    ])
 
     expect(correction[0]).toMatchObject({ status: "pending", confidence: 0.95 })
     expect(correction[0]?.memory.provenance?.[0]?.source).toMatchObject({
@@ -85,6 +94,27 @@ describe("DeterministicCandidateExtractor", () => {
     })
     expect(decision[0]).toMatchObject({ status: "pending", memory: { type: "decision" } })
     expect(labelledDecision[0]).toMatchObject({ status: "pending", memory: { type: "decision" } })
+    expect(directRemember[0]).toMatchObject({
+      confidence: 0.98,
+      reasons: ["explicit remember request"],
+      memory: { type: "decision" },
+    })
+    expect(implicitDecision[0]).toMatchObject({ reasons: ["implicit decision"] })
+    expect(projectFact[0]).toMatchObject({ reasons: ["durable project fact"] })
+  })
+
+  it("allows a custom capture policy without making one mandatory", async () => {
+    const extractor = new DeterministicCandidateExtractor(config, {
+      classify: () => ({ kind: "task-resolved", confidence: 0.91, reason: "local policy" }),
+    })
+
+    const candidates = await extractor.extract([observation("A normally ignored statement.")])
+
+    expect(candidates[0]).toMatchObject({
+      confidence: 0.91,
+      reasons: ["local policy"],
+      memory: { type: "task" },
+    })
   })
 
   it("rejects chitchat, quoted/tool data, secrets, and oversized input", async () => {
@@ -153,6 +183,21 @@ describe("CaptureCoordinator", () => {
       payload: { host: "opencode-v2", messageId: "message" },
     })
     expect(store.persisted[0]?.candidate.status).toBe("pending")
+    expect(coordinator.explain("session")).toMatchObject({
+      outcome: "pending",
+      kind: "decision",
+      reason: "implicit decision",
+    })
+  })
+  it("reports why an ineligible statement was excluded", () => {
+    const coordinator = new CaptureCoordinator(new RecordingStore(), config, logger)
+
+    coordinator.enqueue(input("Can you explain database replication?"))
+
+    expect(coordinator.explain("session")).toEqual({
+      outcome: "excluded",
+      reason: "not a durable statement",
+    })
   })
 
   it("promotes screened captures without creating a review candidate in automatic mode", async () => {
