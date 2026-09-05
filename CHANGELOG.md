@@ -20,6 +20,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Natural-language capture recognizes direct `remember`/`keep in mind`/`note`/`save`/`store` requests,
+  implicit decisions, durable preferences, project facts, and task state without requiring a magic
+  phrase. OpenCode `memory_explain` now includes a bounded capture outcome, reason, and confidence.
+  Resolves [#74](https://github.com/cgkades/remem/issues/74).
+
 - `remem init --opencode-v1` now enables automatic capture and promotion of screened explicit user
   decisions, preferences, and corrections. The existing review-based candidate workflow remains
   available through `remem init --capture` or `capture.autoPromote: false`.

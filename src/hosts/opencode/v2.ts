@@ -138,6 +138,7 @@ async function registerTools(
   context: Context,
   orchestrator: RememOrchestrator,
   location: HostLocation,
+  capture?: CaptureCoordinator,
 ) {
   return context.tool.transform((draft) => {
     draft.add({
@@ -202,7 +203,14 @@ async function registerTools(
       input: { type: "object", properties: {}, additionalProperties: false },
       execute(_input, toolContext) {
         return Promise.resolve({
-          content: JSON.stringify(orchestrator.explain(toolContext.sessionID), null, 2),
+          content: JSON.stringify(
+            {
+              retrieval: orchestrator.explain(toolContext.sessionID),
+              capture: capture?.explain(toolContext.sessionID) ?? { outcome: "idle" },
+            },
+            null,
+            2,
+          ),
         })
       },
     })
@@ -409,7 +417,7 @@ export const RememPlugin = Plugin.define({
           })
         }
       })
-      const toolRegistration = await registerTools(context, orchestrator, location)
+      const toolRegistration = await registerTools(context, orchestrator, location, capture)
       return async () => {
         await Promise.allSettled([
           contextRegistration?.dispose(),

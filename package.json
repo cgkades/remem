@@ -1,6 +1,6 @@
 {
   "name": "agentic-remem",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Local-first memory platform and orchestration for AI coding agents",
   "homepage": "https://github.com/cgkades/remem#readme",
   "repository": {

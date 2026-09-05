@@ -77,6 +77,22 @@ describe("DeterministicCandidateExtractor", () => {
     const labelledDecision = await extractor.extract([
       observation("Decision: use logical replication for Phoenix."),
     ])
+    const directRemember = await extractor.extract([
+      observation("Remember that Atlas uses PostgreSQL for durable memory."),
+    ])
+    const implicitDecision = await extractor.extract([
+      observation("Going forward, switch Atlas deployments to the staging bastion."),
+    ])
+    const projectFact = await extractor.extract([
+      observation("The release manifest is located in infra/release/manifest.yaml."),
+    ])
+    const projectState = await extractor.extract([observation("The migration task is complete.")])
+    const directPreference = await extractor.extract([
+      observation("Remember that I prefer PostgreSQL for durable memory."),
+    ])
+    const directDecision = await extractor.extract([
+      observation("Remember that we decided to use logical replication."),
+    ])
 
     expect(correction[0]).toMatchObject({ status: "pending", confidence: 0.95 })
     expect(correction[0]?.memory.provenance?.[0]?.source).toMatchObject({
@@ -85,6 +101,47 @@ describe("DeterministicCandidateExtractor", () => {
     })
     expect(decision[0]).toMatchObject({ status: "pending", memory: { type: "decision" } })
     expect(labelledDecision[0]).toMatchObject({ status: "pending", memory: { type: "decision" } })
+    expect(directRemember[0]).toMatchObject({
+      confidence: 0.98,
+      reasons: ["explicit remember request: durable project fact"],
+      memory: { type: "semantic" },
+    })
+    expect(directRemember[0]?.memory.title).toMatch(/^Project fact:/u)
+    expect(implicitDecision[0]).toMatchObject({ reasons: ["implicit decision"] })
+    expect(projectFact[0]).toMatchObject({
+      reasons: ["durable project fact"],
+      memory: { type: "semantic" },
+    })
+    expect(projectFact[0]?.memory.title).toMatch(/^Project fact:/u)
+    expect(projectState[0]).toMatchObject({
+      reasons: ["project state"],
+      memory: { type: "task" },
+    })
+    expect(projectState[0]?.memory.title).toMatch(/^Project task:/u)
+    expect(directPreference[0]).toMatchObject({
+      reasons: ["explicit remember request: durable preference"],
+      memory: { type: "preference" },
+    })
+    expect(directPreference[0]?.memory.title).toMatch(/^User preference:/u)
+    expect(directDecision[0]).toMatchObject({
+      reasons: ["explicit remember request: implicit decision"],
+      memory: { type: "decision" },
+    })
+    expect(directDecision[0]?.memory.title).toMatch(/^Explicit decision:/u)
+  })
+
+  it("allows a custom capture policy without making one mandatory", async () => {
+    const extractor = new DeterministicCandidateExtractor(config, {
+      classify: () => ({ kind: "task-resolved", confidence: 0.91, reason: "local policy" }),
+    })
+
+    const candidates = await extractor.extract([observation("A normally ignored statement.")])
+
+    expect(candidates[0]).toMatchObject({
+      confidence: 0.91,
+      reasons: ["local policy"],
+      memory: { type: "task" },
+    })
   })
 
   it("rejects chitchat, quoted/tool data, secrets, and oversized input", async () => {
@@ -153,6 +210,76 @@ describe("CaptureCoordinator", () => {
       payload: { host: "opencode-v2", messageId: "message" },
     })
     expect(store.persisted[0]?.candidate.status).toBe("pending")
+    expect(coordinator.explain("session")).toMatchObject({
+      outcome: "pending",
+      kind: "decision",
+      reason: "implicit decision",
+    })
+  })
+  it("reports why an ineligible statement was excluded", () => {
+    const coordinator = new CaptureCoordinator(new RecordingStore(), config, logger)
+
+    coordinator.enqueue(input("Can you explain database replication?"))
+
+    expect(coordinator.explain("session")).toEqual({
+      outcome: "excluded",
+      reason: "not a durable statement",
+    })
+  })
+
+  it("keeps the newest prompt explanation when earlier capture processing finishes", async () => {
+    let release: (() => void) | undefined
+    let markStarted: (() => void) | undefined
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    const delayed: ObservationStore = {
+      persistCandidate: () => {
+        markStarted?.()
+        return new Promise<void>((resolve) => {
+          release = resolve
+        })
+      },
+      candidateStatus: () =>
+        Promise.resolve({
+          pending: 0,
+          approved: 0,
+          consolidating: 0,
+          rejected: 0,
+          promoted: 0,
+          expired: 0,
+        }),
+    }
+    const coordinator = new CaptureCoordinator(delayed, config, logger)
+
+    coordinator.enqueue(input("Decision: process this first."))
+    await started
+    coordinator.enqueue(input("Can you explain database replication?"))
+    release?.()
+    await coordinator.idle()
+
+    expect(coordinator.explain("session")).toEqual({
+      outcome: "excluded",
+      reason: "not a durable statement",
+    })
+  })
+
+  it("bounds retained explanations across sessions", () => {
+    const coordinator = new CaptureCoordinator(new RecordingStore(), config, logger)
+
+    for (let index = 0; index <= 100; index++) {
+      coordinator.enqueue({
+        ...input("Thanks, that helps."),
+        sessionId: `session-${index}`,
+        messageId: `message-${index}`,
+      })
+    }
+
+    expect(coordinator.explain("session-0")).toEqual({ outcome: "idle" })
+    expect(coordinator.explain("session-100")).toEqual({
+      outcome: "excluded",
+      reason: "not a durable statement",
+    })
   })
 
   it("promotes screened captures without creating a review candidate in automatic mode", async () => {
