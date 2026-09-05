@@ -12,6 +12,9 @@ const RUNTIME_VERSION = "1.18.27"
 const SENTINEL = "REMEM_V1_E2E_PHOENIX_SENTINEL"
 const repository = fileURLToPath(new URL("..", import.meta.url))
 const opencode = process.env.OPENCODE_BIN ?? "opencode"
+const pluginSpec =
+  process.env.REMEM_E2E_PLUGIN_SPEC ??
+  pathToFileURL(path.join(repository, "dist", "server.js")).href
 
 function command(commandName, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -106,7 +109,7 @@ async function main() {
       JSON.stringify({
         plugin: [
           [
-            pathToFileURL(path.join(repository, "dist", "server.js")).href,
+            pluginSpec,
             {
               providers: [
                 {
@@ -140,8 +143,10 @@ async function main() {
       cwd: worktree,
       env: {
         ...process.env,
+        HOME: root,
         OPENCODE_CONFIG: path.join(configDirectory, "opencode.json"),
         PWD: worktree,
+        XDG_CACHE_HOME: path.join(root, "cache"),
         XDG_CONFIG_HOME: path.join(root, "config"),
       },
     })

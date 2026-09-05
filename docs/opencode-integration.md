@@ -196,6 +196,9 @@ runtime-tested against `v1.18.27`:
   dispatch (issue #9), since the suite's only prior PostgreSQL coverage was the fail-open path
   for an unreachable provider. Run it locally with `npm run test:opencode-v2`, or in a Linux
   container (native arm64 on Apple Silicon, no emulation needed — the beta runtime ships
-  `@opencode-ai/cli-linux-arm64`) with `npm run test:opencode-v2:docker`.
+  `@opencode-ai/cli-linux-arm64`) with `npm run test:opencode-v2:docker`. The beta pin is updated
+  deliberately only after local and CI validation; the test retries npm installation three times
+  with exponential backoff for transient registry failures, but a removed beta requires a new
+  validated pin.
 - Hook mismatches fail open and surface a diagnostic without memory content.
 - No adapter automatically reads or writes historical sessions.
