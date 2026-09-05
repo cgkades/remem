@@ -64,6 +64,19 @@ jobs:
             | sha256sum --check --status
           mkdir -p "$RUNNER_TEMP/opencode-v1"
           tar -xzf "$archive" -C "$RUNNER_TEMP/opencode-v1"
+      - name: Install verified OpenCode v1.18.29 runtime
+        run: |
+          archive="$RUNNER_TEMP/opencode-linux-x64-1.18.29.tar.gz"
+          curl --fail --location --silent --show-error \
+            https://github.com/anomalyco/opencode/releases/download/v1.18.29/opencode-linux-x64.tar.gz \
+            --output "$archive"
+          echo "ea800b7ff56226b70952126c9fc1e2517ca4c4b5682fd9d3f9e87449697a1194  $archive" \
+            | sha256sum --check --status
+          mkdir -p "$RUNNER_TEMP/opencode-v1-18-29"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/opencode-v1-18-29"
+      - run: npm run test:opencode-v1:1-18-29
+        env:
+          OPENCODE_BIN: ${{ runner.temp }}/opencode-v1-18-29/opencode
       - run: npm run test:opencode-v1
         env:
           OPENCODE_BIN: ${{ runner.temp }}/opencode-v1/opencode

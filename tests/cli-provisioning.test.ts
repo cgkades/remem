@@ -50,13 +50,29 @@ describe("CLI provisioning", () => {
     await configureOpenCode(configPath, "v1")
 
     const configured = parseJson(await readFile(configPath, "utf8"))
-    expect(configured).toEqual({ plugins: ["v2-plugin"], plugin: ["agentic-remem"] })
+    expect(configured).toMatchObject({ plugins: ["v2-plugin"] })
+    expect(configured).toHaveProperty("plugin", [
+      expect.stringMatching(/^file:.*\/dist\/server\.js$/u),
+    ])
     await expect(openCodeIntegrationCheck(configPath, "v1")).resolves.toMatchObject({
       status: "ok",
     })
     await expect(openCodeIntegrationCheck(configPath, "v2")).resolves.toMatchObject({
       status: "warn",
     })
+  })
+
+  it("migrates a legacy OpenCode v1 bare package entry to the server tuple", async () => {
+    const paths = await temporaryPaths()
+    const configPath = path.join(paths.configDir, "opencode.json")
+    await mkdir(paths.configDir, { recursive: true })
+    await writeFile(configPath, `${JSON.stringify({ plugin: ["agentic-remem"] })}\n`)
+
+    await configureOpenCode(configPath, "v1")
+
+    expect(parseJson(await readFile(configPath, "utf8"))).toHaveProperty("plugin", [
+      expect.stringMatching(/^file:.*\/dist\/server\.js$/u),
+    ])
   })
 
   it("configures and detects the OpenCode v2 package-root plugin entry", async () => {

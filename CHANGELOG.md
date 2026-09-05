@@ -9,6 +9,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `remem init --opencode-v1` now configures OpenCode with the installed package's v1 server file URL
+  instead of its npm package-loader path, avoiding an intermittent `plugin.initialization_failed`
+  `TypeError` observed in OpenCode 1.18.29. The v1 E2E suite now exercises 1.18.29 and fails if that
+  initialization error is emitted.
+
 - Published CLI entry points now preserve executable permissions, so `npm install -g agentic-remem`
   creates a runnable `remem` command on POSIX systems. `remem --help` and `remem -h` now work before
   initialization. Resolves [#70](https://github.com/cgkades/remem/issues/70).

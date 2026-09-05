@@ -101,7 +101,9 @@ export async function openCodeIntegrationCheck(
       Array.isArray(plugins) &&
       plugins.some(
         (plugin) =>
-          plugin === "agentic-remem" || (Array.isArray(plugin) && plugin[0] === "agentic-remem"),
+          plugin === "agentic-remem" ||
+          (typeof plugin === "string" && plugin.endsWith("/dist/server.js")) ||
+          (Array.isArray(plugin) && plugin[0] === "agentic-remem"),
       )
     return {
       name: "OpenCode integration",

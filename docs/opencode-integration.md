@@ -129,8 +129,9 @@ configure the file URL manually.
 
 The v1 adapter is isolated in `src/hosts/opencode/v1.ts` and depends on the aliased
 `@opencode-ai/plugin@1.18.26` declarations. It is runtime-tested against OpenCode `1.18.27`.
-OpenCode v1 resolves this package's `./server` export from the package-root specifier, so a published
-install uses the legacy singular key: `{ "plugin": ["agentic-remem"] }`. A source build can use
+OpenCode v1 loads the installed package's server entry through a file URL, avoiding its npm package
+loader's inconsistent initialization path. `remem init --opencode-v1` writes that file URL to the
+legacy singular `plugin` key. A source build can use
 `{ "plugin": ["file:///absolute/path/to/remem/dist/server.js"] }`. `remem init --opencode-v1`
 writes the package form; `remem init --opencode` remains the v2 setup command.
 
@@ -164,7 +165,8 @@ runtime-tested against `v1.18.27`:
 - Core orchestration imports no OpenCode types.
 - v2 beta and v1 release dependencies are pinned separately.
 - v2 is primary; v1 compatibility can be retired without changing the core.
-- The package declares Node.js `>=22` and OpenCode `>=1.18.26`; v1.18.27 is the tested v1 runtime.
+- The package declares Node.js `>=22` and OpenCode `>=1.18.26`; v1.18.27 and v1.18.29 are the
+  runtime-tested v1 releases.
 - CI exercises the package on Node.js 22 and 24 with PostgreSQL/pgvector integration tests.
 - A Linux Node.js 22 E2E job packages Remem, installs the pinned
   `@opencode-ai/cli@0.0.0-beta-18743` runtime, and drives its HTTP API against a local deterministic

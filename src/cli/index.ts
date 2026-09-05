@@ -3,6 +3,7 @@ import { constants } from "node:fs"
 import { access, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import net from "node:net"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { Pool } from "pg"
 import { parseConfig, type PostgresProviderConfig } from "../config.js"
 import {
@@ -173,8 +174,28 @@ export async function configureOpenCode(
   }
   const key = hostVersion === "v1" ? "plugin" : "plugins"
   const plugins: unknown[] = Array.isArray(value[key]) ? Array.from(value[key] as unknown[]) : []
-  if (!plugins.some((plugin) => plugin === "agentic-remem")) plugins.push("agentic-remem")
-  value[key] = plugins
+  if (hostVersion === "v1") {
+    // Bypass OpenCode's npm package loader, whose v1 path can initialize this
+    // package inconsistently. The installed package's server entry still has
+    // its own dependencies and works for both global and source installs.
+    const serverEntry = pathToFileURL(
+      path.join(packageRoot(import.meta.url), "dist", "server.js"),
+    ).href
+    value[key] = [
+      ...plugins.filter(
+        (plugin) =>
+          !(
+            plugin === "agentic-remem" ||
+            (typeof plugin === "string" && plugin.endsWith("/dist/server.js")) ||
+            (Array.isArray(plugin) && plugin[0] === "agentic-remem")
+          ),
+      ),
+      serverEntry,
+    ]
+  } else {
+    if (!plugins.some((plugin) => plugin === "agentic-remem")) plugins.push("agentic-remem")
+    value[key] = plugins
+  }
   const temporary = `${configPath}.${process.pid}.tmp`
   await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
   await rename(temporary, configPath)
@@ -271,10 +292,9 @@ async function initialize(
       existing = { ...existing, capture: { ...existing.capture, enabled: true } }
       await writeAppConfig(existing, paths)
     }
-    if (
-      requestedHost &&
-      (!existing.opencode?.configured || existing.opencode.hostVersion !== requestedHost)
-    ) {
+    if (requestedHost) {
+      // Reapply an explicitly requested host setup so upgrades can repair an
+      // existing OpenCode entry (including the legacy v1 bare-string form).
       const configPath = openCodeConfigPath()
       await configureOpenCode(configPath, requestedHost)
       existing = {

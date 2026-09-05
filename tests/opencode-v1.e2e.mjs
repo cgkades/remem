@@ -8,7 +8,7 @@ import path from "node:path"
 import process from "node:process"
 import { URL, fileURLToPath, pathToFileURL } from "node:url"
 
-const RUNTIME_VERSION = "1.18.27"
+const RUNTIME_VERSION = process.env.REMEM_E2E_OPENCODE_VERSION ?? "1.18.27"
 const SENTINEL = "REMEM_V1_E2E_PHOENIX_SENTINEL"
 const repository = fileURLToPath(new URL("..", import.meta.url))
 const opencode = process.env.OPENCODE_BIN ?? "opencode"
@@ -139,7 +139,7 @@ async function main() {
         model: "mock/mock-1",
       }),
     )
-    await command(opencode, ["run", "Let's continue the Phoenix database work."], {
+    const result = await command(opencode, ["run", "Let's continue the Phoenix database work."], {
       cwd: worktree,
       env: {
         ...process.env,
@@ -150,6 +150,11 @@ async function main() {
         XDG_CONFIG_HOME: path.join(root, "config"),
       },
     })
+    assert.doesNotMatch(
+      `${result.stdout}\n${result.stderr}`,
+      /\[remem\] plugin\.initialization_failed/u,
+      `OpenCode v${RUNTIME_VERSION} reported a Remem plugin initialization failure`,
+    )
   } finally {
     await new Promise((resolve) => model.close(resolve))
     await rm(root, { recursive: true, force: true })

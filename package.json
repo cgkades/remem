@@ -1,6 +1,6 @@
 {
   "name": "agentic-remem",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Local-first memory platform and orchestration for AI coding agents",
   "homepage": "https://github.com/cgkades/remem#readme",
   "repository": {
@@ -76,6 +76,7 @@
     "test:eval": "vitest run --config vitest.eval.config.ts",
     "test:replay": "node scripts/run-replay-tests.mjs",
     "test:opencode-v1": "npm run build && node tests/opencode-v1.e2e.mjs",
+    "test:opencode-v1:1-18-29": "npm run build && REMEM_E2E_OPENCODE_VERSION=1.18.29 node tests/opencode-v1.e2e.mjs",
     "test:opencode-v1:package": "npm run build && REMEM_E2E_PLUGIN_SPEC=agentic-remem node tests/opencode-v1.e2e.mjs",
     "test:opencode-v2": "node tests/opencode-v2.e2e.mjs",
     "test:opencode-v2:docker": "docker build -f docker/opencode-v2-e2e.Dockerfile -t remem-opencode-v2-e2e . && docker run --rm remem-opencode-v2-e2e",
