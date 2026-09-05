@@ -107,13 +107,21 @@ safely produce a real summary: no `ctx.model` configured, the summarizer call fa
 summarizer returns empty text. It never returns a Remem-only summary in place of the real one.
 
 The same safety rule applies to `/tree` branch navigation. When both `config.compaction` and
-`preparation.userWantsSummary` are true, the `session_before_tree` handler summarizes
-`preparation.entriesToSummarize` with the active model and appends bounded Remem continuity. Pi's
-`summary` result is likewise a full replacement for its default branch summary, so the handler
-returns `undefined` (and leaves Pi's default branch-summary flow intact) if there is no active
-model, summarization fails, or it produces empty text. It never provides continuity alone as a
-summary of the branch being abandoned. When the user declines branch summarization,
-`session_before_tree` is a no-op.
+`preparation.userWantsSummary` are true and there is at least one abandoned entry, the
+`session_before_tree` handler converts `preparation.entriesToSummarize` (Pi `SessionEntry[]`, not
+`AgentMessage[]`) into renderable messages -- conversation entries come from `entry.message`, and
+prior compaction/branch-summary entries contribute their `entry.summary` text -- bounded to the
+active model's context window (minus a fixed reserve, mirroring Pi's own branch-summary budgeting)
+so a long-lived branch cannot produce an unbounded request. It then summarizes that bounded
+conversation with the active model and appends bounded Remem continuity. `preparation
+.customInstructions`/`replaceInstructions` are honored the same way Pi's own branch summarizer
+honors them: replacing the default prompt when `replaceInstructions` is set, or appended as
+additional focus otherwise. Pi's `summary` result is likewise a full replacement for its default
+branch summary, so the handler returns `undefined` (and leaves Pi's default branch-summary flow
+intact) if there are no abandoned entries to summarize, there is no active model, the completion
+is aborted or reports `stopReason: "aborted"`/`"error"`, or it produces empty text. It never
+provides continuity alone as a summary of the branch being abandoned. When the user declines
+branch summarization, `session_before_tree` is a no-op.
 
 ## Host Location and `projectId` Derivation
 

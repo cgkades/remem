@@ -101,6 +101,39 @@ function renderMessagesForSummary(messages: readonly unknown[]): string {
     .join("\n")
 }
 
+/**
+ * Pi's tree hook supplies session entries, while compaction supplies agent
+ * messages. Keep the tree conversion local: Pi only exports its conversion
+ * helpers through its top-level runtime entry, which may load an undeclared
+ * server dependency in consumers (see `renderMessagesForSummary`).
+ */
+function branchMessagesForSummary(entries: readonly unknown[], tokenBudget: number): unknown[] {
+  const messages: unknown[] = []
+  let tokens = 0
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]
+    if (!entry || typeof entry !== "object" || !("type" in entry)) continue
+    const type = entry.type
+    const message =
+      type === "message" && "message" in entry
+        ? entry.message
+        : (type === "compaction" || type === "branch_summary") &&
+            "summary" in entry &&
+            typeof entry.summary === "string"
+          ? { role: "summary", content: entry.summary }
+          : undefined
+    if (!message) continue
+    // Pi's own branch preparation retains the newest messages that fit its
+    // context budget. This conservative estimate avoids an unbounded request
+    // without importing Pi's runtime-only token helpers.
+    const estimatedTokens = Math.ceil(JSON.stringify(message).length / 4)
+    if (tokens + estimatedTokens > tokenBudget) break
+    messages.unshift(message)
+    tokens += estimatedTokens
+  }
+  return messages
+}
+
 function piLogger(): RememLogger {
   return {
     log(level, event, data) {
@@ -360,14 +393,33 @@ export default function remem(pi: ExtensionAPI): void {
   pi.on("session_before_tree", async (event, ctx) => {
     if (!state || !state.config.compaction || !event.preparation.userWantsSummary) return
     const { preparation, signal } = event
+    if (preparation.entriesToSummarize.length === 0) return
     const model = ctx.model
     // Pi's `summary` return value fully replaces its branch summary. Do not
     // replace abandoned-branch history with Remem-only continuity: if no real
     // summary can be made, return undefined and let Pi use its default flow.
     if (!model) return undefined
     try {
-      const conversationText = renderMessagesForSummary(preparation.entriesToSummarize)
+      const messages = branchMessagesForSummary(
+        preparation.entriesToSummarize,
+        Math.max(0, model.contextWindow - 16_384),
+      )
+      if (messages.length === 0) return undefined
+      const conversationText = renderMessagesForSummary(messages)
       const continuity = await state.orchestrator.compactionContext(contextFor(state, ctx))
+      if (signal.aborted) return undefined
+      const customInstructions = preparation.customInstructions
+      const instructions =
+        preparation.replaceInstructions && customInstructions
+          ? customInstructions
+          : [
+              "You are a conversation summarizer. Create a comprehensive summary of this",
+              "abandoned conversation branch that captures goals, decisions, technical",
+              "details, current state, blockers, and next steps. Format as structured",
+              "markdown. This summary provides the context from the branch being left, so",
+              "include everything needed to continue or revisit that work.",
+              customInstructions ? `\nAdditional focus: ${customInstructions}` : "",
+            ].join("\n")
       const response = await ctx.modelRegistry.complete(
         model,
         {
@@ -378,11 +430,7 @@ export default function remem(pi: ExtensionAPI): void {
                 {
                   type: "text",
                   text: [
-                    "You are a conversation summarizer. Create a comprehensive summary of this",
-                    "abandoned conversation branch that captures goals, decisions, technical",
-                    "details, current state, blockers, and next steps. Format as structured",
-                    "markdown. This summary provides the context from the branch being left, so",
-                    "include everything needed to continue or revisit that work.",
+                    instructions,
                     "",
                     "<conversation>",
                     conversationText,
@@ -401,6 +449,9 @@ export default function remem(pi: ExtensionAPI): void {
         .map((part) => part.text)
         .join("\n")
         .trim()
+      if (signal.aborted || response.stopReason === "aborted" || response.stopReason === "error") {
+        return undefined
+      }
       if (!summaryText) return undefined
       return {
         summary: {
