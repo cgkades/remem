@@ -164,15 +164,20 @@ The v1 compatibility contract is pinned to the official OpenCode `v1.18.26` rele
   `@opencode-ai/cli@0.0.0-beta-18743` runtime, and drives its HTTP API against a local deterministic
   OpenAI-compatible mock. It verifies plugin loading, dispatch injection, tool-loop continuity,
   transcript isolation, unrelated-prompt isolation, and fail-open behavior with an unavailable
-  PostgreSQL provider. The mock also matches several real provider behaviors that earlier revisions
-  glossed over (issue #8): it streams tool-call `function.arguments` as incremental deltas across
-  multiple SSE chunks rather than one complete blob, it emits a final usage-only SSE frame when a
-  request opts into `stream_options.include_usage` (only after a `stop` finish — empirically, the
-  live runtime mishandles that frame immediately following a `tool_calls` finish), it returns a
-  simulated non-2xx provider error for a dedicated prompt and the suite confirms the failure
-  surfaces as the assistant message's terminal `error` field, and it records each request's
-  `Authorization` header so the suite can confirm the configured provider credential
-  (`REMEM_E2E_MOCK_KEY`) actually reaches the provider as a `Bearer` token. When
+  PostgreSQL provider. The mock also closes several mock-fidelity gaps that earlier revisions left
+  untested (issue #8): it streams tool-call `function.arguments` as incremental deltas across
+  multiple SSE chunks rather than one complete blob, and it emits a final usage-only SSE frame when
+  a request opts into `stream_options.include_usage` (only after a `stop` finish — empirically, the
+  live runtime mishandles that frame immediately following a `tool_calls` finish) — the suite
+  confirms the client actually surfaces those usage numbers as message token counts, not merely
+  that it tolerates the frame. It returns a simulated non-2xx provider error for a dedicated prompt;
+  the response is shaped as an SSE error frame over `text/event-stream` specifically because a
+  plain `application/json` error body (closer to what many real OpenAI-compatible providers send)
+  made the live client hang instead of surfacing an error, and the suite confirms the failure
+  surfaces (asynchronously) as the assistant message's terminal `error` field. It also records each
+  request's `Authorization` header so the suite can confirm the configured provider credential
+  (`REMEM_E2E_MOCK_KEY`) actually reaches the provider as a `Bearer` token, across every scenario's
+  dispatches. When
   `REMEM_TEST_DATABASE_URL` is set (CI always sets it; local runs can
   point it at `npm run test:postgres:up`'s instance), it also settles two open questions
   empirically against a real, reachable PostgreSQL provider rather than the forced-outage

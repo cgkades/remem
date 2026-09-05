@@ -215,12 +215,19 @@ async function handleModelRequest(incoming, response, state) {
   const body = JSON.parse(Buffer.concat(chunks).toString("utf8"))
   // Issue #8: exercise the dispatch/tool-loop's error-handling path against
   // a real non-2xx provider response, not just the success path -- this
-  // mock previously always returned 200.
-  if (
-    body.messages.some(
-      (message) => typeof message.content === "string" && message.content.includes(ERROR_PROMPT),
-    )
-  ) {
+  // mock previously always returned 200. Matches the content-shape-agnostic
+  // form the isRelated check below uses (JSON.stringify over the whole
+  // messages array), not a typeof-guarded single-message check: if the
+  // runtime ever sends structured/multimodal content instead of a bare
+  // string, a stricter guard here would silently fall through to the 200
+  // success path instead of triggering the error scenario.
+  if (JSON.stringify(body.messages).includes(ERROR_PROMPT)) {
+    // A plain application/json error body (what many real OpenAI-compatible
+    // providers return on a non-2xx) was tried first and made the real
+    // opencode2 client hang indefinitely instead of surfacing an error --
+    // this text/event-stream + SSE error frame shape is what the live
+    // client actually requires to fail the turn instead of stalling, not a
+    // claim about what real providers typically send.
     response.writeHead(500, { "content-type": "text/event-stream" })
     sse(response, {
       error: { message: "simulated provider outage (issue #8 E2E fixture)", type: "server_error" },
@@ -729,21 +736,6 @@ async function main() {
         `related model dispatch did not receive injected Remem memory\n${JSON.stringify(relatedRequests)}\n${opencode.output()}`,
       )
     }
-    // Issue #8: confirm the configured provider credential (REMEM_E2E_MOCK_KEY,
-    // set via the "mock" provider's env option) actually reaches the mock as
-    // an Authorization header, rather than only being present in the plugin
-    // config that OpenCode never forwards. Verified against the real
-    // opencode2 runtime: it sends this as a "Bearer <key>" header.
-    if (model.authorizationHeaders.length === 0) {
-      throw new Error("the mock model never received any requests to check for an auth header")
-    }
-    const expectedAuthorizationHeader = `Bearer ${MOCK_PROVIDER_CREDENTIAL}`
-    if (!model.authorizationHeaders.every((header) => header === expectedAuthorizationHeader)) {
-      throw new Error(
-        `expected every mock model request to carry the configured credential: ` +
-          `${JSON.stringify(model.authorizationHeaders.map((header) => header ?? "<missing>"))}`,
-      )
-    }
     for (const step of TOOL_CALL_STEPS) {
       if (
         !relatedRequests.some((body) =>
@@ -761,6 +753,17 @@ async function main() {
     )
     if (!JSON.stringify(relatedMessages).includes("native tool loop fixture")) {
       throw new Error("native tool loop did not execute successfully")
+    }
+    // Issue #8: the usage frame is fidelity, not just tolerance -- confirm the
+    // client actually consumes and surfaces the mock's usage numbers on the
+    // terminal "stop" message, not merely that sending the frame doesn't
+    // crash the turn.
+    const stoppedMessage = relatedMessages.data?.find((message) => message.finish === "stop")
+    if (stoppedMessage?.tokens?.input !== 42 || stoppedMessage?.tokens?.output !== 7) {
+      throw new Error(
+        `expected the client to surface the mock's stream_options.include_usage frame as ` +
+          `message token counts: ${JSON.stringify(stoppedMessage)}`,
+      )
     }
     for (const step of TOOL_CALL_STEPS.slice(1)) {
       const call = toolCall(relatedMessages, step.id)
@@ -961,6 +964,25 @@ async function main() {
         "REMEM_TEST_DATABASE_URL not set; skipping the independent-hook-registration " +
           'scenario (issue #13) -- both the capture and re-embed "prompt" hooks require a ' +
           "real, reachable PostgreSQL provider to produce an observable effect.\n",
+      )
+    }
+
+    // Issue #8: confirm the configured provider credential (REMEM_E2E_MOCK_KEY,
+    // set via the "mock" provider's env option) actually reaches the mock as
+    // an Authorization header, rather than only being present in the plugin
+    // config that OpenCode never forwards. Verified against the real
+    // opencode2 runtime: it sends this as a "Bearer <key>" header. Checked
+    // here, after every scenario above has run, so it covers every dispatch
+    // path (related, unrelated, outage, error, and -- when exercised --
+    // hooks/retrieval) rather than only the first session's requests.
+    if (model.authorizationHeaders.length === 0) {
+      throw new Error("the mock model never received any requests to check for an auth header")
+    }
+    const expectedAuthorizationHeader = `Bearer ${MOCK_PROVIDER_CREDENTIAL}`
+    if (!model.authorizationHeaders.every((header) => header === expectedAuthorizationHeader)) {
+      throw new Error(
+        `expected every mock model request to carry the configured credential: ` +
+          `${JSON.stringify(model.authorizationHeaders.map((header) => header ?? "<missing>"))}`,
       )
     }
 
