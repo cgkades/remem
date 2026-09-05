@@ -11,6 +11,7 @@ import type { MemoryContext, RememLogger } from "../src/types.js"
 
 const config: CaptureConfig = {
   enabled: true,
+  autoPromote: false,
   queueLimit: 2,
   maxInputCharacters: 200,
   maxCandidateCharacters: 120,
@@ -152,6 +153,27 @@ describe("CaptureCoordinator", () => {
       payload: { host: "opencode-v2", messageId: "message" },
     })
     expect(store.persisted[0]?.candidate.status).toBe("pending")
+  })
+
+  it("promotes screened captures without creating a review candidate in automatic mode", async () => {
+    const store = new RecordingStore()
+    const promoted: CandidateMemory[] = []
+    const coordinator = new CaptureCoordinator(
+      store,
+      { ...config, autoPromote: true },
+      logger,
+      (candidate) => {
+        promoted.push(candidate)
+        return Promise.resolve()
+      },
+    )
+
+    coordinator.enqueue(input("We decided to use automatic capture for Phoenix."))
+    await coordinator.idle()
+
+    expect(promoted).toHaveLength(1)
+    expect(promoted[0]?.status).toBe("approved")
+    expect(store.persisted).toHaveLength(0)
   })
 
   it("contains persistence failures so prompt capture remains fail-open", async () => {

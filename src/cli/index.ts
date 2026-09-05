@@ -3,6 +3,7 @@ import { constants } from "node:fs"
 import { access, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import net from "node:net"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { Pool } from "pg"
 import { parseConfig, type PostgresProviderConfig } from "../config.js"
 import {
@@ -173,8 +174,28 @@ export async function configureOpenCode(
   }
   const key = hostVersion === "v1" ? "plugin" : "plugins"
   const plugins: unknown[] = Array.isArray(value[key]) ? Array.from(value[key] as unknown[]) : []
-  if (!plugins.some((plugin) => plugin === "agentic-remem")) plugins.push("agentic-remem")
-  value[key] = plugins
+  if (hostVersion === "v1") {
+    // Bypass OpenCode's npm package loader, whose v1 path can initialize this
+    // package inconsistently. The installed package's server entry still has
+    // its own dependencies and works for both global and source installs.
+    const serverEntry = pathToFileURL(
+      path.join(packageRoot(import.meta.url), "dist", "server.js"),
+    ).href
+    value[key] = [
+      ...plugins.filter(
+        (plugin) =>
+          !(
+            plugin === "agentic-remem" ||
+            plugin === serverEntry ||
+            (Array.isArray(plugin) && plugin[0] === "agentic-remem")
+          ),
+      ),
+      serverEntry,
+    ]
+  } else {
+    if (!plugins.some((plugin) => plugin === "agentic-remem")) plugins.push("agentic-remem")
+    value[key] = plugins
+  }
   const temporary = `${configPath}.${process.pid}.tmp`
   await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 })
   await rename(temporary, configPath)
@@ -214,6 +235,7 @@ export async function configurePi(settingsPath: string): Promise<void> {
 function appConfig(
   storage: RememAppConfig["storage"],
   capture: boolean,
+  autoPromote: boolean,
   opencode?: RememAppConfig["opencode"],
   pi?: RememAppConfig["pi"],
 ): RememAppConfig {
@@ -231,7 +253,7 @@ function appConfig(
       },
     ],
     embedding: { provider: "neural", model: "bge-small-en-v1.5", dimensions: 384 },
-    capture: { enabled: capture },
+    capture: { enabled: capture, autoPromote },
     ...(opencode ? { opencode } : {}),
     ...(pi ? { pi } : {}),
   }
@@ -267,14 +289,24 @@ async function initialize(
   try {
     let existing = await readAppConfig(paths)
     output(`Remem is already initialized in ${paths.configDir}.`)
-    if (hasFlag(parsed, "capture") && existing.capture?.enabled !== true) {
-      existing = { ...existing, capture: { ...existing.capture, enabled: true } }
+    if (
+      (hasFlag(parsed, "capture") || requestedHost === "v1") &&
+      (existing.capture?.enabled !== true ||
+        (requestedHost === "v1" && existing.capture?.autoPromote !== true))
+    ) {
+      existing = {
+        ...existing,
+        capture: {
+          ...existing.capture,
+          enabled: true,
+          ...(requestedHost === "v1" ? { autoPromote: true } : {}),
+        },
+      }
       await writeAppConfig(existing, paths)
     }
-    if (
-      requestedHost &&
-      (!existing.opencode?.configured || existing.opencode.hostVersion !== requestedHost)
-    ) {
+    if (requestedHost) {
+      // Reapply an explicitly requested host setup so upgrades can repair an
+      // existing OpenCode entry (including the legacy v1 bare-string form).
       const configPath = openCodeConfigPath()
       await configureOpenCode(configPath, requestedHost)
       existing = {
@@ -313,7 +345,8 @@ async function initialize(
     }
     config = appConfig(
       { mode: "external", connectionString },
-      hasFlag(parsed, "capture"),
+      hasFlag(parsed, "capture") || requestedHost === "v1",
+      requestedHost === "v1",
       configureHost
         ? { configured: true, hostVersion: requestedHost, configPath: opencodePath }
         : undefined,
@@ -340,7 +373,8 @@ async function initialize(
     }
     config = appConfig(
       storage,
-      hasFlag(parsed, "capture"),
+      hasFlag(parsed, "capture") || requestedHost === "v1",
+      requestedHost === "v1",
       configureHost
         ? { configured: true, hostVersion: requestedHost, configPath: opencodePath }
         : undefined,
@@ -534,6 +568,7 @@ function usage(): string {
 
 Commands:
   init [--mode managed|external] [--database-url URL] [--opencode|--opencode-v1] [--pi] [--capture]
+    --opencode-v1 enables automatic capture and promotion; --capture enables review-based capture
   start | stop | status | doctor | migrate
   candidates [--status STATUS]
   review <CANDIDATE_ID> --approve|--reject

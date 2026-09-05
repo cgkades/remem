@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
+import { DeterministicConsolidationPipeline } from "./consolidation.js"
 import type { CaptureConfig, RememConfig } from "./config.js"
 import type {
   CandidateExtractor,
@@ -137,6 +138,7 @@ export class CaptureCoordinator {
     private readonly store: ObservationStore,
     private readonly config: CaptureConfig,
     private readonly logger: RememLogger,
+    private readonly promote?: (candidate: CandidateMemory, signal: AbortSignal) => Promise<void>,
   ) {
     this.extractor = new DeterministicCandidateExtractor(config)
   }
@@ -198,6 +200,16 @@ export class CaptureCoordinator {
             this.shutdown.signal,
           )
           for (const candidate of candidates) {
+            const promote = this.promote
+            if (this.config.autoPromote && promote) {
+              const approved = { ...candidate, status: "approved" as const }
+              await withTimeout(
+                this.config.timeoutMs,
+                (signal) => promote(approved, signal),
+                this.shutdown.signal,
+              )
+              continue
+            }
             await withTimeout(
               this.config.timeoutMs,
               (signal) =>
@@ -232,7 +244,13 @@ export function createCaptureCoordinator(
     (provider) => provider.type === "postgres" && provider.primary,
   )
   const provider = primary && providers.find((candidate) => candidate.id === primary.id)
-  return provider && isObservationStore(provider)
-    ? new CaptureCoordinator(provider, config.capture, logger)
+  if (!provider || !isObservationStore(provider)) return undefined
+  const pipeline = config.capture.autoPromote
+    ? new DeterministicConsolidationPipeline(provider, { batchSize: 1 })
     : undefined
+  return new CaptureCoordinator(provider, config.capture, logger, async (candidate, signal) => {
+    if (!pipeline) return
+    const [result] = await pipeline.consolidate([candidate], signal)
+    if (result?.status !== "promoted") throw new Error("automatic capture was not promoted")
+  })
 }

@@ -85,15 +85,18 @@ and generated Compose files with mode `0600`, and creates config/data/backup dir
 
 ## Session Capture
 
-Capture is disabled by default. Enable it on first setup with `remem init --capture`, enable it for
-an existing setup by rerunning that command, or set `capture.enabled` to `true` in application or
-inline plugin configuration. A partial inline `capture` configuration overrides only the supplied
-capture fields and retains the installed provider configuration when inline `providers` are omitted.
+Capture is disabled by default. `remem init --opencode-v1` enables it and automatically promotes
+screened explicit user decisions, preferences, and corrections; rerun that command on an existing
+setup to enable the same behavior. Use `remem init --capture` or set `capture.enabled` to `true` for
+review-based capture, which leaves candidates pending. A partial inline `capture` configuration
+overrides only the supplied capture fields and retains the installed provider configuration when inline
+`providers` are omitted.
 
 ```json
 {
   "capture": {
     "enabled": true,
+    "autoPromote": true,
     "queueLimit": 32,
     "maxInputCharacters": 2000,
     "maxCandidateCharacters": 1500,
@@ -104,9 +107,10 @@ capture fields and retains the installed provider configuration when inline `pro
 
 Only explicit user corrections, decisions, and preferences qualify. Prompts containing reusable
 credentials, reported quoted/retrieved text, or tool output are excluded. Capture never reads model or tool
-responses. It creates pending candidates only; inspect them with `remem candidates`, approve or
-reject each with `remem review <ID> --approve|--reject`, and promote approved candidates with
-`remem consolidate`.
+responses. With `autoPromote: true`, screened statements are immediately consolidated into durable
+memory using the same duplicate/conflict handling as the manual flow. With the default `false`, capture
+creates pending candidates; inspect them with `remem candidates`, approve or reject each with
+`remem review <ID> --approve|--reject`, and promote approved candidates with `remem consolidate`.
 
 ## OpenCode v2 Plugin Options
 

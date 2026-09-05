@@ -14,6 +14,17 @@ describe("parseConfig", () => {
     })
     expect(parsed.config.debug).toBe(false)
     expect(parsed.config.capture.enabled).toBe(false)
+    expect(parsed.config.capture.autoPromote).toBe(false)
+  })
+
+  it("enables automatic promotion only when explicitly configured", () => {
+    expect(
+      parseConfig({ capture: { enabled: true, autoPromote: true } }).config.capture,
+    ).toMatchObject({
+      enabled: true,
+      autoPromote: true,
+    })
+    expect(parseConfig({ capture: { enabled: true } }).config.capture.autoPromote).toBe(false)
   })
 
   it("disables unsupported providers without rejecting the plugin configuration", () => {
