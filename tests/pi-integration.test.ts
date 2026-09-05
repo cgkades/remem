@@ -6,7 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { configurePi } from "../src/cli/index.js"
 import { piIntegrationCheck } from "../src/cli/doctor.js"
-import remem, { isCaptureEligibleInputSource } from "../src/hosts/pi/index.js"
+import remem, { isCaptureEligibleInputSource, raceAbort } from "../src/hosts/pi/index.js"
 import { deriveHostLocation } from "../src/hosts/pi/location.js"
 import { writeAppConfig, type RememAppConfig } from "../src/storage/config-file.js"
 import { packageRoot, piSettingsPath, rememPaths } from "../src/storage/paths.js"
@@ -475,6 +475,32 @@ describe("Pi host extension", () => {
     expect(complete).not.toHaveBeenCalled()
 
     await pi.fire("session_shutdown", { type: "session_shutdown", reason: "quit" }, ctx)
+  })
+
+  it("raceAbort never produces an unhandled rejection when the input promise is already aborted and later rejects", async () => {
+    const rejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => rejections.push(reason)
+    process.on("unhandledRejection", onUnhandledRejection)
+    try {
+      const controller2 = new AbortController()
+      controller2.abort()
+      let reject!: (reason?: unknown) => void
+      const promise = new Promise<string>((_resolve, rej) => {
+        reject = rej
+      })
+
+      const result = raceAbort(promise, controller2.signal)
+      reject(new Error("simulated compactionContext failure"))
+      await expect(result).resolves.toBeUndefined()
+
+      // Flush enough of the event loop for Node to have raised
+      // unhandledRejection if `promise`'s rejection went unconsumed.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await new Promise((resolve) => setImmediate(resolve))
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection)
+    }
+    expect(rejections).toEqual([])
   })
 
   it("falls back to Pi's default branch summary when the summarizer call fails", async () => {

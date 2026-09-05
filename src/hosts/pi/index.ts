@@ -116,6 +116,12 @@ const BRANCH_SUMMARY_RESERVE_TOKENS = 16_384
  * messages. Keep the tree conversion local: Pi only exports its conversion
  * helpers through its top-level runtime entry, which may load an undeclared
  * server dependency in consumers (see `renderMessagesForSummary`).
+ *
+ * The returned objects are intentionally not real Pi/LLM messages -- their
+ * `role` values (`"summary"`, `"custom:<customType>"`) are synthetic labels
+ * meaningful only to `renderMessagesForSummary`, the sole consumer of this
+ * function's output. Do not reuse these objects anywhere a real message role
+ * union is expected (e.g. constructing an actual model-facing message).
  */
 function branchMessagesForSummary(entries: readonly unknown[], tokenBudget: number): unknown[] {
   const messages: unknown[] = []
@@ -164,8 +170,14 @@ function branchMessagesForSummary(entries: readonly unknown[], tokenBudget: numb
  * caller from waiting on and acting on a result that arrives after the
  * caller no longer wants it.
  */
-function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
-  if (signal.aborted) return Promise.resolve(undefined)
+export function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
+  if (signal.aborted) {
+    // Still consume `promise`'s eventual settlement so a later rejection
+    // (e.g. a memory-provider lookup failure) never surfaces as an
+    // unhandled promise rejection just because nothing else is awaiting it.
+    promise.catch(() => {})
+    return Promise.resolve(undefined)
+  }
   return new Promise((resolve, reject) => {
     const onAbort = () => resolve(undefined)
     signal.addEventListener("abort", onAbort, { once: true })
@@ -176,7 +188,11 @@ function raceAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T | und
       },
       (error: unknown) => {
         signal.removeEventListener("abort", onAbort)
-        reject(error instanceof Error ? error : new Error(String(error)))
+        reject(
+          error instanceof Error
+            ? error
+            : new Error("raceAbort: non-Error rejection", { cause: error }),
+        )
       },
     )
   })
