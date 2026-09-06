@@ -75,6 +75,9 @@ Users can speak naturally: say **“remember that …”**, **“save this …�
 **“keep this in mind …”** to submit a durable statement to the configured
 capture pipeline. Capture remains subject to the configured review or
 promotion policy and never bypasses credential and untrusted-content filters.
+After a verified successful investigation, hosts may also submit a compact
+resolved-task episode (`enqueueResolvedTask`) so Remem can store a reusable
+procedure without persisting transcripts or failed attempts.
 
 For a stored item that automatic recall did not surface, ask **“search memory
 for …”** or **“what do you remember about …”**; OpenCode can call
