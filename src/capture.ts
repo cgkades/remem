@@ -12,13 +12,12 @@ import { isObservationStore } from "./observation.js"
 import {
   extractProcedureCandidate,
   observationFromResolvedTask,
+  PROCEDURE_CONFIDENCE,
   type ResolvedTaskEpisode,
 } from "./procedure.js"
 import { containsSensitiveCredential } from "./sensitive-data.js"
 import { withTimeout } from "./timeout.js"
 import type { MemoryContext, MemoryProvider, RememLogger } from "./types.js"
-
-export type { ResolvedTaskEpisode, ResolvedTaskStep } from "./procedure.js"
 
 export interface UserPromptCapture {
   host: "opencode-v1" | "opencode-v2" | "pi"
@@ -290,7 +289,7 @@ export class CaptureCoordinator {
     this.recordExplanation(episode.sessionId, {
       outcome: "pending",
       kind: "task-resolved",
-      confidence: 0.82,
+      confidence: PROCEDURE_CONFIDENCE,
       reason: "verified successful investigation",
     })
     if (!this.drainPromise) this.drainPromise = this.drain()

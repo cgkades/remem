@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { CaptureCoordinator, type ResolvedTaskEpisode } from "../src/capture.js"
+import { CaptureCoordinator } from "../src/capture.js"
 import type { CaptureConfig } from "../src/config.js"
-import { extractProcedureCandidate, observationFromResolvedTask } from "../src/procedure.js"
+import {
+  extractProcedureCandidate,
+  observationFromResolvedTask,
+  type ResolvedTaskEpisode,
+} from "../src/procedure.js"
 import type { CandidateMemory, ObservationStore, SessionObservation } from "../src/observation.js"
 import type { RememLogger } from "../src/types.js"
 

@@ -27,6 +27,7 @@ export interface ResolvedTaskEpisode {
 
 const MAX_STEPS = 8
 const MAX_FIELD = 200
+export const PROCEDURE_CONFIDENCE = 0.82
 
 function stableId(...values: string[]): string {
   const digest = createHash("sha256").update(values.join("\u0000")).digest("hex")
@@ -82,6 +83,7 @@ function compactLines(episode: ResolvedTaskEpisode): string[] | undefined {
     ),
   ]
   if (paths.length === 0 && !(errors.length > 0 && commands.length > 0)) return undefined
+  // Prefer the first discovered workspace path; otherwise the last successful command.
   const method = paths[0] ?? commands.at(-1)
   const lines = [
     `Goal: ${goal}`,
@@ -152,7 +154,7 @@ export function extractProcedureCandidate(
       summary: content.slice(0, 320),
       scope: { kind: "project", id: observation.context.projectId },
       type: "procedure",
-      confidence: 0.82,
+      confidence: PROCEDURE_CONFIDENCE,
       provenance: [
         {
           source: {
@@ -179,7 +181,7 @@ export function extractProcedureCandidate(
         },
       },
     },
-    confidence: 0.82,
+    confidence: PROCEDURE_CONFIDENCE,
     status: "pending",
     reasons: ["verified successful investigation"],
   }
