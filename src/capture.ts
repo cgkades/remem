@@ -9,6 +9,12 @@ import type {
   SessionObservation,
 } from "./observation.js"
 import { isObservationStore } from "./observation.js"
+import {
+  extractProcedureCandidate,
+  observationFromResolvedTask,
+  PROCEDURE_CONFIDENCE,
+  type ResolvedTaskEpisode,
+} from "./procedure.js"
 import { containsSensitiveCredential } from "./sensitive-data.js"
 import { withTimeout } from "./timeout.js"
 import type { MemoryContext, MemoryProvider, RememLogger } from "./types.js"
@@ -140,11 +146,12 @@ export class DeterministicCandidateExtractor implements CandidateExtractor {
 
   extract(observations: SessionObservation[], _signal?: AbortSignal): Promise<CandidateMemory[]> {
     const observation = observations[0]
-    const text =
-      typeof observation?.payload.text === "string" ? observation.payload.text.trim() : ""
+    if (!observation) return Promise.resolve([])
+    const procedure = extractProcedureCandidate(observation, this.config)
+    if (procedure) return Promise.resolve([procedure])
+    const text = typeof observation.payload.text === "string" ? observation.payload.text.trim() : ""
     const classification = this.policy.classify(text)
-    if (!observation || !safeToCapture(text, this.config) || !classification)
-      return Promise.resolve([])
+    if (!safeToCapture(text, this.config) || !classification) return Promise.resolve([])
     const messageId =
       typeof observation.payload.messageId === "string"
         ? observation.payload.messageId
@@ -244,6 +251,57 @@ export class CaptureCoordinator {
     if (!sessionId || this.activeCaptureIds.get(sessionId) !== observation.id) return
     this.activeCaptureIds.delete(sessionId)
     if (explanation) this.recordExplanation(sessionId, explanation)
+  }
+
+  enqueueResolvedTask(episode: ResolvedTaskEpisode): void {
+    if (this.closed) return
+    if (episode.outcome !== "succeeded") {
+      this.activeCaptureIds.delete(episode.sessionId)
+      this.recordExplanation(episode.sessionId, {
+        outcome: "excluded",
+        kind: "task-resolved",
+        reason: "investigation was not a verified success",
+      })
+      return
+    }
+    const observation = observationFromResolvedTask(episode)
+    if (!observation) {
+      this.activeCaptureIds.delete(episode.sessionId)
+      this.recordExplanation(episode.sessionId, {
+        outcome: "excluded",
+        kind: "task-resolved",
+        reason: "investigation lacked verified path or error-fix evidence",
+      })
+      return
+    }
+    if (!extractProcedureCandidate(observation, this.config)) {
+      this.activeCaptureIds.delete(episode.sessionId)
+      this.recordExplanation(episode.sessionId, {
+        outcome: "excluded",
+        kind: "task-resolved",
+        reason: "capture safety policy excluded the procedure",
+      })
+      return
+    }
+    if (this.queue.length >= this.config.queueLimit) {
+      logFailure(this.logger, "capture.dropped", { reason: "queue_full" })
+      this.activeCaptureIds.delete(episode.sessionId)
+      this.recordExplanation(episode.sessionId, {
+        outcome: "failed",
+        kind: "task-resolved",
+        reason: "capture queue is full",
+      })
+      return
+    }
+    this.activeCaptureIds.set(episode.sessionId, observation.id)
+    this.queue.push(observation)
+    this.recordExplanation(episode.sessionId, {
+      outcome: "pending",
+      kind: "task-resolved",
+      confidence: PROCEDURE_CONFIDENCE,
+      reason: "verified successful investigation",
+    })
+    if (!this.drainPromise) this.drainPromise = this.drain()
   }
 
   enqueue(input: UserPromptCapture): void {

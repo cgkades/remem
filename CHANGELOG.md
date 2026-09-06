@@ -20,6 +20,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Hosts can submit a normalized resolved-task episode after a verified success; Remem records one bounded `procedure` with session provenance, redaction, and no raw transcript. Failed or unverified investigations are dropped. Resolves [#75](https://github.com/cgkades/remem/issues/75).
+
 - OpenCode `memory_search`, `memory_status`, and `memory_explain` now describe natural-language save/search/explain workflows, and `memory_explain` returns a bounded, redacted miss diagnosis (no matching memory, scope mismatch, capture exclusion, or ranking). Resolves [#76](https://github.com/cgkades/remem/issues/76).
 
 - Natural-language capture recognizes direct `remember`/`keep in mind`/`note`/`save`/`store` requests,

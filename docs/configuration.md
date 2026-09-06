@@ -109,7 +109,10 @@ Only screened user-authored durable statements qualify. Direct requests such as 
 Atlas uses PostgreSQL`, plus ordinary decisions, preferences, corrections, project facts, and task
 state can be captured without a special trigger phrase. Questions, chitchat, prompts containing reusable
 credentials, reported quoted/retrieved text, or tool output are excluded. Capture never reads model or tool
-responses. With `autoPromote: true`, screened statements are immediately consolidated into durable
+responses as user assertions. Hosts may also submit a normalized resolved-task episode after a
+_verified_ success; that path records a bounded `procedure` with session provenance, not a user
+assertion, and still redacts credentials. Failed or unverified investigations are dropped. With
+`autoPromote: true`, screened statements are immediately consolidated into durable
 memory using the same duplicate/conflict handling as the manual flow. With the default `false`, capture
 creates pending candidates; inspect them with `remem candidates`, approve or reject each with
 `remem review <ID> --approve|--reject`, and promote approved candidates with `remem consolidate`.

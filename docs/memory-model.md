@@ -157,8 +157,10 @@ The current database schema is version 4:
 - version 4 adds the `consolidating` candidate status used for restart-safe review and consolidation.
 
 Version 2 tables support an opt-in, reviewable observation pipeline. Automatic capture persists only
-eligible explicit user statements as pending candidates; it never captures model/tool output and strips
-raw candidate text from observation payloads. Migration mechanics are documented in
+eligible explicit user statements as pending candidates, or a bounded agent-derived `procedure` after
+a verified successful investigation. It never persists raw transcripts. User assertions use `user`
+provenance; learned procedures use `session` provenance with `origin: agent-investigation`. Failed,
+abandoned, or secret-bearing investigations are dropped. Migration mechanics are documented in
 [Storage architecture](storage-architecture.md) and
 [ADR 0016](adr/0016-use-ordered-transactional-checksum-migrations.md).
 
