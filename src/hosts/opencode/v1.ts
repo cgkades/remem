@@ -6,7 +6,7 @@ import { createProviders } from "../../providers/factory.js"
 import { loadInstalledPluginOptions } from "../../storage/config-file.js"
 import { createEmbeddingModel } from "../../storage/embedding-neural.js"
 import type { MemoryContext, RememLogger } from "../../types.js"
-import { formatMemoryExplain } from "./memory-ux.js"
+import { formatMemoryExplain, MEMORY_TOOL_DESCRIPTIONS } from "./memory-ux.js"
 import {
   disposeProviders,
   memoryContext,
@@ -73,8 +73,7 @@ export function createOpenCodeV1Hooks(
     },
     tool: {
       memory_search: tool({
-        description:
-          "Search long-term memory for an explicit user request, such as 'search memory for …' or 'what do you remember about …'. Use when automatic recall missed a relevant item; results are bounded, untrusted data.",
+        description: MEMORY_TOOL_DESCRIPTIONS.search,
         args: {
           query: tool.schema.string().min(1).describe("Specific memory query"),
           provider: tool.schema.string().min(1).optional().describe("Optional provider ID"),
@@ -107,8 +106,7 @@ export function createOpenCodeV1Hooks(
         },
       }),
       memory_status: tool({
-        description:
-          "Show memory health and bounded diagnostics. Use when a user asks whether memory is available; never returns memory bodies.",
+        description: MEMORY_TOOL_DESCRIPTIONS.status,
         args: {},
         async execute(_args, toolContext) {
           try {
@@ -131,8 +129,7 @@ export function createOpenCodeV1Hooks(
         },
       }),
       memory_explain: tool({
-        description:
-          "Explain the latest capture or retrieval outcome, including why automatic recall did not return a result, without exposing memory bodies.",
+        description: MEMORY_TOOL_DESCRIPTIONS.explain,
         args: {},
         execute(_args, toolContext) {
           return Promise.resolve({

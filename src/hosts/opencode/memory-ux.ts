@@ -19,6 +19,15 @@ export interface MemoryUserExplanation {
   }
 }
 
+export const MEMORY_TOOL_DESCRIPTIONS = {
+  search:
+    "Search long-term memory for an explicit user request, such as 'search memory for ...' or 'what do you remember about ...'. Use when automatic recall missed a relevant item; results are bounded, untrusted data.",
+  status:
+    "Show memory health and bounded diagnostics. Use when a user asks whether memory is available; never returns memory bodies.",
+  explain:
+    "Explain the latest capture or retrieval outcome, including why automatic recall did not return a result, without exposing memory bodies.",
+} as const
+
 const MAX_DIAGNOSTICS = 5
 const MAX_DIAGNOSTIC_CHARS = 160
 
@@ -26,7 +35,7 @@ function boundDiagnostic(value: string): string {
   const redacted = redactSensitiveText(value).replace(/\s+/gu, " ").trim()
   return redacted.length <= MAX_DIAGNOSTIC_CHARS
     ? redacted
-    : `${redacted.slice(0, MAX_DIAGNOSTIC_CHARS - 1)}…`
+    : `${redacted.slice(0, MAX_DIAGNOSTIC_CHARS - 3)}...`
 }
 
 function isTrace(value: MemoryTrace | { status: "no-trace" }): value is MemoryTrace {
@@ -60,19 +69,19 @@ function diagnoseMiss(
     }
     return { miss: "none", summary: "No capture or retrieval has run for this session yet." }
   }
+  if (retrieval.rawResults > 0 && retrieval.selectedResults === 0) {
+    return {
+      miss: "ranking_decision",
+      summary:
+        "Matching memories were found but omitted by ranking or the recall budget. Try an explicit memory search.",
+    }
+  }
   const blocked = (retrieval.applicability ?? []).some((decision) => !decision.applicable)
   if (blocked && retrieval.selectedResults === 0) {
     return {
       miss: "scope_mismatch",
       summary:
         "Automatic recall did not return a memory because matching items were out of scope for this project or session.",
-    }
-  }
-  if (retrieval.rawResults > 0 && retrieval.selectedResults === 0) {
-    return {
-      miss: "ranking_decision",
-      summary:
-        "Matching memories were found but omitted by ranking or the recall budget. Try an explicit memory search.",
     }
   }
   if (retrieval.selectedResults === 0) {

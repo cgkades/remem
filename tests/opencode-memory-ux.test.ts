@@ -125,6 +125,22 @@ describe("formatMemoryExplain", () => {
     expect(formatMemoryExplain(emptyTrace({ rawResults: 3, selectedResults: 0 })).miss).toBe(
       "ranking_decision",
     )
+    expect(
+      formatMemoryExplain(
+        emptyTrace({
+          rawResults: 2,
+          selectedResults: 0,
+          applicability: [
+            {
+              catalogEntryId: "entry",
+              institutionalId: "inst",
+              applicable: false,
+              reason: "failed deterministic gate project",
+            },
+          ],
+        }),
+      ).miss,
+    ).toBe("ranking_decision")
   })
 
   it("redacts credentials and omits the original prompt from diagnostics", () => {
