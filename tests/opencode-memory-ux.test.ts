@@ -150,6 +150,16 @@ describe("formatMemoryExplain", () => {
     expect(serialized).not.toContain("secret API_KEY")
     expect(explained.retrieval.diagnostics.join(" ")).toContain("[redacted]")
   })
+
+  it("caps diagnostic length at 160 characters", () => {
+    const explained = formatMemoryExplain(
+      emptyTrace({
+        diagnostics: [`provider failed ${"x".repeat(200)}`],
+      }),
+    )
+    expect(explained.retrieval.diagnostics[0]?.length).toBeLessThanOrEqual(160)
+    expect(explained.retrieval.diagnostics[0]?.endsWith("...")).toBe(true)
+  })
 })
 
 describe("OpenCode memory discoverability", () => {

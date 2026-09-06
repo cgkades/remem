@@ -30,12 +30,13 @@ export const MEMORY_TOOL_DESCRIPTIONS = {
 
 const MAX_DIAGNOSTICS = 5
 const MAX_DIAGNOSTIC_CHARS = 160
+const DIAGNOSTIC_ELLIPSIS = "..."
 
 function boundDiagnostic(value: string): string {
   const redacted = redactSensitiveText(value).replace(/\s+/gu, " ").trim()
-  return redacted.length <= MAX_DIAGNOSTIC_CHARS
-    ? redacted
-    : `${redacted.slice(0, MAX_DIAGNOSTIC_CHARS - 3)}...`
+  if (redacted.length <= MAX_DIAGNOSTIC_CHARS) return redacted
+  const keep = Math.max(0, MAX_DIAGNOSTIC_CHARS - DIAGNOSTIC_ELLIPSIS.length)
+  return `${redacted.slice(0, keep)}${DIAGNOSTIC_ELLIPSIS}`
 }
 
 function isTrace(value: MemoryTrace | { status: "no-trace" }): value is MemoryTrace {
