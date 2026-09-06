@@ -40,7 +40,7 @@ function boundDiagnostic(value: string): string {
 }
 
 function isTrace(value: MemoryTrace | { status: "no-trace" }): value is MemoryTrace {
-  return !("status" in value && value.status === "no-trace")
+  return !("status" in value)
 }
 
 function diagnoseMiss(

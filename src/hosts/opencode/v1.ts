@@ -137,7 +137,7 @@ export function createOpenCodeV1Hooks(
             output: JSON.stringify(
               formatMemoryExplain(
                 orchestrator.explain(toolContext.sessionID),
-                capture?.explain(toolContext.sessionID) ?? { outcome: "idle" },
+                capture?.explain(toolContext.sessionID),
               ),
               null,
               2,
