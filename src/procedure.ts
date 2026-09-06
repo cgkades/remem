@@ -26,6 +26,8 @@ export interface ResolvedTaskEpisode {
 }
 
 const MAX_STEPS = 8
+const MAX_PATH = 200
+const MAX_COMMAND = 240
 const MAX_FIELD = 200
 export const PROCEDURE_CONFIDENCE = 0.82
 
@@ -34,15 +36,16 @@ function stableId(...values: string[]): string {
   return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`
 }
 
-function boundField(value: string | undefined): string | undefined {
+function boundField(value: string | undefined, max = MAX_FIELD): string | undefined {
   if (!value) return undefined
   const redacted = redactSensitiveText(value).replace(/\s+/gu, " ").trim()
   if (!redacted || containsSensitiveCredential(redacted)) return undefined
-  return redacted.slice(0, MAX_FIELD)
+  if (redacted.length <= max) return redacted
+  return `${redacted.slice(0, Math.max(0, max - 3))}...`
 }
 
 function workspaceRelative(path: string | undefined): string | undefined {
-  const value = boundField(path)
+  const value = boundField(path, MAX_PATH)
   if (!value) return undefined
   if (value.includes("..") || value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value))
     return undefined
@@ -60,6 +63,8 @@ function compactLines(episode: ResolvedTaskEpisode): string[] | undefined {
       step.errorSignature,
     ]),
   ]
+  // Reject unsanitized secrets first. boundField then redacts remaining text;
+  // the joined-content check below catches secrets that only appear after assembly.
   if (rawFields.some((field) => field && containsSensitiveCredential(field))) return undefined
   const goal = boundField(episode.goal)
   if (!goal) return undefined
@@ -75,13 +80,17 @@ function compactLines(episode: ResolvedTaskEpisode): string[] | undefined {
     ),
   ]
   const commands = [
-    ...new Set(episode.steps.map((step) => boundField(step.command)).filter((value) => value)),
+    ...new Set(
+      episode.steps.map((step) => boundField(step.command, MAX_COMMAND)).filter((value) => value),
+    ),
   ]
   const errors = [
     ...new Set(
       episode.steps.map((step) => boundField(step.errorSignature)).filter((value) => value),
     ),
   ]
+  // Verified success requires a workspace-relative path, or an error signature
+  // plus the command that resolved it.
   if (paths.length === 0 && !(errors.length > 0 && commands.length > 0)) return undefined
   // Prefer the first discovered workspace path; otherwise the last successful command.
   const method = paths[0] ?? commands.at(-1)
@@ -140,7 +149,11 @@ export function extractProcedureCandidate(
     return undefined
   }
   const content = text.slice(0, config.maxCandidateCharacters)
-  const goal = typeof observation.payload.goal === "string" ? observation.payload.goal : content
+  const goal =
+    typeof observation.payload.goal === "string" &&
+    !containsSensitiveCredential(observation.payload.goal)
+      ? observation.payload.goal
+      : content
   const messageId =
     typeof observation.payload.messageId === "string"
       ? observation.payload.messageId
