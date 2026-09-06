@@ -20,6 +20,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- OpenCode `memory_search`, `memory_status`, and `memory_explain` now describe natural-language save/search/explain workflows, and `memory_explain` returns a bounded, redacted miss diagnosis (no matching memory, scope mismatch, capture exclusion, or ranking). Resolves [#76](https://github.com/cgkades/remem/issues/76).
+
 - Natural-language capture recognizes direct `remember`/`keep in mind`/`note`/`save`/`store` requests,
   implicit decisions, durable preferences, project facts, and task state without requiring a magic
   phrase. OpenCode `memory_explain` now includes a bounded capture outcome, reason, and confidence.

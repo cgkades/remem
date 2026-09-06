@@ -6,6 +6,7 @@ import { createProviders } from "../../providers/factory.js"
 import { loadInstalledPluginOptions } from "../../storage/config-file.js"
 import { createEmbeddingModel } from "../../storage/embedding-neural.js"
 import type { MemoryContext, RememLogger } from "../../types.js"
+import { formatMemoryExplain, MEMORY_TOOL_DESCRIPTIONS } from "./memory-ux.js"
 import {
   disposeProviders,
   memoryContext,
@@ -72,8 +73,7 @@ export function createOpenCodeV1Hooks(
     },
     tool: {
       memory_search: tool({
-        description:
-          "Search configured long-term memory providers explicitly. Use when automatic recall was insufficient.",
+        description: MEMORY_TOOL_DESCRIPTIONS.search,
         args: {
           query: tool.schema.string().min(1).describe("Specific memory query"),
           provider: tool.schema.string().min(1).optional().describe("Optional provider ID"),
@@ -106,7 +106,7 @@ export function createOpenCodeV1Hooks(
         },
       }),
       memory_status: tool({
-        description: "Show memory health and bounded diagnostics without memory bodies.",
+        description: MEMORY_TOOL_DESCRIPTIONS.status,
         args: {},
         async execute(_args, toolContext) {
           try {
@@ -129,16 +129,16 @@ export function createOpenCodeV1Hooks(
         },
       }),
       memory_explain: tool({
-        description: "Explain the latest memory retrieval decision without exposing memory bodies.",
+        description: MEMORY_TOOL_DESCRIPTIONS.explain,
         args: {},
         execute(_args, toolContext) {
           return Promise.resolve({
             title: "Memory retrieval explanation",
             output: JSON.stringify(
-              {
-                retrieval: orchestrator.explain(toolContext.sessionID),
-                capture: capture?.explain(toolContext.sessionID) ?? { outcome: "idle" },
-              },
+              formatMemoryExplain(
+                orchestrator.explain(toolContext.sessionID),
+                capture?.explain(toolContext.sessionID),
+              ),
               null,
               2,
             ),

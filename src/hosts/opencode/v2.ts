@@ -17,6 +17,7 @@ import { shouldAttemptReembed } from "../../reembedding.js"
 import { loadInstalledPluginOptions } from "../../storage/config-file.js"
 import { createEmbeddingModel } from "../../storage/embedding-neural.js"
 import type { MemoryContext, MemoryProvider, RememLogger } from "../../types.js"
+import { formatMemoryExplain, MEMORY_TOOL_DESCRIPTIONS } from "./memory-ux.js"
 import {
   TRUSTED_REMEM_INSTRUCTION,
   currentTurnId,
@@ -143,7 +144,7 @@ async function registerTools(
   return context.tool.transform((draft) => {
     draft.add({
       name: "memory_search",
-      description: "Search configured long-term memory providers explicitly.",
+      description: MEMORY_TOOL_DESCRIPTIONS.search,
       options: BARE_CALLABLE_TOOL_OPTIONS,
       input: {
         type: "object",
@@ -177,7 +178,7 @@ async function registerTools(
     })
     draft.add({
       name: "memory_status",
-      description: "Show memory health and bounded diagnostics without memory bodies.",
+      description: MEMORY_TOOL_DESCRIPTIONS.status,
       options: BARE_CALLABLE_TOOL_OPTIONS,
       input: { type: "object", properties: {}, additionalProperties: false },
       async execute(_input, toolContext) {
@@ -198,16 +199,16 @@ async function registerTools(
     })
     draft.add({
       name: "memory_explain",
-      description: "Explain the latest retrieval decision without exposing memory bodies.",
+      description: MEMORY_TOOL_DESCRIPTIONS.explain,
       options: BARE_CALLABLE_TOOL_OPTIONS,
       input: { type: "object", properties: {}, additionalProperties: false },
       execute(_input, toolContext) {
         return Promise.resolve({
           content: JSON.stringify(
-            {
-              retrieval: orchestrator.explain(toolContext.sessionID),
-              capture: capture?.explain(toolContext.sessionID) ?? { outcome: "idle" },
-            },
+            formatMemoryExplain(
+              orchestrator.explain(toolContext.sessionID),
+              capture?.explain(toolContext.sessionID),
+            ),
             null,
             2,
           ),
