@@ -26,6 +26,8 @@ export interface ResolvedTaskEpisode {
 }
 
 const MAX_STEPS = 8
+const MAX_LOCATIONS = 4
+const MAX_ERRORS = 3
 const MAX_PATH = 200
 const MAX_COMMAND = 240
 const MAX_FIELD = 200
@@ -47,21 +49,24 @@ function boundField(value: string | undefined, max = MAX_FIELD): string | undefi
 function workspaceRelative(path: string | undefined): string | undefined {
   const value = boundField(path, MAX_PATH)
   if (!value) return undefined
-  if (value.includes("..") || value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value))
+  const normalized = value.replace(/\\/gu, "/")
+  if (
+    normalized.startsWith("/") ||
+    normalized.startsWith("//") ||
+    /^[A-Za-z]:\//u.test(normalized) ||
+    normalized.split("/").includes("..")
+  ) {
     return undefined
+  }
   return value.replace(/^\.\//u, "")
 }
 
 function compactLines(episode: ResolvedTaskEpisode): string[] | undefined {
   if (episode.outcome !== "succeeded") return undefined
+  const steps = episode.steps.slice(0, MAX_STEPS)
   const rawFields = [
     episode.goal,
-    ...episode.steps.flatMap((step) => [
-      step.summary,
-      step.path,
-      step.command,
-      step.errorSignature,
-    ]),
+    ...steps.flatMap((step) => [step.summary, step.path, step.command, step.errorSignature]),
   ]
   // Reject unsanitized secrets first. boundField then redacts remaining text;
   // the joined-content check below catches secrets that only appear after assembly.
@@ -69,25 +74,21 @@ function compactLines(episode: ResolvedTaskEpisode): string[] | undefined {
   const goal = boundField(episode.goal)
   if (!goal) return undefined
   const paths = [
-    ...new Set(episode.steps.map((step) => workspaceRelative(step.path)).filter((path) => path)),
+    ...new Set(steps.map((step) => workspaceRelative(step.path)).filter((path) => path)),
   ]
   const searches = [
     ...new Set(
-      episode.steps
+      steps
         .filter((step) => step.kind === "search")
         .map((step) => boundField(step.summary))
         .filter((value) => value),
     ),
   ]
   const commands = [
-    ...new Set(
-      episode.steps.map((step) => boundField(step.command, MAX_COMMAND)).filter((value) => value),
-    ),
+    ...new Set(steps.map((step) => boundField(step.command, MAX_COMMAND)).filter((value) => value)),
   ]
   const errors = [
-    ...new Set(
-      episode.steps.map((step) => boundField(step.errorSignature)).filter((value) => value),
-    ),
+    ...new Set(steps.map((step) => boundField(step.errorSignature)).filter((value) => value)),
   ]
   // Verified success requires a workspace-relative path, or an error signature
   // plus the command that resolved it.
@@ -97,18 +98,17 @@ function compactLines(episode: ResolvedTaskEpisode): string[] | undefined {
   const lines = [
     `Goal: ${goal}`,
     ...(method ? [`Method: ${method}`] : []),
-    ...paths.slice(0, 4).map((path) => `Location: ${path}`),
-    ...searches.slice(0, 4).map((term) => `Search: ${term}`),
-    ...commands.slice(0, 4).map((command) => `Command: ${command}`),
-    ...errors.slice(0, 3).map((signature) => `Error: ${signature}`),
+    ...paths.slice(0, MAX_LOCATIONS).map((path) => `Location: ${path}`),
+    ...searches.slice(0, MAX_LOCATIONS).map((term) => `Search: ${term}`),
+    ...commands.slice(0, MAX_LOCATIONS).map((command) => `Command: ${command}`),
+    ...errors.slice(0, MAX_ERRORS).map((signature) => `Error: ${signature}`),
   ]
-  const steps = episode.steps
-    .slice(0, MAX_STEPS)
+  const summaries = steps
     .map((step) => boundField(step.summary))
     .filter((summary): summary is string => Boolean(summary))
-  if (steps.length > 0) {
+  if (summaries.length > 0) {
     lines.push("Steps:")
-    for (const [index, summary] of steps.entries()) lines.push(`${index + 1}. ${summary}`)
+    for (const [index, summary] of summaries.entries()) lines.push(`${index + 1}. ${summary}`)
   }
   const content = lines.join("\n")
   return containsSensitiveCredential(content) ? undefined : lines

@@ -255,13 +255,22 @@ export class CaptureCoordinator {
 
   enqueueResolvedTask(episode: ResolvedTaskEpisode): void {
     if (this.closed) return
+    if (episode.outcome !== "succeeded") {
+      this.activeCaptureIds.delete(episode.sessionId)
+      this.recordExplanation(episode.sessionId, {
+        outcome: "excluded",
+        kind: "task-resolved",
+        reason: "investigation was not a verified success",
+      })
+      return
+    }
     const observation = observationFromResolvedTask(episode)
     if (!observation) {
       this.activeCaptureIds.delete(episode.sessionId)
       this.recordExplanation(episode.sessionId, {
         outcome: "excluded",
         kind: "task-resolved",
-        reason: "investigation was not a verified success",
+        reason: "investigation lacked verified path or error-fix evidence",
       })
       return
     }

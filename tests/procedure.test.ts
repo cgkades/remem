@@ -124,6 +124,28 @@ describe("resolved-task procedure extraction", () => {
         }),
       ),
     ).toBeUndefined()
+    expect(
+      observationFromResolvedTask(
+        episode({
+          steps: [{ kind: "read", summary: "unc path", path: "\\\\server\\share\\file" }],
+        }),
+      ),
+    ).toBeUndefined()
+  })
+
+  it("ignores extra steps beyond the scan cap", () => {
+    const extra = Array.from({ length: 20 }, (_, index) => ({
+      kind: "other" as const,
+      summary: `noise ${index}`,
+      ...(index === 19 ? { command: "API_KEY=super-secret-value" } : {}),
+    }))
+    const observation = observationFromResolvedTask(
+      episode({
+        steps: [{ kind: "read", summary: "read compose.yaml", path: "compose.yaml" }, ...extra],
+      }),
+    )
+    expect(observation?.payload.text).toContain("compose.yaml")
+    expect(String(observation?.payload.text)).not.toContain("noise 19")
   })
 })
 
