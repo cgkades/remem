@@ -18,23 +18,23 @@ The central gap is:
 
 These percentages are directional engineering assessments, not coverage metrics.
 
-| Capability | Target | Current assessment | Status |
-|---|---|---:|---|
-| Host-independent orchestration | Core owns memory behavior | ~85% | Strong |
-| Recognition/catalog | Automatically recognize likely prior context | ~80% | Strong foundation |
-| Retrieval planning/routing | Bounded provider/topic-aware recall | ~80% | Strong foundation |
-| Context injection | Automatic, bounded, attributed, safe | ~85% | Strong |
-| Managed local storage | Durable local semantic store | ~85% | Strong |
-| Semantic retrieval | Useful lexical/vector recall | ~70% | Functional, can improve |
-| Synthesis | Compact coherent working memory | ~40% | Mostly extractive |
-| Session observation | Understand significant session activity | ~35% | Narrow/incomplete |
-| Episodic memory | Preserve what materially happened | ~15% | Major gap |
-| Candidate extraction | Derive durable knowledge from work | ~35% | Narrow/deterministic |
-| Conflict/staleness learning | Update what is currently known | ~35% | Pieces exist, not closed loop |
-| Automatic consolidation | Safe routine memory formation | ~30% | Too review/manual oriented |
-| Catalog evolution from learning | New learning improves future recognition | ~40% | Record entries exist; hierarchy weak |
-| Closed-loop cross-session memory | Experience -> durable memory -> natural later recall | ~35% | Not yet product-complete |
-| External provider ecosystem | Multiple heterogeneous systems of record | ~30% | Markdown/Postgres dominate |
+| Capability                       | Target                                               | Current assessment | Status                               |
+| -------------------------------- | ---------------------------------------------------- | -----------------: | ------------------------------------ |
+| Host-independent orchestration   | Core owns memory behavior                            |               ~85% | Strong                               |
+| Recognition/catalog              | Automatically recognize likely prior context         |               ~80% | Strong foundation                    |
+| Retrieval planning/routing       | Bounded provider/topic-aware recall                  |               ~80% | Strong foundation                    |
+| Context injection                | Automatic, bounded, attributed, safe                 |               ~85% | Strong                               |
+| Managed local storage            | Durable local semantic store                         |               ~85% | Strong                               |
+| Semantic retrieval               | Useful lexical/vector recall                         |               ~70% | Functional, can improve              |
+| Synthesis                        | Compact coherent working memory                      |               ~40% | Mostly extractive                    |
+| Session observation              | Understand significant session activity              |               ~35% | Narrow/incomplete                    |
+| Episodic memory                  | Preserve what materially happened                    |               ~15% | Major gap                            |
+| Candidate extraction             | Derive durable knowledge from work                   |               ~35% | Narrow/deterministic                 |
+| Conflict/staleness learning      | Update what is currently known                       |               ~35% | Pieces exist, not closed loop        |
+| Automatic consolidation          | Safe routine memory formation                        |               ~30% | Too review/manual oriented           |
+| Catalog evolution from learning  | New learning improves future recognition             |               ~40% | Record entries exist; hierarchy weak |
+| Closed-loop cross-session memory | Experience -> durable memory -> natural later recall |               ~35% | Not yet product-complete             |
+| External provider ecosystem      | Multiple heterogeneous systems of record             |               ~30% | Markdown/Postgres dominate           |
 
 ## What is on track
 
