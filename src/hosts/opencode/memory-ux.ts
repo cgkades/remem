@@ -70,6 +70,8 @@ function diagnoseMiss(
     }
     return { miss: "none", summary: "No capture or retrieval has run for this session yet." }
   }
+  // Prefer ranking when in-scope results existed but were omitted; scope mismatch
+  // only explains a miss when nothing in-scope was retrieved.
   if (retrieval.rawResults > 0 && retrieval.selectedResults === 0) {
     return {
       miss: "ranking_decision",
