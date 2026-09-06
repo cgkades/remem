@@ -53,7 +53,7 @@ function workspaceRelative(path: string | undefined): string | undefined {
   const normalized = value.replace(/\\/gu, "/")
   if (
     normalized.startsWith("/") ||
-    /^[A-Za-z]:\//u.test(normalized) ||
+    /^[A-Za-z]:/u.test(normalized) ||
     normalized.split("/").includes("..")
   ) {
     return undefined

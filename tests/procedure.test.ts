@@ -131,6 +131,13 @@ describe("resolved-task procedure extraction", () => {
         }),
       ),
     ).toBeUndefined()
+    expect(
+      observationFromResolvedTask(
+        episode({
+          steps: [{ kind: "read", summary: "drive-relative path", path: "C:secrets.txt" }],
+        }),
+      ),
+    ).toBeUndefined()
   })
 
   it("ignores extra steps beyond the scan cap", () => {
