@@ -26,11 +26,12 @@ export interface ResolvedTaskEpisode {
 }
 
 const MAX_STEPS = 8
-const MAX_LOCATIONS = 4
+const MAX_EVIDENCE_ITEMS = 4
 const MAX_ERRORS = 3
 const MAX_PATH = 200
 const MAX_COMMAND = 240
 const MAX_FIELD = 200
+const MAX_RAW_CHARS = 2_000
 export const PROCEDURE_CONFIDENCE = 0.82
 
 function stableId(...values: string[]): string {
@@ -39,7 +40,7 @@ function stableId(...values: string[]): string {
 }
 
 function boundField(value: string | undefined, max = MAX_FIELD): string | undefined {
-  if (!value) return undefined
+  if (!value || value.length > MAX_RAW_CHARS) return undefined
   const redacted = redactSensitiveText(value).replace(/\s+/gu, " ").trim()
   if (!redacted || containsSensitiveCredential(redacted)) return undefined
   if (redacted.length <= max) return redacted
@@ -52,7 +53,6 @@ function workspaceRelative(path: string | undefined): string | undefined {
   const normalized = value.replace(/\\/gu, "/")
   if (
     normalized.startsWith("/") ||
-    normalized.startsWith("//") ||
     /^[A-Za-z]:\//u.test(normalized) ||
     normalized.split("/").includes("..")
   ) {
@@ -68,6 +68,7 @@ function compactLines(episode: ResolvedTaskEpisode): string[] | undefined {
     episode.goal,
     ...steps.flatMap((step) => [step.summary, step.path, step.command, step.errorSignature]),
   ]
+  if (rawFields.some((field) => field && field.length > MAX_RAW_CHARS)) return undefined
   // Reject unsanitized secrets first. boundField then redacts remaining text;
   // the joined-content check below catches secrets that only appear after assembly.
   if (rawFields.some((field) => field && containsSensitiveCredential(field))) return undefined
@@ -98,9 +99,9 @@ function compactLines(episode: ResolvedTaskEpisode): string[] | undefined {
   const lines = [
     `Goal: ${goal}`,
     ...(method ? [`Method: ${method}`] : []),
-    ...paths.slice(0, MAX_LOCATIONS).map((path) => `Location: ${path}`),
-    ...searches.slice(0, MAX_LOCATIONS).map((term) => `Search: ${term}`),
-    ...commands.slice(0, MAX_LOCATIONS).map((command) => `Command: ${command}`),
+    ...paths.slice(0, MAX_EVIDENCE_ITEMS).map((path) => `Location: ${path}`),
+    ...searches.slice(0, MAX_EVIDENCE_ITEMS).map((term) => `Search: ${term}`),
+    ...commands.slice(0, MAX_EVIDENCE_ITEMS).map((command) => `Command: ${command}`),
     ...errors.slice(0, MAX_ERRORS).map((signature) => `Error: ${signature}`),
   ]
   const summaries = steps

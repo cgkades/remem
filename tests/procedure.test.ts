@@ -147,6 +147,12 @@ describe("resolved-task procedure extraction", () => {
     expect(observation?.payload.text).toContain("compose.yaml")
     expect(String(observation?.payload.text)).not.toContain("noise 19")
   })
+
+  it("rejects oversized fields before credential scanning", () => {
+    expect(
+      observationFromResolvedTask(episode({ goal: `Find compose ${"x".repeat(2_001)}` })),
+    ).toBeUndefined()
+  })
 })
 
 describe("CaptureCoordinator resolved tasks", () => {
