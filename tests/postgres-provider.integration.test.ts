@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { Pool } from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { createCaptureCoordinator } from "../src/capture.js"
 import {
   DeterministicConsolidationPipeline,
   PostgresConsolidationRunner,
@@ -773,6 +774,105 @@ integration("PostgreSQL managed provider", () => {
         )
       ).rows[0]?.count,
     ).toBe("1")
+  })
+
+  it("learns multiple user statements and recalls them in a fresh session without manual curation", async () => {
+    const providerConfig = {
+      type: "postgres" as const,
+      id: "learning-loop",
+      connectionString: databaseUrl ?? "",
+      primary: true,
+      maxConnections: 2,
+      catalogLimit: 100,
+    }
+    const base = testConfig()
+    const config = testConfig({
+      providers: [providerConfig],
+      capture: { ...base.capture, enabled: true, autoPromote: true },
+    })
+    const sessionA = {
+      directory: "/workspace/orion",
+      worktree: "/workspace/orion",
+      projectId: "learning-loop",
+      sessionId: "learning-session-a",
+    }
+    const statements = [
+      "Orion uses PostgreSQL for durable memory.",
+      "We decided to use logical replication for Orion.",
+      "The Orion rollout is blocked on a restore drill.",
+    ]
+    const prompt = `Can you check this? ${statements.join(" ")}`
+    const providerA = new PostgresMemoryProvider(providerConfig)
+    const capture = createCaptureCoordinator([providerA], config, { log: () => undefined })
+    expect(capture).toBeDefined()
+    try {
+      const input = {
+        host: "opencode-v2" as const,
+        context: sessionA,
+        sessionId: sessionA.sessionId,
+        messageId: "learning-message-a",
+        text: prompt,
+      }
+      capture?.enqueue(input)
+      await capture?.idle()
+      expect(capture?.explain(sessionA.sessionId)).toMatchObject({ outcome: "promoted" })
+      // Re-delivery must not create extra semantic memories.
+      capture?.enqueue(input)
+      await capture?.idle()
+      expect(capture?.explain(sessionA.sessionId)).toMatchObject({ outcome: "promoted" })
+    } finally {
+      await capture?.dispose()
+      await providerA.dispose()
+    }
+
+    // New provider, database connections, and orchestrator: no Session A process-local state.
+    const providerB = new PostgresMemoryProvider(providerConfig)
+    const orchestrator = new RememOrchestrator([providerB], config)
+    const sessionB = { ...sessionA, sessionId: "learning-session-b" }
+    try {
+      const persisted = await pool.query<{ content: string }>(
+        "SELECT content FROM remem.memories WHERE provider_id = $1 AND scope_id = $2",
+        [providerConfig.id, sessionA.projectId],
+      )
+      expect(persisted.rows.map((row) => row.content).sort()).toEqual([...statements].sort())
+
+      const continuityPrompt =
+        "Continue Orion durable memory, logical replication, and the blocked rollout restore drill."
+      const injection = await orchestrator.processPrompt(continuityPrompt, sessionB)
+      expect(injection.plan.shouldRetrieve).toBe(true)
+      expect(injection.memoryText, JSON.stringify(injection.trace)).not.toBe("")
+      for (const statement of statements) expect(injection.memoryText).toContain(statement)
+      expect(injection.memoryText).not.toContain("Can you check this?")
+      expect(injection.trace.recallTokens).toBeLessThanOrEqual(config.budgets.recallTokens)
+
+      const records = await providerB.search({ ...request("Orion"), context: sessionB })
+      expect(records).toHaveLength(3)
+      for (const { record } of records) {
+        expect(record.provenance?.[0]?.source).toMatchObject({
+          kind: "user",
+          externalId: "learning-message-a",
+          metadata: { sessionId: sessionA.sessionId },
+        })
+        const span = record.metadata?.capture as { statementStart: number; statementEnd: number }
+        expect(prompt.slice(span.statementStart, span.statementEnd)).toBe(record.content)
+      }
+
+      const unrelated = await new RememOrchestrator([providerB], config).processPrompt(
+        "Explain a Python list comprehension.",
+        { ...sessionB, sessionId: "learning-unrelated" },
+      )
+      expect(unrelated.trace.selectedResults).toBe(0)
+      expect(unrelated.memoryText).toBe("")
+
+      const foreign = await new RememOrchestrator([providerB], config).processPrompt(
+        continuityPrompt,
+        { ...sessionB, projectId: "other-project", sessionId: "learning-foreign" },
+      )
+      expect(foreign.trace.selectedResults).toBe(0)
+      expect(foreign.memoryText).toBe("")
+    } finally {
+      await providerB.dispose()
+    }
   })
 
   it("persists a captured observation and pending candidate atomically with body-free status", async () => {

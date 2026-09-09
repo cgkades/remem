@@ -52,6 +52,23 @@ Build the test before or alongside the implementation so the project stops optim
 
 **P1 exit:** CI contains a failing-or-passing executable definition of the product rather than only component tests.
 
+### Initial executable slice
+
+`tests/postgres-provider.integration.test.ts` now covers multiple ordinary user statements flowing
+through automatic capture/consolidation into PostgreSQL, followed by recall through a new provider
+and orchestrator with a fresh session. It checks re-delivery, persisted provenance/span metadata,
+token budget, unrelated-prompt non-injection, and cross-project isolation. It requires
+`REMEM_TEST_DATABASE_URL`; CI's PostgreSQL-enabled test job must run it rather than accepting a skip.
+
+This is a narrower regression, **not completion of P1**: it uses a topic-rich continuity prompt and
+opted-in user-text capture. It does not yet demonstrate tool-verified root causes, episodic evidence,
+cross-turn rationale, or host-runtime Session A/Session B behavior.
+
+- [ ] Fix and cover short continuity prompts after learning. In the regression's hash-embedding setup,
+      `Let's continue the Orion work.` produces a continuity retrieval plan but zero recalled records;
+      the more descriptive prompt succeeds. Do not lower global recognition thresholds merely to
+      make the fixture pass.
+
 ---
 
 ## P2 — General normalized session observation
@@ -152,6 +169,12 @@ Build the test before or alongside the implementation so the project stops optim
 - [ ] Evaluate durable-capture precision/recall, false-memory rate, and rationale-recovery rate on a checked-in corpus. Include `Remember X. Can you do Y?`, multiple durable statements, rationale separated from decisions, tactical `let's`/`we'll`, conversational `actually`, user-wide versus project/session scope, paraphrased facts/blockers, and failed approaches retained only episodically. Define pass thresholds before changing defaults.
 
 **P4 exit:** ordinary successful agent work produces useful candidate memories without requiring magic phrases.
+
+The first implementation slice in `src/capture.ts` and `tests/capture.test.ts` supports bounded
+multi-statement extraction, mixed question/statement prompts at recognized sentence boundaries,
+wrapper removal, source-span metadata, and complete-statement length limits. It processes each input
+observation independently; it does not yet infer cross-turn rationale, distinguish all tactical
+suggestions/corrections, or select broader scopes. The full P4 acceptance items above remain open.
 
 ---
 

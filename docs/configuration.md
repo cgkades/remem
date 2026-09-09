@@ -107,7 +107,7 @@ overrides only the supplied capture fields and retains the installed provider co
 
 Only screened user-authored durable statements qualify. Direct requests such as `Remember that
 Atlas uses PostgreSQL`, plus ordinary decisions, preferences, corrections, project facts, and task
-state can be captured without a special trigger phrase. Questions, chitchat, prompts containing reusable
+state can be captured without a special trigger phrase. Question sentences, chitchat, prompts containing reusable
 credentials, reported quoted/retrieved text, or tool output are excluded. Capture never reads model or tool
 responses as user assertions. Hosts may also submit a normalized resolved-task episode after a
 _verified_ success; that path records a bounded `procedure` with session provenance, not a user
@@ -116,6 +116,24 @@ assertion, and still redacts credentials. Failed or unverified investigations ar
 memory using the same duplicate/conflict handling as the manual flow. With the default `false`, capture
 creates pending candidates; inspect them with `remem candidates`, approve or reject each with
 `remem review <ID> --approve|--reject`, and promote approved candidates with `remem consolidate`.
+
+User-text capture extracts up to eight qualifying statements per observation using conservative English
+sentence boundaries and explicit list boundaries. A question elsewhere in a prompt does not suppress
+a separately recognized durable statement. Remember/save wrappers are removed from the stored claim;
+soft-wrapped qualifiers are retained. The whole prompt is screened for credentials and quoted/synthetic
+content before extracting any statement, so splitting cannot bypass those exclusions.
+
+Statements longer than `maxCandidateCharacters` are skipped rather than truncated into potentially
+misleading claims. Additional statements beyond the eight-candidate limit are not captured. Ambiguous
+sentence boundaries can remain grouped; this is deterministic extraction, not general conversational
+understanding or cross-turn rationale extraction. Candidate scope remains the current project.
+
+Each candidate records an extractor version and `statementStart`/`statementEnd` offsets under
+`metadata.capture`. These are UTF-16 offsets into the captured prompt text, with an exclusive end.
+They locate the extracted claim; they do not imply that the original prompt is durably retained as an
+episode. Multi-candidate persistence/promotion is not all-or-nothing: an error reports capture failure
+even if earlier statements were already saved. Re-delivery uses stable candidate identities and the
+existing consolidation duplicate handling.
 
 ## OpenCode v2 Plugin Options
 
