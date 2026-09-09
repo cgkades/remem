@@ -508,6 +508,30 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
     return result.rows[0] ? rowToRecord(result.rows[0]) : undefined
   }
 
+  async findByConsolidationCandidateId(
+    candidateId: string,
+    scope: MemoryScope,
+    signal?: AbortSignal,
+  ): Promise<MemoryRecord | undefined> {
+    signal?.throwIfAborted()
+    if (!UUID_PATTERN.test(candidateId)) return undefined
+    const result = await this.pool.query<MemoryRow>(
+      `${BASE_SELECT}
+       WHERE m.provider_id = $2
+         AND (
+           m.metadata->'consolidation'->>'candidateId' = $1 OR
+           m.metadata->'consolidation'->>'lastCandidateId' = $1
+         )
+         AND m.scope_kind = $3
+         AND m.scope_id IS NOT DISTINCT FROM $4
+       ORDER BY m.updated_at DESC
+       LIMIT 1`,
+      [candidateId, this.id, scope.kind, scope.id ?? null],
+    )
+    signal?.throwIfAborted()
+    return result.rows[0] ? rowToRecord(result.rows[0]) : undefined
+  }
+
   async write(memory: MemoryWrite, options: MemoryMutationOptions = {}): Promise<MemoryRecord> {
     const client = await this.pool.connect()
     try {
@@ -690,11 +714,14 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
         ])
       }
       options.signal?.throwIfAborted()
-      await client.query(
+      const persistedObservation = await client.query<{ id: string }>(
         `INSERT INTO remem.session_events
          (id, session_id, project_id, kind, occurred_at, payload)
          VALUES ($1,$2,$3,$4,$5,$6::jsonb)
-         ON CONFLICT (id) DO NOTHING`,
+         ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
+         WHERE remem.session_events.session_id = EXCLUDED.session_id
+           AND remem.session_events.project_id = EXCLUDED.project_id
+         RETURNING id`,
         [
           observation.id,
           sessionId,
@@ -709,12 +736,29 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
           }),
         ],
       )
+      if (!persistedObservation.rows[0]) {
+        throw new Error("captured observation id belongs to another context")
+      }
       options.signal?.throwIfAborted()
-      await client.query(
+      const persistedCandidate = await client.query<{ id: string }>(
         `INSERT INTO remem.candidate_memories
          (id, session_event_id, type, title, content, scope_kind, scope_id, confidence, status, metadata)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9::jsonb)
-         ON CONFLICT (id) DO NOTHING`,
+         ON CONFLICT (id) DO UPDATE SET
+           session_event_id = EXCLUDED.session_event_id,
+           type = EXCLUDED.type,
+           title = EXCLUDED.title,
+           content = EXCLUDED.content,
+           scope_kind = EXCLUDED.scope_kind,
+           scope_id = EXCLUDED.scope_id,
+           confidence = EXCLUDED.confidence,
+           metadata = EXCLUDED.metadata
+         WHERE remem.candidate_memories.status = 'pending'
+           AND remem.candidate_memories.session_event_id = EXCLUDED.session_event_id
+           AND remem.candidate_memories.scope_kind = EXCLUDED.scope_kind
+           AND remem.candidate_memories.scope_id IS NOT DISTINCT FROM EXCLUDED.scope_id
+           AND remem.candidate_memories.metadata->>'providerId' = EXCLUDED.metadata->>'providerId'
+         RETURNING id`,
         [
           candidate.id,
           observation.id,
@@ -736,6 +780,22 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
           }),
         ],
       )
+      if (!persistedCandidate.rows[0]) {
+        const existing = await client.query<{ id: string }>(
+          `SELECT id FROM remem.candidate_memories
+           WHERE id = $1 AND session_event_id = $2
+             AND scope_kind = $3 AND scope_id IS NOT DISTINCT FROM $4
+             AND metadata->>'providerId' = $5`,
+          [
+            candidate.id,
+            observation.id,
+            candidate.memory.scope.kind,
+            scopeId(candidate.memory, observation.context) ?? null,
+            this.id,
+          ],
+        )
+        if (!existing.rows[0]) throw new Error("captured candidate id belongs to another context")
+      }
       options.signal?.throwIfAborted()
       await client.query("COMMIT")
     } catch (error) {

@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { Pool } from "pg"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { createCaptureCoordinator } from "../src/capture.js"
 import {
   DeterministicConsolidationPipeline,
   PostgresConsolidationRunner,
@@ -775,6 +776,105 @@ integration("PostgreSQL managed provider", () => {
     ).toBe("1")
   })
 
+  it("learns multiple user statements and recalls them in a fresh session without manual curation", async () => {
+    const providerConfig = {
+      type: "postgres" as const,
+      id: "learning-loop",
+      connectionString: databaseUrl ?? "",
+      primary: true,
+      maxConnections: 2,
+      catalogLimit: 100,
+    }
+    const base = testConfig()
+    const config = testConfig({
+      providers: [providerConfig],
+      capture: { ...base.capture, enabled: true, autoPromote: true },
+    })
+    const sessionA = {
+      directory: "/workspace/orion",
+      worktree: "/workspace/orion",
+      projectId: "learning-loop",
+      sessionId: "learning-session-a",
+    }
+    const statements = [
+      "Orion uses PostgreSQL for durable memory.",
+      "We decided to use logical replication for Orion.",
+      "The Orion rollout is blocked on a restore drill.",
+    ]
+    const prompt = `Can you check this? ${statements.join(" ")}`
+    const providerA = new PostgresMemoryProvider(providerConfig)
+    const capture = createCaptureCoordinator([providerA], config, { log: () => undefined })
+    expect(capture).toBeDefined()
+    try {
+      const input = {
+        host: "opencode-v2" as const,
+        context: sessionA,
+        sessionId: sessionA.sessionId,
+        messageId: "learning-message-a",
+        text: prompt,
+      }
+      capture?.enqueue(input)
+      await capture?.idle()
+      expect(capture?.explain(sessionA.sessionId)).toMatchObject({ outcome: "promoted" })
+      // Re-delivery must not create extra semantic memories.
+      capture?.enqueue(input)
+      await capture?.idle()
+      expect(capture?.explain(sessionA.sessionId)).toMatchObject({ outcome: "promoted" })
+    } finally {
+      await capture?.dispose()
+      await providerA.dispose()
+    }
+
+    // New provider, database connections, and orchestrator: no Session A process-local state.
+    const providerB = new PostgresMemoryProvider(providerConfig)
+    const orchestrator = new RememOrchestrator([providerB], config)
+    const sessionB = { ...sessionA, sessionId: "learning-session-b" }
+    try {
+      const persisted = await pool.query<{ content: string }>(
+        "SELECT content FROM remem.memories WHERE provider_id = $1 AND scope_id = $2",
+        [providerConfig.id, sessionA.projectId],
+      )
+      expect(persisted.rows.map((row) => row.content).sort()).toEqual([...statements].sort())
+
+      const continuityPrompt =
+        "Continue Orion durable memory, logical replication, and the blocked rollout restore drill."
+      const injection = await orchestrator.processPrompt(continuityPrompt, sessionB)
+      expect(injection.plan.shouldRetrieve).toBe(true)
+      expect(injection.memoryText, JSON.stringify(injection.trace)).not.toBe("")
+      for (const statement of statements) expect(injection.memoryText).toContain(statement)
+      expect(injection.memoryText).not.toContain("Can you check this?")
+      expect(injection.trace.recallTokens).toBeLessThanOrEqual(config.budgets.recallTokens)
+
+      const records = await providerB.search({ ...request("Orion"), context: sessionB })
+      expect(records).toHaveLength(3)
+      for (const { record } of records) {
+        expect(record.provenance?.[0]?.source).toMatchObject({
+          kind: "user",
+          externalId: "learning-message-a",
+          metadata: { sessionId: sessionA.sessionId },
+        })
+        const span = record.metadata?.capture as { statementStart: number; statementEnd: number }
+        expect(prompt.slice(span.statementStart, span.statementEnd)).toBe(record.content)
+      }
+
+      const unrelated = await new RememOrchestrator([providerB], config).processPrompt(
+        "Explain a Python list comprehension.",
+        { ...sessionB, sessionId: "learning-unrelated" },
+      )
+      expect(unrelated.trace.selectedResults).toBe(0)
+      expect(unrelated.memoryText).toBe("")
+
+      const foreign = await new RememOrchestrator([providerB], config).processPrompt(
+        continuityPrompt,
+        { ...sessionB, projectId: "other-project", sessionId: "learning-foreign" },
+      )
+      expect(foreign.trace.selectedResults).toBe(0)
+      expect(foreign.memoryText).toBe("")
+    } finally {
+      await providerB.dispose()
+    }
+  })
+
   it("persists a captured observation and pending candidate atomically with body-free status", async () => {
     const provider = new PostgresMemoryProvider(
       {
@@ -823,6 +923,33 @@ integration("PostgreSQL managed provider", () => {
     await provider.persistCandidate(observation, candidate)
     await provider.persistCandidate(observation, candidate)
 
+    const updatedCandidate: CandidateMemory = {
+      ...candidate,
+      memory: {
+        ...candidate.memory,
+        title: "Explicit decision: use blue-green deploys",
+        content: "Use blue-green deploys.",
+      },
+      reasons: ["updated extraction"],
+    }
+    await provider.persistCandidate(observation, updatedCandidate)
+    await expect(
+      provider.persistCandidate(
+        {
+          ...observation,
+          context: { ...observation.context, sessionId: "foreign-session" },
+        },
+        {
+          ...updatedCandidate,
+          memory: {
+            ...updatedCandidate.memory,
+            title: "Cross-session replacement",
+            content: "This must not replace the original session candidate.",
+          },
+        },
+      ),
+    ).rejects.toThrow("captured observation id belongs to another context")
+
     expect(await provider.candidateStatus(context)).toMatchObject({ pending: 1 })
     const persisted = (
       await pool.query<{ payload: Record<string, unknown>; metadata: Record<string, unknown> }>(
@@ -835,7 +962,7 @@ integration("PostgreSQL managed provider", () => {
     ).rows[0]
     expect(persisted).toMatchObject({
       payload: { host: "opencode-v2", messageId: "message-1" },
-      metadata: { providerId: "remem-local", reasons: ["explicit decision"] },
+      metadata: { providerId: "remem-local", reasons: ["updated extraction"] },
     })
     expect(persisted?.payload).not.toHaveProperty("text")
     expect(
@@ -855,10 +982,41 @@ integration("PostgreSQL managed provider", () => {
     expect(await provider.listCandidates("pending")).toContainEqual(
       expect.objectContaining({
         id: candidate.id,
-        title: candidate.memory.title,
-        content: candidate.memory.content,
+        title: updatedCandidate.memory.title,
+        content: updatedCandidate.memory.content,
       }),
     )
+    const foreignPendingCandidate = randomUUID()
+    await pool.query(
+      `INSERT INTO remem.candidate_memories
+        (id, session_event_id, type, title, content, scope_kind, scope_id, confidence, status, metadata)
+       VALUES ($1, $2, 'decision', 'Foreign pending decision', 'Do not replace this.', 'project', 'phoenix', 0.9, 'pending', $3::jsonb)`,
+      [
+        foreignPendingCandidate,
+        observation.id,
+        JSON.stringify({ providerId: "other-provider", reasons: ["foreign candidate"] }),
+      ],
+    )
+    await expect(
+      provider.persistCandidate(observation, {
+        ...updatedCandidate,
+        id: foreignPendingCandidate,
+        memory: {
+          ...updatedCandidate.memory,
+          title: "Attempted replacement",
+          content: "This must not replace the foreign candidate.",
+        },
+      }),
+    ).rejects.toThrow("captured candidate id belongs to another context")
+    expect(
+      (
+        await pool.query<{ content: string; provider_id: string }>(
+          `SELECT content, metadata->>'providerId' AS provider_id
+           FROM remem.candidate_memories WHERE id = $1`,
+          [foreignPendingCandidate],
+        )
+      ).rows[0],
+    ).toEqual({ content: "Do not replace this.", provider_id: "other-provider" })
     const otherProviderCandidate = randomUUID()
     await pool.query(
       `INSERT INTO remem.candidate_memories
@@ -867,6 +1025,18 @@ integration("PostgreSQL managed provider", () => {
       [otherProviderCandidate, JSON.stringify({ providerId: "other-provider" })],
     )
     await provider.reviewCandidate(candidate.id, "approved")
+    await provider.persistCandidate(observation, {
+      ...updatedCandidate,
+      memory: { ...updatedCandidate.memory, content: "Do not overwrite reviewed content." },
+    })
+    expect(
+      (
+        await pool.query<{ content: string }>(
+          "SELECT content FROM remem.candidate_memories WHERE id = $1",
+          [candidate.id],
+        )
+      ).rows[0]?.content,
+    ).toBe(updatedCandidate.memory.content)
     expect(await provider.candidateStatus(context)).toMatchObject({ approved: 1, pending: 0 })
     expect(await provider.consolidateCandidates()).toMatchObject({ candidates: 1, promoted: 1 })
     expect(
@@ -877,6 +1047,142 @@ integration("PostgreSQL managed provider", () => {
         )
       ).rows[0]?.status,
     ).toBe("approved")
+  })
+
+  it("reuses processed identities without rewriting or reviving promoted memories", async () => {
+    const provider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "remem-local",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 100,
+      },
+      { pool },
+    )
+    const candidateId = randomUUID()
+    const legacy: CandidateMemory = {
+      id: candidateId,
+      observationIds: [],
+      confidence: 0.98,
+      status: "approved",
+      reasons: ["legacy extraction"],
+      memory: {
+        title: "Project fact: Remember that Atlas uses SQLite.",
+        content: "Remember that Atlas uses SQLite.",
+        type: "semantic",
+        scope: { kind: "project", id: "candidate-upgrade" },
+        provenance: [
+          {
+            source: { kind: "user", externalId: "candidate-upgrade-message" },
+            capturedAt: "2026-09-02T12:00:00.000Z",
+            original: true,
+          },
+        ],
+      },
+    }
+    const pipeline = new DeterministicConsolidationPipeline(provider)
+    const first = await pipeline.consolidate([legacy])
+    await expect(
+      provider.findByConsolidationCandidateId(candidateId, {
+        kind: "project",
+        id: "other-project",
+      }),
+    ).resolves.toBeUndefined()
+    const current: CandidateMemory = {
+      ...legacy,
+      reasons: ["current extraction"],
+      memory: {
+        ...legacy.memory,
+        title: "Project fact: Atlas uses SQLite.",
+        content: "Atlas uses SQLite.",
+        metadata: {
+          capture: { extractorVersion: "deterministic-spans-v1" },
+        },
+      },
+    }
+
+    const repeated = await pipeline.consolidate([current])
+    const consolidation = repeated[0]?.memory.metadata?.consolidation as
+      { memoryId?: string } | undefined
+    const record = consolidation?.memoryId
+      ? await provider.get(consolidation.memoryId, {
+          ...context,
+          projectId: "candidate-upgrade",
+        })
+      : undefined
+
+    expect(first[0]?.status).toBe("promoted")
+    expect(repeated[0]?.reasons).toContain("reused processed candidate")
+    expect(record).toMatchObject({
+      title: legacy.memory.title,
+      content: legacy.memory.content,
+      metadata: {
+        consolidation: { candidateId },
+      },
+    })
+    expect(
+      (
+        await pool.query<{ count: string }>(
+          `SELECT count(*) FROM remem.memories
+           WHERE provider_id = $1
+             AND (
+               metadata->'consolidation'->>'candidateId' = $2 OR
+               metadata->'consolidation'->>'lastCandidateId' = $2
+             )`,
+          [provider.id, candidateId],
+        )
+      ).rows[0]?.count,
+    ).toBe("1")
+
+    if (!record) throw new Error("promoted memory missing")
+    const edited = await provider.update(record.id, {
+      ...legacy.memory,
+      title: "Reviewed Atlas storage",
+      content: "Atlas uses PostgreSQL after review.",
+      type: "decision",
+      metadata: record.metadata ?? {},
+      tags: ["human-reviewed"],
+    })
+    const savedEdit = await provider.get(edited.id, { ...context, projectId: "candidate-upgrade" })
+    expect((await pipeline.consolidate([current]))[0]?.reasons).toContain(
+      "reused processed candidate",
+    )
+    expect(await provider.get(edited.id, { ...context, projectId: "candidate-upgrade" })).toEqual(
+      savedEdit,
+    )
+
+    const successor = await provider.supersede(edited.id, {
+      ...legacy.memory,
+      title: "Current Atlas storage",
+      content: "Atlas uses PostgreSQL with encrypted storage.",
+      metadata: { consolidation: { candidateId: randomUUID(), action: "supersedes" } },
+    })
+    const savedSuccessor = await provider.get(successor.id, {
+      ...context,
+      projectId: "candidate-upgrade",
+    })
+    await expect(
+      provider.findByConsolidationCandidateId(candidateId, legacy.memory.scope),
+    ).resolves.toMatchObject({
+      id: record.id,
+      freshness: "superseded",
+    })
+    expect((await pipeline.consolidate([legacy]))[0]?.reasons).toContain(
+      "reused processed candidate",
+    )
+    expect(
+      await provider.get(successor.id, { ...context, projectId: "candidate-upgrade" }),
+    ).toEqual(savedSuccessor)
+    expect(
+      (
+        await pool.query<{ count: string }>(
+          "SELECT count(*) FROM remem.memories WHERE provider_id = $1 AND scope_id = $2",
+          [provider.id, "candidate-upgrade"],
+        )
+      ).rows[0]?.count,
+    ).toBe("2")
   })
 
   it("reports database, migration, provider, filesystem, and embedding health", async () => {

@@ -30,6 +30,8 @@ export interface UserPromptCapture {
 const QUOTED_OR_SYNTHETIC_PATTERN = /(^\s*>|```|<memory-|tool[- ]output|source:\s*remem)/imu
 const REPORTED_QUOTE_PATTERN =
   /\b(?:said|wrote|reported|mentioned|claimed|told|according to)\b[^"\n“‘]{0,80}(?:"[^"\n]{1,500}"|'[^'\n]{1,500}'|“[^”\n]{1,500}”|‘[^’\n]{1,500}’)/iu
+const ATTRIBUTED_CONTENT_PATTERN =
+  /\b(?:(?:according to\s+(?:(?:the|this|that|a|an)\s+)?|per\s+(?:the|this|that)\s+)(?:ticket|issue|runbook|document(?:ation)?|docs?|report|message|email|article|source)|(?:the|this|that)\s+(?:ticket|issue|runbook|document(?:ation)?|docs?|report|message|email|article|source)\s+(?:says?|states?|reports?|mentions?|claims?|requires?|recommends?))\b/iu
 
 export interface CaptureClassification {
   kind: SessionEventKind
@@ -47,7 +49,13 @@ export interface CapturePolicy {
 }
 
 const DIRECT_REMEMBER_PATTERN =
-  /^\s*(?:please\s+)?(?:remember|keep(?:\s+this)?\s+in\s+mind|note|save|store)\s*(?:that\s+)?(?::\s*)?/iu
+  /^\s*(?:please\s+)?(?:remember|keep(?:\s+this)?\s+in\s+mind|note|save|store)(?=\s|:|$)\s*(?:that(?=\s|:|$)\s*)?(?::\s*)?/iu
+const MAX_CANDIDATES_PER_OBSERVATION = 8
+const sentenceSegmenter = new Intl.Segmenter("en", { granularity: "sentence" })
+const NONTERMINAL_ABBREVIATION =
+  /(?<![\p{L}\p{N}_])(?:mr|mrs|ms|dr|prof|sr|jr|st|vs|etc|e\.g|i\.e)\.$/iu
+const PERSON_INITIAL = /(?<![\p{L}\p{N}_])\p{L}\.$/u
+const LABELED_INITIAL = /\b(?:answer|case|choice|item|option|phase|plan|step|version)\s+\p{L}\.$/iu
 const CORRECTION_PATTERN =
   /^\s*(?:correction|actually|instead|i was wrong|that(?:'s| is) incorrect)\b/iu
 const PREFERENCE_PATTERN =
@@ -80,10 +88,10 @@ function classifyDurableStatement(text: string): CaptureClassification | undefin
 
 export const deterministicCapturePolicy: CapturePolicy = {
   classify(text) {
-    if (text.includes("?")) return undefined
     const directRequest = DIRECT_REMEMBER_PATTERN.exec(text)
     if (directRequest) {
-      const statement = text.slice(directRequest[0].length)
+      const statement = text.slice(directRequest[0].length).trim()
+      if (!statement || statement.includes("?")) return undefined
       const classification = classifyDurableStatement(statement)
       return classification
         ? {
@@ -93,6 +101,7 @@ export const deterministicCapturePolicy: CapturePolicy = {
           }
         : { kind: "fact-discovered", confidence: 0.98, reason: "explicit remember request" }
     }
+    if (text.includes("?")) return undefined
     return classifyDurableStatement(text)
   },
 }
@@ -118,7 +127,8 @@ function safeToCapture(text: string, config: CaptureConfig): boolean {
     text.length <= config.maxInputCharacters &&
     !containsSensitiveCredential(text) &&
     !QUOTED_OR_SYNTHETIC_PATTERN.test(text) &&
-    !REPORTED_QUOTE_PATTERN.test(text)
+    !REPORTED_QUOTE_PATTERN.test(text) &&
+    !ATTRIBUTED_CONTENT_PATTERN.test(text)
   )
 }
 
@@ -141,67 +151,129 @@ export class DeterministicCandidateExtractor implements CandidateExtractor {
   ) {}
 
   classify(text: string): CaptureClassification | undefined {
-    return this.policy.classify(text)
+    for (const statement of this.statements(text)) return statement.classification
+    return undefined
+  }
+
+  private *statements(text: string): Generator<{
+    content: string
+    start: number
+    end: number
+    classification: CaptureClassification
+  }> {
+    if (text.length > this.config.maxInputCharacters) return
+    let count = 0
+    let spanStart = 0
+    for (const { segment, index } of sentenceSegmenter.segment(text)) {
+      const spanEnd = index + segment.length
+      const raw = text.slice(spanStart, spanEnd)
+      const trimmed = raw.trimEnd()
+      const remaining = text.slice(spanEnd)
+      const nextIsListItem = /^\s*(?:[-*]|\d+\.)\s+/u.test(remaining)
+      const continuesPersonName =
+        PERSON_INITIAL.test(trimmed) &&
+        !LABELED_INITIAL.test(trimmed) &&
+        /^\s*[\p{Lu}\p{Lt}](?:[\p{L}\p{M}'’-]+|\.)/u.test(remaining)
+      // ICU treats newlines and some abbreviations as boundaries. Keep soft-wrapped qualifiers intact.
+      if (
+        spanEnd < text.length &&
+        !nextIsListItem &&
+        (!/[.!?]["')\]]?$/u.test(trimmed) ||
+          NONTERMINAL_ABBREVIATION.test(trimmed) ||
+          continuesPersonName)
+      )
+        continue
+      const offset = spanStart
+      spanStart = spanEnd
+      const prefix = /^\s*(?:(?:[-*]|\d+\.)\s+)?/u.exec(raw)?.[0] ?? ""
+      const statement = raw.slice(prefix.length).trimEnd()
+      if (nextIsListItem && statement.endsWith(":")) continue
+      const classification = this.policy.classify(statement)
+      if (!classification) continue
+      const wrapper = DIRECT_REMEMBER_PATTERN.exec(statement)?.[0] ?? ""
+      const content = statement.slice(wrapper.length).trim()
+      if (!content || content.length > this.config.maxCandidateCharacters) continue
+      const start = offset + prefix.length + statement.indexOf(content, wrapper.length)
+      yield { content, start, end: start + content.length, classification }
+      if (++count >= MAX_CANDIDATES_PER_OBSERVATION) return
+    }
   }
 
   extract(observations: SessionObservation[], _signal?: AbortSignal): Promise<CandidateMemory[]> {
-    const observation = observations[0]
-    if (!observation) return Promise.resolve([])
-    const procedure = extractProcedureCandidate(observation, this.config)
-    if (procedure) return Promise.resolve([procedure])
-    const text = typeof observation.payload.text === "string" ? observation.payload.text.trim() : ""
-    const classification = this.policy.classify(text)
-    if (!safeToCapture(text, this.config) || !classification) return Promise.resolve([])
-    const messageId =
-      typeof observation.payload.messageId === "string"
-        ? observation.payload.messageId
-        : observation.id
-    const content = text.slice(0, this.config.maxCandidateCharacters)
-    const type =
-      classification.kind === "preference"
-        ? "preference"
-        : classification.kind === "fact-discovered"
-          ? "semantic"
-          : classification.kind === "project-state" ||
-              classification.kind === "task-opened" ||
-              classification.kind === "task-resolved"
-            ? "task"
-            : "decision"
-    return Promise.resolve([
-      {
-        id: stableId("candidate", observation.id),
-        observationIds: [observation.id],
-        memory: {
-          title: title(classification.kind, content),
-          content,
-          summary: content.slice(0, 320),
-          scope: { kind: "project", id: observation.context.projectId },
-          type,
-          confidence: classification.confidence,
-          provenance: [
-            {
-              source: {
-                kind: "user",
-                uri: observation.source,
-                externalId: messageId,
-                observedAt: observation.occurredAt,
-                metadata: {
-                  host: observation.payload.host,
-                  sessionId: observation.context.sessionId,
-                  messageId,
+    const candidates: CandidateMemory[] = []
+    for (const observation of observations) {
+      const procedure = extractProcedureCandidate(observation, this.config)
+      if (procedure) {
+        candidates.push(procedure)
+        continue
+      }
+      const text = typeof observation.payload.text === "string" ? observation.payload.text : ""
+      // Screen the whole input before splitting so quotation/secret context cannot be stripped away.
+      if (!safeToCapture(text, this.config)) continue
+      const messageId =
+        typeof observation.payload.messageId === "string"
+          ? observation.payload.messageId
+          : observation.id
+      let index = 0
+      for (const { content, start, end, classification } of this.statements(text)) {
+        const type =
+          classification.kind === "preference"
+            ? "preference"
+            : classification.kind === "fact-discovered"
+              ? "semantic"
+              : classification.kind === "project-state" ||
+                  classification.kind === "task-opened" ||
+                  classification.kind === "task-resolved"
+                ? "task"
+                : "decision"
+        candidates.push({
+          // Preserve the first candidate's identity for previously persisted single-candidate captures.
+          id:
+            index++ === 0
+              ? stableId("candidate", observation.id)
+              : stableId("candidate", observation.id, String(start)),
+          observationIds: [observation.id],
+          memory: {
+            title: title(classification.kind, content),
+            content,
+            summary: content.slice(0, 320),
+            scope: { kind: "project", id: observation.context.projectId },
+            type,
+            confidence: classification.confidence,
+            provenance: [
+              {
+                source: {
+                  kind: "user",
+                  uri: observation.source,
+                  externalId: messageId,
+                  observedAt: observation.occurredAt,
+                  metadata: {
+                    host: observation.payload.host,
+                    sessionId: observation.context.sessionId,
+                    messageId,
+                  },
                 },
+                capturedAt: observation.occurredAt,
+                original: true,
               },
-              capturedAt: observation.occurredAt,
-              original: true,
+            ],
+            metadata: {
+              capture: {
+                observationId: observation.id,
+                host: observation.payload.host,
+                extractorVersion: "deterministic-spans-v1",
+                statementStart: start,
+                statementEnd: end,
+              },
             },
-          ],
-          metadata: { capture: { observationId: observation.id, host: observation.payload.host } },
-        },
-        confidence: classification.confidence,
-        status: "pending",
-        reasons: [classification.reason],
-      },
-    ])
+          },
+          confidence: classification.confidence,
+          status: "pending",
+          reasons: [classification.reason],
+        })
+      }
+    }
+    return Promise.resolve(candidates)
   }
 }
 
@@ -394,21 +466,15 @@ export class CaptureCoordinator {
             (signal) => this.extractor.extract([observation], signal),
             this.shutdown.signal,
           )
+          const promote = this.config.autoPromote ? this.promote : undefined
           for (const candidate of candidates) {
-            const promote = this.promote
-            if (this.config.autoPromote && promote) {
+            if (promote) {
               const approved = { ...candidate, status: "approved" as const }
               await withTimeout(
                 this.config.timeoutMs,
                 (signal) => promote(approved, signal),
                 this.shutdown.signal,
               )
-              this.finishCapture(observation, {
-                outcome: "promoted",
-                kind: observation.kind,
-                confidence: candidate.confidence,
-                reason: candidate.reasons[0] ?? "captured statement",
-              })
               continue
             }
             await withTimeout(
@@ -421,7 +487,20 @@ export class CaptureCoordinator {
               this.shutdown.signal,
             )
           }
-          this.finishCapture(observation)
+          this.finishCapture(
+            observation,
+            promote && candidates.length > 0
+              ? {
+                  outcome: "promoted",
+                  kind: observation.kind,
+                  confidence: Math.min(...candidates.map((candidate) => candidate.confidence)),
+                  reason:
+                    candidates.length > 1
+                      ? `captured ${candidates.length} statements`
+                      : (candidates[0]?.reasons[0] ?? "captured statement"),
+                }
+              : undefined,
+          )
         } catch (error) {
           this.finishCapture(observation, {
             outcome: "failed",

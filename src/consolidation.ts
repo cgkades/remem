@@ -107,6 +107,7 @@ function mutationOptions(
 
 function mergeRecord(record: MemoryRecord, candidate: CandidateMemory): MemoryWrite {
   const memory = candidate.memory
+  const consolidation = record.metadata?.consolidation
   return {
     ...writeFromRecord(record),
     aliases: deduplicated([...(record.aliases ?? []), ...(memory.aliases ?? [])], normalize),
@@ -124,7 +125,13 @@ function mergeRecord(record: MemoryRecord, candidate: CandidateMemory): MemoryWr
     confidence: Math.max(record.confidence ?? 0, memory.confidence ?? 0),
     metadata: {
       ...(record.metadata ?? {}),
-      consolidation: { lastCandidateId: candidate.id, action: "merged-duplicate" },
+      consolidation: {
+        ...(consolidation && typeof consolidation === "object" && !Array.isArray(consolidation)
+          ? consolidation
+          : {}),
+        lastCandidateId: candidate.id,
+        action: "merged-duplicate",
+      },
     },
   }
 }
@@ -209,6 +216,26 @@ export class DeterministicConsolidationPipeline implements ConsolidationPipeline
       throw new Error("provider does not support consolidation reads and writes")
     }
     const context = candidateContext(candidate)
+    const repeated = await this.provider.findByConsolidationCandidateId?.(
+      candidate.id,
+      candidate.memory.scope,
+      signal,
+    )
+    if (repeated) {
+      if (
+        repeated.providerId !== this.provider.id ||
+        !sameScope(repeated.scope, candidate.memory.scope)
+      ) {
+        throw new Error("repeated candidate lookup crossed provider or scope boundary")
+      }
+      // A merged/reviewed result may have evolved independently; replay must not rewrite or revive it.
+      return withResult(
+        { ...candidate, memory: writeFromRecord(repeated) },
+        "promoted",
+        "reused processed candidate",
+        repeated.id,
+      )
+    }
     const matches = await this.provider.search({
       query: candidate.memory.title,
       topics: [candidate.memory.title],
