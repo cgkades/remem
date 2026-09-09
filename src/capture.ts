@@ -30,6 +30,8 @@ export interface UserPromptCapture {
 const QUOTED_OR_SYNTHETIC_PATTERN = /(^\s*>|```|<memory-|tool[- ]output|source:\s*remem)/imu
 const REPORTED_QUOTE_PATTERN =
   /\b(?:said|wrote|reported|mentioned|claimed|told|according to)\b[^"\n“‘]{0,80}(?:"[^"\n]{1,500}"|'[^'\n]{1,500}'|“[^”\n]{1,500}”|‘[^’\n]{1,500}’)/iu
+const ATTRIBUTED_CONTENT_PATTERN =
+  /\b(?:(?:according to\s+(?:(?:the|this|that|a|an)\s+)?|per\s+(?:the|this|that)\s+)(?:ticket|issue|runbook|document(?:ation)?|docs?|report|message|email|article|source)|(?:the|this|that)\s+(?:ticket|issue|runbook|document(?:ation)?|docs?|report|message|email|article|source)\s+(?:says?|states?|reports?|mentions?|claims?|requires?|recommends?))\b/iu
 
 export interface CaptureClassification {
   kind: SessionEventKind
@@ -51,7 +53,9 @@ const DIRECT_REMEMBER_PATTERN =
 const MAX_CANDIDATES_PER_OBSERVATION = 8
 const sentenceSegmenter = new Intl.Segmenter("en", { granularity: "sentence" })
 const NONTERMINAL_ABBREVIATION =
-  /(?<![\p{L}\p{N}_])(?:mr|mrs|ms|dr|prof|sr|jr|st|vs|etc|e\.g|i\.e|\p{L})\.$/iu
+  /(?<![\p{L}\p{N}_])(?:mr|mrs|ms|dr|prof|sr|jr|st|vs|etc|e\.g|i\.e)\.$/iu
+const PERSON_INITIAL = /(?<![\p{L}\p{N}_])\p{L}\.$/u
+const LABELED_INITIAL = /\b(?:answer|case|choice|item|option|phase|plan|step|version)\s+\p{L}\.$/iu
 const CORRECTION_PATTERN =
   /^\s*(?:correction|actually|instead|i was wrong|that(?:'s| is) incorrect)\b/iu
 const PREFERENCE_PATTERN =
@@ -123,7 +127,8 @@ function safeToCapture(text: string, config: CaptureConfig): boolean {
     text.length <= config.maxInputCharacters &&
     !containsSensitiveCredential(text) &&
     !QUOTED_OR_SYNTHETIC_PATTERN.test(text) &&
-    !REPORTED_QUOTE_PATTERN.test(text)
+    !REPORTED_QUOTE_PATTERN.test(text) &&
+    !ATTRIBUTED_CONTENT_PATTERN.test(text)
   )
 }
 
@@ -163,12 +168,19 @@ export class DeterministicCandidateExtractor implements CandidateExtractor {
       const spanEnd = index + segment.length
       const raw = text.slice(spanStart, spanEnd)
       const trimmed = raw.trimEnd()
-      const nextIsListItem = /^\s*(?:[-*]|\d+\.)\s+/u.test(text.slice(spanEnd))
+      const remaining = text.slice(spanEnd)
+      const nextIsListItem = /^\s*(?:[-*]|\d+\.)\s+/u.test(remaining)
+      const continuesPersonName =
+        PERSON_INITIAL.test(trimmed) &&
+        !LABELED_INITIAL.test(trimmed) &&
+        /^\s*[\p{Lu}\p{Lt}](?:[\p{L}\p{M}'’-]+|\.)/u.test(remaining)
       // ICU treats newlines and some abbreviations as boundaries. Keep soft-wrapped qualifiers intact.
       if (
         spanEnd < text.length &&
         !nextIsListItem &&
-        (!/[.!?]["')\]]?$/u.test(trimmed) || NONTERMINAL_ABBREVIATION.test(trimmed))
+        (!/[.!?]["')\]]?$/u.test(trimmed) ||
+          NONTERMINAL_ABBREVIATION.test(trimmed) ||
+          continuesPersonName)
       )
         continue
       const offset = spanStart

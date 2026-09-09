@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { describe, expect, it } from "vitest"
 import { DeterministicConsolidationPipeline } from "../src/consolidation.js"
 import type { CandidateMemory } from "../src/observation.js"
-import type { MemoryProvider, MemoryRecord, MemoryWrite } from "../src/types.js"
+import type { MemoryProvider, MemoryRecord, MemoryScope, MemoryWrite } from "../src/types.js"
 
 class InMemoryProvider implements MemoryProvider {
   readonly id = "test-memory"
@@ -31,6 +31,18 @@ class InMemoryProvider implements MemoryProvider {
   search() {
     return Promise.resolve(
       [...this.records.values()].map((record) => ({ record, score: 1, reasons: [] })),
+    )
+  }
+
+  findByConsolidationCandidateId(candidateId: string, scope: MemoryScope) {
+    return Promise.resolve(
+      [...this.records.values()].find((record) => {
+        if (record.scope.kind !== scope.kind || record.scope.id !== scope.id) return false
+        const consolidation = record.metadata?.consolidation
+        if (!consolidation || typeof consolidation !== "object") return false
+        const identity = consolidation as Record<string, unknown>
+        return identity.candidateId === candidateId || identity.lastCandidateId === candidateId
+      }),
     )
   }
 
@@ -120,6 +132,153 @@ describe("DeterministicConsolidationPipeline", () => {
     expect(secondResult[0]?.reasons).toContain("merged exact duplicate")
     expect(provider.records.size).toBe(1)
     expect([...provider.records.values()][0]?.provenance).toHaveLength(2)
+  })
+
+  it("reuses a processed candidate without silently replacing its promoted memory", async () => {
+    const provider = new InMemoryProvider()
+    const candidateId = randomUUID()
+    const original = await provider.write({
+      ...candidate({
+        title: "Project fact: Remember that Atlas uses SQLite.",
+        content: "Remember that Atlas uses SQLite.",
+        type: "semantic",
+      }).memory,
+      metadata: { consolidation: { candidateId, action: "promoted" } },
+    })
+    const pipeline = new DeterministicConsolidationPipeline(provider)
+    const repeated = {
+      ...candidate({
+        title: "Project fact: Atlas uses SQLite.",
+        content: "Atlas uses SQLite.",
+        type: "semantic" as const,
+        metadata: {
+          capture: { extractorVersion: "deterministic-spans-v1" },
+        },
+      }),
+      id: candidateId,
+    }
+
+    const result = await pipeline.consolidate([repeated])
+
+    expect(result[0]?.reasons).toContain("reused processed candidate")
+    expect(provider.records.size).toBe(1)
+    expect(provider.records.get(original.id)).toEqual(original)
+    expect(result[0]?.memory.content).toBe(original.content)
+  })
+
+  it("does not overwrite manual changes committed after a repeated-candidate lookup", async () => {
+    const provider = new InMemoryProvider()
+    const incoming = candidate({ content: "Atlas uses SQLite.", type: "semantic" })
+    const original = await provider.write({
+      ...incoming.memory,
+      metadata: { consolidation: { candidateId: incoming.id, action: "promoted" } },
+    })
+    const edited = {
+      ...original,
+      content: "Atlas uses PostgreSQL.",
+      type: "decision" as const,
+      tags: ["reviewed"],
+    }
+    provider.findByConsolidationCandidateId = () => {
+      provider.records.set(original.id, edited)
+      return Promise.resolve(original)
+    }
+
+    const result = await new DeterministicConsolidationPipeline(provider).consolidate([incoming])
+
+    expect(result[0]?.reasons).toContain("reused processed candidate")
+    expect(provider.records.get(original.id)).toEqual(edited)
+    expect(provider.records.size).toBe(1)
+  })
+
+  it("preserves richer merged content and the originating candidate identity on replay", async () => {
+    const provider = new InMemoryProvider()
+    const pipeline = new DeterministicConsolidationPipeline(provider)
+    const first = candidate({
+      type: "semantic",
+      title: "Atlas storage policy",
+      content:
+        "Atlas uses encrypted PostgreSQL durable memory storage with backups migrations indexes scoped provenance monitoring verification replication recovery retention metadata and audit records.",
+    })
+    const second = candidate({
+      ...first.memory,
+      content: first.memory.content.replace("encrypted ", ""),
+    })
+    await pipeline.consolidate([first])
+    expect((await pipeline.consolidate([second]))[0]?.reasons).toContain("merged near duplicate")
+    const before = structuredClone([...provider.records.values()])
+
+    const replay = await pipeline.consolidate([second, first])
+
+    expect(replay.every((result) => result.reasons.includes("reused processed candidate"))).toBe(
+      true,
+    )
+    expect([...provider.records.values()]).toEqual(before)
+    expect(before[0]?.content).toBe(first.memory.content)
+  })
+
+  it("recognizes a historical candidate without reviving its superseded memory", async () => {
+    const provider = new InMemoryProvider()
+    const pipeline = new DeterministicConsolidationPipeline(provider)
+    const older = candidate({ content: "Atlas uses SQLite." })
+    await pipeline.consolidate([older])
+    const newer = candidate({
+      content: "Atlas uses PostgreSQL.",
+      observedAt: "2026-09-02T12:00:00.000Z",
+    })
+    await pipeline.consolidate([newer])
+    const before = structuredClone([...provider.records.values()])
+
+    const replay = await pipeline.consolidate([older])
+
+    expect(replay[0]?.reasons).toContain("reused processed candidate")
+    expect([...provider.records.values()]).toEqual(before)
+    expect(
+      [...provider.records.values()].filter((record) => record.freshness === "current"),
+    ).toHaveLength(1)
+  })
+
+  it.each(["provider", "scope"])(
+    "rejects a repeated-candidate lookup crossing the %s boundary",
+    async (boundary) => {
+      const provider = new InMemoryProvider()
+      const incoming = candidate()
+      const original = await provider.write({
+        ...incoming.memory,
+        ...(boundary === "scope" ? { scope: { kind: "global" as const } } : {}),
+      })
+      provider.findByConsolidationCandidateId = () =>
+        Promise.resolve({
+          ...original,
+          ...(boundary === "provider" ? { providerId: "foreign-provider" } : {}),
+        })
+
+      const result = await new DeterministicConsolidationPipeline(provider).consolidate([incoming])
+
+      expect(result[0]?.status).toBe("approved")
+      expect(provider.records.get(original.id)).toEqual(original)
+      expect(provider.records.size).toBe(1)
+    },
+  )
+
+  it("does not update a repeated candidate identity across scopes", async () => {
+    const provider = new InMemoryProvider()
+    const candidateId = randomUUID()
+    const global = await provider.write({
+      ...candidate({ scope: { kind: "global" } }).memory,
+      metadata: { consolidation: { candidateId, action: "promoted" } },
+    })
+    const pipeline = new DeterministicConsolidationPipeline(provider)
+    const projectCandidate = {
+      ...candidate({ scope: { kind: "project", id: "project" } }),
+      id: candidateId,
+    }
+
+    const result = await pipeline.consolidate([projectCandidate])
+
+    expect(result[0]?.reasons).toContain("promoted candidate")
+    expect(provider.records.size).toBe(2)
+    expect(provider.records.get(global.id)?.scope).toEqual({ kind: "global" })
   })
 
   it("supersedes a newer explicit decision without deleting the original", async () => {

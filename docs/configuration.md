@@ -108,7 +108,8 @@ overrides only the supplied capture fields and retains the installed provider co
 Only screened user-authored durable statements qualify. Direct requests such as `Remember that
 Atlas uses PostgreSQL`, plus ordinary decisions, preferences, corrections, project facts, and task
 state can be captured without a special trigger phrase. Question sentences, chitchat, prompts containing reusable
-credentials, reported quoted/retrieved text, or tool output are excluded. Capture never reads model or tool
+credentials, reported quoted/retrieved text, recognized source-attributed text (such as "according to
+the ticket"), or tool output are excluded. Capture never reads model or tool
 responses as user assertions. Hosts may also submit a normalized resolved-task episode after a
 _verified_ success; that path records a bounded `procedure` with session provenance, not a user
 assertion, and still redacts credentials. Failed or unverified investigations are dropped. With
@@ -133,7 +134,18 @@ Each candidate records an extractor version and `statementStart`/`statementEnd` 
 They locate the extracted claim; they do not imply that the original prompt is durably retained as an
 episode. Multi-candidate persistence/promotion is not all-or-nothing: an error reports capture failure
 even if earlier statements were already saved. Re-delivery uses stable candidate identities and the
-existing consolidation duplicate handling.
+existing consolidation duplicate handling. Re-extraction refreshes a pending candidate only within
+the same observation, scope, and provider; reviewed candidates are left unchanged and mismatched
+identities fail rather than appearing to save successfully.
+
+For PostgreSQL, consolidation also checks retained candidate-ID associations before writing. A known
+processed identity reuses its result without rewriting that memory, even after manual edits or
+supersession. A replay is not authorization to replace current knowledge or revive a historical fact;
+changing promoted content requires an explicit memory update/review, not automatic wrapper cleanup.
+Duplicate merges preserve the originating candidate ID alongside the latest merged ID. This is not a
+complete historical identity ledger: intermediate merged IDs and associations already lost in older
+metadata cannot be reconstructed. Providers without `findByConsolidationCandidateId` retain ordinary
+duplicate/conflict handling rather than this additional replay check.
 
 ## OpenCode v2 Plugin Options
 

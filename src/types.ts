@@ -231,6 +231,12 @@ export interface MemoryProvider {
   catalog(context: MemoryContext, signal: AbortSignal): Promise<CatalogEntry[]>
   search(request: MemorySearchRequest): Promise<MemoryResult[]>
   get?(id: string, context: MemoryContext): Promise<MemoryRecord | undefined>
+  /** Find a same-provider, same-scope processed association, including historical records. Not an authorization to rewrite it. */
+  findByConsolidationCandidateId?(
+    candidateId: string,
+    scope: MemoryScope,
+    signal?: AbortSignal,
+  ): Promise<MemoryRecord | undefined>
   write?(memory: MemoryWrite, options?: MemoryMutationOptions): Promise<MemoryRecord>
   update?(id: string, memory: MemoryWrite, options?: MemoryMutationOptions): Promise<MemoryRecord>
   supersede?(
