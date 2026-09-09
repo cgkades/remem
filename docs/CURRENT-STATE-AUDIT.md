@@ -2,6 +2,8 @@
 
 > **Audit date:** 2026-09-06
 >
+> **Review update:** 2026-09-09, checked against base commit `184e0ed4bfcea7bfa37701268f5ae0643d33fc8c` (the implementation shared by this PR and `main` at review time).
+>
 > **Purpose:** Compare the current repository with `PRODUCT-VISION.md` and `TARGET-ARCHITECTURE.md`. This is a snapshot, not the normative target. Update it when major milestones land.
 
 ## Executive assessment
@@ -86,6 +88,8 @@ Recent work strengthened OpenCode runtime E2E coverage, including automatic reca
 
 The current capture path is primarily driven by deterministic classification of user text. It recognizes patterns such as explicit corrections, preferences, decisions, facts, project-state statements, and explicit remember requests.
 
+In `src/capture.ts`, `deterministicCapturePolicy` rejects any text containing `?` before checking explicit remember requests. For user-text input, `DeterministicCandidateExtractor.extract` uses only the first observation, returns at most one candidate, stores the whole text up to its character limit (including command wrappers), and assigns project scope. Broad `let's`/`we'll` and `actually` patterns can also confuse tactical conversation with durable decisions/corrections. P4 must test these behaviors explicitly rather than preserve every existing trigger as authoritative.
+
 This is useful, but a real agent session contains important knowledge that is not expressed as one durable user sentence:
 
 - a tool error establishes a failure mode;
@@ -97,6 +101,8 @@ This is useful, but a real agent session contains important knowledge that is no
 
 The target needs normalized session observation across user, assistant, tool, and lifecycle events, with trust/evidence boundaries.
 
+There is an existing vertical path to reuse: `CaptureCoordinator.enqueueResolvedTask` in `src/capture.ts` accepts a successful `ResolvedTaskEpisode`; `observationFromResolvedTask` and `extractProcedureCandidate` in `src/procedure.ts` build procedure candidates. The current call sites are in `tests/procedure.test.ts`, not production hosts. Wiring host-supported, evidence-backed outcomes into this path is an early integration task, not a reason to rebuild procedure extraction. A model's claim of success alone is not a verified outcome.
+
 ### 2. Episodic memory is not first-class enough
 
 The system needs a durable answer to "what actually happened?" independent of the current semantic conclusion.
@@ -105,11 +111,13 @@ Current candidate/provenance structures preserve useful source information, but 
 
 Without this, consolidation either loses evidence or must infer too much from isolated captured statements.
 
-### 3. Automatic learning is too conservative to be the normal UX
+The current `CaptureCoordinator.drain` auto-promotion branch calls the consolidation callback instead of `ObservationStore.persistCandidate`. It must not be treated as evidence that every automatically promoted memory already has a persisted source observation. The target requires safe evidence persistence independently of review status. Likewise, the latest `CaptureExplanation` is held in a bounded in-memory map; it is not a durable explanation history, even though candidate structures already include reasons and provenance.
 
-Current configuration defaults capture off, and automatic promotion is separately opt-in. Review-oriented candidate workflows are sophisticated, but ordinary low-risk memory formation should not require the user to operate a review system.
+### 3. Automatic learning depends on the setup path
 
-The desired default is conservative **automatic** learning, with review reserved for ambiguous, conflicting, high-impact, or policy-sensitive cases.
+The CLI's `initialize`/`appConfig` in `src/cli/index.ts` do not have one uniform learning default. For a fresh configuration, plain `remem init`, OpenCode v2 (`--opencode`), and Pi setup need `--capture` to enable capture and leave auto-promotion off. OpenCode v1 setup (`--opencode-v1`) enables both capture and auto-promotion, and re-running that setup can enable them in an existing configuration. Simply changing a global default will not reconcile these behaviors or complete the learning loop.
+
+The desired default is conservative **automatic** learning, with review reserved for ambiguous, conflicting, high-impact, or policy-sensitive cases. The recovery work must unify setup semantics, preserve explicit opt-outs, and verify the policy/evidence path rather than treating a boolean as proof of safe automatic learning.
 
 ### 4. Consolidation is not yet a complete background/session lifecycle
 

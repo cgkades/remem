@@ -12,6 +12,8 @@
 - When implementation differs from this plan, update the plan in the same PR or explain why the target architecture should change.
 - Prefer small PRs, but optimize for complete vertical behavior rather than disconnected scaffolding.
 - Existing implementation may partially satisfy many unchecked items. Reuse it; do not rewrite working foundations without evidence.
+- Phase numbers express priorities, not permission to defer safety. P2 admission/provenance checks and P3 bounded retention/deletion are prerequisites for broader capture and P6 default changes. P13 verifies these cross-cutting guarantees; it does not introduce them after learning ships.
+- Land the smallest safe Session A/Session B vertical slice first. Shared-infrastructure work in P5 can proceed incrementally; it must not require replacing working domain state machines before that slice can run.
 
 ## P0 — Establish the source of truth
 
@@ -42,6 +44,7 @@ Build the test before or alongside the implementation so the project stops optim
 - [ ] Injected memory contains the unresolved follow-up.
 - [ ] The disproven hypothesis is not represented as current truth.
 - [ ] Episodic provenance can identify the evidence/session that produced the conclusion.
+- [ ] A safe detail omitted by semantic extraction remains recoverable through bounded episodic recall within the retention window.
 - [ ] An unrelated Session B prompt does not inject detailed Session A memory.
 - [ ] The scenario runs against the host-independent core.
 - [ ] At least one real-host E2E version runs against OpenCode v2.
@@ -58,6 +61,7 @@ Build the test before or alongside the implementation so the project stops optim
 - [ ] Review existing `SessionObservation`/capture types and define the canonical normalized observation schema.
 - [ ] Give every observation stable host/session/turn/message identity where available.
 - [ ] Represent observation source/trust explicitly.
+- [ ] Preserve original source and derivation links through summaries/candidates; repeated model/tool/retrieved text cannot become independent verification or an original user statement.
 - [ ] Represent scope explicitly.
 - [ ] Represent evidence references separately from trusted semantic content.
 - [ ] Support user-correction observations.
@@ -73,6 +77,7 @@ Build the test before or alongside the implementation so the project stops optim
 - [ ] Support entity/relationship discovery observations.
 - [ ] Define bounded observation payload limits.
 - [ ] Define retention semantics for observations that are not promoted.
+- [ ] Admit safe normalized completed-turn evidence independently of semantic classification; report bounded, content-free diagnostics for capture exclusions/drops.
 
 ### Host adapters
 
@@ -80,25 +85,27 @@ Build the test before or alongside the implementation so the project stops optim
 - [ ] OpenCode v2 can emit relevant assistant completion/outcome observations without treating model claims as trusted facts.
 - [ ] OpenCode v2 can emit bounded tool result/evidence observations without blindly storing tool output.
 - [ ] OpenCode v2 emits session-end/disposal/compaction lifecycle signals suitable for consolidation.
+- [ ] Wire host-supported verified outcomes into the existing `CaptureCoordinator.enqueueResolvedTask` / `src/procedure.ts` path, with a host-boundary regression that does not call the coordinator directly. If the host cannot establish the required evidence, retain uncertainty instead of inferring success from an assistant completion.
 - [ ] Pi maps equivalent lifecycle events to the same normalized contracts where supported.
 - [ ] OpenCode v1 compatibility maps what it can without weakening core semantics.
 - [ ] Unsupported host signals degrade explicitly rather than being guessed.
 
 ### Safety
 
-- [ ] Secret/credential screening occurs before durable observation persistence where appropriate.
+- [ ] Secret/credential screening covers every durable observation/candidate path, including nested payloads, metadata, and derived summaries. Reject unscreenable payloads without raw persistence; screening failure must not fail the host request.
 - [ ] Retrieved ReMem context cannot be re-observed as fresh user knowledge.
 - [ ] Quoted/reported third-party statements retain source semantics and cannot silently become user facts.
 - [ ] Tool output remains evidence, not instructions or automatically trusted truth.
+- [ ] Add regressions for poisoned tool/retrieved content repeated in an assistant summary, unknown provenance, nested credentials, and cross-scope evidence. Assert zero secret leakage and zero scope violations in this corpus.
 
-**P2 exit:** ReMem has a host-neutral stream of significant session evidence from which learning can be built.
+**P2 exit:** ReMem has a bounded, safety-screened host-neutral evidence stream that does not depend on a semantic significance match.
 
 ---
 
 ## P3 — First-class episodic memory
 
 - [ ] Define `Episode`/episodic record contract distinct from semantic `Memory`.
-- [ ] Store ordered material events for an episode/session.
+- [ ] Persist ordered safe completed-turn evidence before semantic significance filtering, including turns that produce no candidates.
 - [ ] Preserve host/session/turn/source provenance.
 - [ ] Preserve outcome: succeeded/failed/disproved/unresolved as applicable.
 - [ ] Link episodes to relevant project/workspace scope.
@@ -108,10 +115,12 @@ Build the test before or alongside the implementation so the project stops optim
 - [ ] Implement bounded episodic retrieval in PostgreSQL provider.
 - [ ] Add lexical retrieval for episodes.
 - [ ] Add semantic retrieval/embedding strategy for episodes where useful.
-- [ ] Define episodic retention/compaction policy independently from semantic memory.
+- [ ] Define episodic age/size limits and a baseline retention window before significance-based expiry, independently from semantic memory. Make capacity drops and unavailable/expired evidence observable without logging raw content.
+- [ ] Define and test explicit forget scope across episodes, derived candidates/memories, embeddings, and catalogs; retained audit metadata must not contain forgotten content. Document backup expiry/restore behavior and distinguish ordinary episode expiry from explicit forgetting.
 - [ ] Ensure semantic supersession never mutates historical episode truth.
 - [ ] Add tests proving a disproven approach remains historically recallable but is not current semantic truth.
 - [ ] Add tests proving the evidence for a durable procedure/root cause can be recovered.
+- [ ] Persist safe supporting evidence on the automatic-promotion path as well as the pending-review path; test restart recovery of those evidence links.
 
 **P3 exit:** ReMem can answer both "what do we know now?" and "what happened?" using distinct memory classes.
 
@@ -120,7 +129,12 @@ Build the test before or alongside the implementation so the project stops optim
 ## P4 — General candidate extraction
 
 - [ ] Refactor current deterministic capture into a generic candidate-extraction pipeline over observations/episodes.
-- [ ] Preserve deterministic explicit-remember/correction/preference/decision rules as high-confidence signals.
+- [ ] Preserve deterministic explicit-remember/correction/preference/decision recognition, but validate the memory-bearing statement rather than assigning trust from trigger words alone.
+- [ ] Extract zero, one, or multiple candidates per input and use supporting observations across turns rather than only the first observation.
+- [ ] Store only the memory-bearing span and needed rationale; remove remember/save wrappers without losing provenance to the original evidence.
+- [ ] Handle direct remember requests before generic question suppression and extract durable statements from mixed question/statement inputs.
+- [ ] Distinguish adopted decisions from tactical suggestions, and durable corrections from conversational `actually` statements.
+- [ ] Select the narrowest justified scope per candidate, distinguishing user-wide preferences from project/session state; broader scope requires policy authorization, not an extractor guess.
 - [ ] Extract durable project facts from evidence-backed episodes.
 - [ ] Extract verified root causes.
 - [ ] Extract reusable successful procedures.
@@ -135,7 +149,7 @@ Build the test before or alongside the implementation so the project stops optim
 - [ ] Add optional local model-backed extractor interface.
 - [ ] Keep deterministic extraction as fallback.
 - [ ] Make remote extraction impossible unless explicitly configured/authorized.
-- [ ] Evaluate extraction precision/false-memory rate on a checked-in corpus.
+- [ ] Evaluate durable-capture precision/recall, false-memory rate, and rationale-recovery rate on a checked-in corpus. Include `Remember X. Can you do Y?`, multiple durable statements, rationale separated from decisions, tactical `let's`/`we'll`, conversational `actually`, user-wide versus project/session scope, paraphrased facts/blockers, and failed approaches retained only episodically. Define pass thresholds before changing defaults.
 
 **P4 exit:** ordinary successful agent work produces useful candidate memories without requiring magic phrases.
 
@@ -146,16 +160,17 @@ Build the test before or alongside the implementation so the project stops optim
 The repository currently has generic and specialized review concepts. Preserve domain policy, converge infrastructure.
 
 - [ ] Inventory `CandidateMemory`, correction candidates, institutional review state, and consolidation run state.
-- [ ] Define one generic candidate lifecycle/state-machine abstraction.
+- [ ] Share lifecycle persistence/audit/concurrency infrastructure while retaining distinct generic-candidate and correction-candidate payloads, validation, and state transitions.
 - [ ] Define shared audit-history infrastructure.
+- [ ] Persist bounded reason codes, policy/extractor version, evidence IDs, scope decision, confidence, review/consolidation action, and resulting memory ID when present; retain optional retrieval hints as derived metadata, not source truth.
 - [ ] Define shared optimistic locking/CAS/concurrency behavior.
 - [ ] Define shared reviewer identity/decision metadata.
 - [ ] Define shared expiry/retention behavior.
 - [ ] Define shared failure/retry/recovery behavior.
 - [ ] Migrate generic candidate review to shared infrastructure.
-- [ ] Adapt expert correction workflow to extend shared lifecycle while retaining replay/evidence requirements.
-- [ ] Adapt institutional memory review to extend shared lifecycle where applicable.
-- [ ] Remove duplicated lifecycle implementations after migration.
+- [ ] Adapt expert correction workflow to shared infrastructure while retaining replay/evidence requirements and its human-approval boundary.
+- [ ] Adapt institutional memory review to shared infrastructure where applicable.
+- [ ] Remove duplicated infrastructure after migration, not domain-specific lifecycle semantics.
 - [ ] Add concurrency regression tests for review/promotion races.
 
 **P5 exit:** specialized memory types add policy, not parallel memory-management architectures.
@@ -165,6 +180,7 @@ The repository currently has generic and specialized review concepts. Preserve d
 ## P6 — Learning policy and safe automatic promotion
 
 - [ ] Define explicit learning-policy result: reject/expire, episodic-only, auto-promote, require-review.
+- [ ] Verify all four outcomes, including that rejecting a semantic candidate does not delete otherwise safe supporting episodes.
 - [ ] Define low-risk auto-promotion criteria.
 - [ ] Define evidence sufficiency requirements by memory type.
 - [ ] Define confidence thresholds by memory type.
@@ -173,8 +189,11 @@ The repository currently has generic and specialized review concepts. Preserve d
 - [ ] Define stale/superseding update policy.
 - [ ] Define explicit-user-remember behavior as a strong signal subject to safety/scope constraints.
 - [ ] Make normal managed-local configuration capable of forming memory automatically.
+- [ ] Reconcile plain/OpenCode v2/Pi initialization with the existing `--opencode-v1` capture/auto-promotion behavior; test fresh setup and upgrades, preserving explicit opt-outs.
 - [ ] Revisit `capture.enabled` default based on evaluation and privacy disclosure.
 - [ ] Revisit `autoPromote` default; replace raw boolean with policy if necessary.
+- [ ] Disclose retained sources/scopes, retention limits, and disable/forget controls during setup. Require an explicit configuration choice or setup confirmation before broadening user-text capture to assistant/tool sources.
+- [ ] Verify disabled sources/scopes are not persisted and unknown provenance cannot qualify for automatic promotion.
 - [ ] Add dry-run/explain diagnostics showing why a candidate was promoted/reviewed/rejected.
 - [ ] Add tests for false promotion prevention.
 - [ ] Add tests for safe routine automatic promotion.
@@ -214,6 +233,7 @@ The repository currently has generic and specialized review concepts. Preserve d
 - [ ] Consolidation updates topic/catalog relationships.
 - [ ] Consolidation generates/refreshes embeddings.
 - [ ] Consolidation records run state and outcome.
+- [ ] Automatic and reviewed promotions both persist the audit/evidence contract from P3/P5; verify it after restart, not just through an in-memory explanation.
 - [ ] Interrupted runs recover without duplicate semantic memories.
 - [ ] Host shutdown timeout cannot corrupt state or block the host indefinitely.
 - [ ] Add deterministic consolidation fallback.
@@ -281,18 +301,22 @@ Do this after memory formation is working; otherwise retrieval optimization meas
 
 - [ ] `memory_explain` can report why recall happened/did not happen.
 - [ ] `memory_explain` can report why recent experience was promoted/reviewed/rejected without exposing secrets/raw unsafe content.
+- [ ] Explain past learning from persisted audit/evidence links after restart, distinguishing expired/deleted evidence from available evidence.
 - [ ] Provide a bounded "what did ReMem learn from this session?" view.
 - [ ] Provide review tooling for queued ambiguous candidates.
 - [ ] Provide explicit correction/update/forget paths with provenance/audit semantics.
 - [ ] `memory_status` reports observation/consolidation health and backlog.
 - [ ] `doctor` validates learning-loop dependencies, not only storage/retrieval.
 - [ ] Document privacy implications of each automatic-learning option.
+- [ ] Provide host-neutral guidance and a regression for bounded explicit episodic recall when automatic context is insufficient, before repeating investigations or asserting that prior work never happened. Report search/scope/provider limits without treating an empty result as proof of absence.
 
 **P12 exit:** automatic memory is inspectable and correctable without requiring routine manual curation.
 
 ---
 
 ## P13 — Local-first privacy verification
+
+Run the relevant checks with P2/P3/P6 and every new source/provider, not only when this phase is reached.
 
 - [ ] Document a formal no-remote-memory-transport default invariant.
 - [ ] Inventory every network-capable code path.

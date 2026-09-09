@@ -64,7 +64,7 @@ Examples:
 - the prior failed approach and the evidence showing why it failed;
 - when a decision was made and which session/source produced it.
 
-Episodic memory should preserve evidence and provenance. It is not rewritten merely because the current semantic conclusion changes.
+Episodic memory should preserve evidence and provenance. It is not rewritten merely because the current semantic conclusion changes. Append-only describes normal learning, not an exemption from explicit retention, privacy redaction, or user-directed deletion.
 
 **Invariant:** semantic memory is optimized for remembering what is currently known; episodic memory is optimized for remembering what actually happened.
 
@@ -79,12 +79,13 @@ SESSION EXPERIENCE
 observation
     |
     v
-significance / trust / scope classification
-    |
-    +-----------------------> bounded episodic memory
+privacy / trust / scope admission
     |
     v
-candidate extraction
+bounded episodic memory
+    |
+    v
+significance classification + candidate extraction
     |
     v
 deduplication + conflict/staleness detection
@@ -112,6 +113,8 @@ bounded attributed context injection
     v
 NEXT AGENT EXPERIENCE
 ```
+
+Safe, normalized completed-turn evidence enters the episodic plane before semantic significance filtering, within the enabled sources/scopes and configured storage limits. A missed semantic classification must not by itself erase the evidence. Significance controls indexing priority, retention tier, and semantic promotion; it does not decide whether otherwise eligible evidence is initially retained. Safety exclusions, retention expiry, and capacity limits still apply, with content-free diagnostics for capture gaps.
 
 The existing recall sequence remains a core invariant:
 
@@ -158,11 +161,14 @@ Raw or normalized episodic evidence may have a different retention policy from s
 
 Human review is an important safety mechanism, but it must not become the normal path for ordinary low-risk memory formation.
 
-The target policy has three outcomes:
+The target policy has four outcomes:
 
-1. **Auto-promote:** high-confidence, low-risk, well-scoped memories with sufficient evidence.
-2. **Review:** ambiguous, conflicting, high-impact, low-confidence, or policy-sensitive candidates.
-3. **Reject/expire:** low-value, unsafe, redundant, or transient candidates.
+1. **Reject/expire:** decline a semantic candidate that is unsafe, redundant, or no longer useful.
+2. **Episodic-only:** retain safe historical evidence without asserting it as current semantic truth.
+3. **Auto-promote:** high-confidence, low-risk, well-scoped memories with sufficient evidence.
+4. **Require-review:** ambiguous, conflicting, high-impact, low-confidence, or policy-sensitive candidates.
+
+Rejecting a semantic candidate does not delete its otherwise safe supporting episode. Episodic retention and deletion are separate policies; neither policy permits storing secrets.
 
 An explicit "remember this" request is a strong learning signal, not the only way learning occurs.
 
@@ -179,6 +185,8 @@ The catalog is a compact always-available recognition structure, not a dump of a
 It should evolve when durable memory evolves. Topics, entities, aliases, relationships, scopes, and retrieval hints should be derived/maintained automatically where safe.
 
 Absence from injected context must never be interpreted as absence from durable memory.
+
+Automatic recall remains primary. When earlier work may answer a question but automatic context is insufficient, the agent should use bounded explicit recall, including episodic history, before repeating the investigation or claiming something was never built, tried, or discussed. An empty result means no evidence was found in the searched scope, not proof that the work never happened.
 
 ## Provider model
 
@@ -201,6 +209,8 @@ Default ReMem operation must not upload memory, transcripts, prompts, embeddings
 Network access may be needed for installation, package/model download, or explicitly configured remote providers/models. These are separate from memory transport and must not silently cause memory content to leave the machine.
 
 Future sync/export is explicit opt-in.
+
+Automatic-learning setup must disclose which sources/scopes are retained, the retention limits, and how to disable learning or forget stored information. Preserve explicit capture/auto-promotion opt-outs on upgrade; broader assistant/tool capture must not silently inherit permission from a narrower user-text setting.
 
 ## Host and model independence
 

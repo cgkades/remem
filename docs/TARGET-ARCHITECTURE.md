@@ -16,22 +16,22 @@ It has two connected loops:
 Neither loop is sufficient by itself.
 
 ```text
-                         +-------------------------+
-                         |    recognition catalog  |
-                         +------------+------------+
-                                      |
-                                      v
 prompt/context -> recognition -> planning -> recall -> synthesis -> injection
-      ^                                                       |
-      |                                                       v
-      |                                                 agent/session
-      |                                                       |
-      |                                                       v
-      +-- catalog/index <- semantic memory <- consolidation <- observations
-                                  ^                 |
-                                  |                 +-> episodic memory
-                                  +------ review / policy
+                      ^                                             |
+                      |                                             v
+                 catalog/index                               agent/session
+                      ^                                             |
+                      |                                             v
+                semantic memory                              observations
+                      ^                                             |
+                      |                                             v
+                consolidation                         privacy/trust/scope admission
+                      ^                                             |
+                      |                                             v
+          learning policy / human review <- candidates <- bounded episodic memory
 ```
+
+Candidate extraction applies semantic significance after episodic admission. Recall can query both semantic memory and episodic evidence; a semantic candidate is not required for an episode to be searchable.
 
 ## Architectural invariants
 
@@ -70,7 +70,7 @@ Primary hosts can include OpenCode v2, OpenCode v1 compatibility, Pi, and future
 
 ### 2. Observation pipeline
 
-The observation pipeline creates a normalized, bounded representation of significant session activity.
+The observation pipeline creates a normalized, bounded representation of completed turns from enabled sources/scopes. It applies privacy, source/trust, scope, and payload limits before persistence, but does not require a semantic significance match to admit an otherwise safe turn.
 
 Target normalized observation categories include:
 
@@ -89,11 +89,13 @@ Target normalized observation categories include:
 
 Observation is not equivalent to durable truth. Observations retain source, host/session/turn identity, timestamps, scope, trust classification, and evidence references.
 
+Source classification and derivation links survive extraction and summarization. Repeating a tool result, retrieved passage, or assistant assertion does not turn it into an original user statement or independent verification. Promotion requires evidence appropriate to the claim; unknown provenance cannot qualify for automatic promotion. These checks fail closed for memory writes without failing the host turn.
+
 The pipeline must avoid storing unrestricted transcripts as semantic memory. Episodic retention is bounded/configurable.
 
 ### 3. Episodic memory store
 
-Episodic memory records material events/episodes so ReMem can reconstruct what happened.
+Episodic memory records safe, normalized completed-turn evidence before semantic significance filtering so ReMem can reconstruct what happened, including details that no semantic candidate captured.
 
 Properties:
 
@@ -103,9 +105,12 @@ Properties:
 - outcome/status;
 - references to relevant tool evidence without treating tool text as trusted instructions;
 - links to semantic memories derived from the episode;
-- retention/compaction policy separate from semantic memory.
+- retention/compaction policy separate from semantic memory, with explicit age/size limits and a baseline retention window before significance-based expiry;
+- content-free diagnostics for safety exclusions, capacity drops, and unavailable host evidence.
 
 Episodic memory supports both direct recall and consolidation.
+
+Append-only applies to ordinary learning, not to privacy redaction, retention expiry, or authorized deletion. Expiring an episode may leave independently retained semantic knowledge, but provenance must mark the evidence as expired rather than claim it is still inspectable. Explicit forget operations define their scope across episodes and derived candidates, memories, embeddings, and catalog entries; retained audit metadata must not preserve the forgotten content. Backup retention and restore behavior must be documented so deleted content is not silently resurrected.
 
 ### 4. Candidate extraction
 
@@ -120,7 +125,7 @@ The extractor can use staged strategies:
 
 Candidate types include decisions, preferences, facts, procedures, project state, unresolved tasks, corrections, entities, relationships, and superseding information.
 
-Every candidate points back to supporting observations/episodes.
+Every candidate points back to supporting observations/episodes and the memory-bearing spans, including rationale across turns when needed. One input can produce zero, one, or multiple candidates with independently justified types/scopes. Explicit remember wrappers are not part of the stored claim, and a question elsewhere in the input must not suppress a durable statement. Tactical suggestions and conversational corrections are not automatically adopted decisions or durable corrections.
 
 ### 5. Trust, scope, safety, and significance classification
 
@@ -158,14 +163,18 @@ It must never silently convert historical evidence into a new current truth.
 
 Learning policy decides among:
 
-- reject/expire;
-- retain episodically only;
+- reject/expire a semantic candidate;
+- episodic-only retention without a current-truth assertion;
 - auto-promote semantic memory;
-- queue for human review.
+- require-review before promotion.
+
+Rejecting a candidate does not delete safe supporting episodes; their retention/deletion policy is independent.
 
 Auto-promotion should be normal for high-confidence, low-risk, well-scoped knowledge. Human review is required for ambiguous/high-impact/conflicting/policy-sensitive cases, not every ordinary memory.
 
-All promotion paths use shared lifecycle/audit/concurrency infrastructure. Specialized workflows (for example expert corrections or institutional positions) can add domain policy without duplicating the generic state machine.
+All promotion paths use shared lifecycle/audit/concurrency infrastructure. Specialized workflows (for example expert corrections or institutional positions) retain their own payloads, validation, and state transitions rather than being forced into one generic state machine.
+
+Persist the reason codes, policy/extractor version, supporting evidence IDs, scope decision, confidence, review/consolidation action, and resulting memory ID when present. Optional retrieval hints are bounded derived metadata. Automatic promotion must retain this audit trail and its safe evidence even when no pending-review record is created; a transient last-capture explanation is not sufficient.
 
 ### 8. Consolidation engine
 
@@ -304,6 +313,8 @@ Explicit tools remain useful escape hatches and diagnostics:
 
 They complement automatic memory behavior; they are not the primary UX.
 
+Hosts should provide consistent guidance to use bounded explicit recall, including episodic history, when earlier work may settle a question, before repeating an investigation, and before asserting that work was never built, tried, or discussed. Tools must expose unavailable providers, scope limits, and expired evidence as such, not as proof of absence. This fallback does not replace the automatic Session A/Session B acceptance test.
+
 ## Default managed behavior
 
 For a normal local managed installation, the intended defaults are:
@@ -319,6 +330,8 @@ For a normal local managed installation, the intended defaults are:
 - bounded diagnostics without raw memory in logs.
 
 Exact defaults may be tuned through evaluation, but the default product must actually form memory.
+
+Enabling automatic learning must disclose captured sources/scopes, retention, and disable/forget controls. Upgrades preserve explicit opt-outs; adding assistant/tool capture requires an explicit configuration choice or setup confirmation rather than silently broadening an existing user-text setting. Safety and retention verification are prerequisites for broader capture/default changes, not work postponed until after rollout.
 
 ## Transactional consistency target
 
@@ -346,7 +359,7 @@ The core should distinguish:
 
 A remote-capable component cannot silently receive prompts/session observations merely because it is installed.
 
-Secrets/credentials are excluded or redacted before durable observation/candidate formation. Logs remain sanitized.
+Secrets/credentials are excluded or redacted before any durable observation/candidate write, including nested structured payloads and derived summaries. If a payload cannot be safely screened, reject that payload without persisting its raw content and keep the host usable. Logs remain sanitized. Provenance and secret-filtering regression tests belong with each new source path; the later privacy evaluation consolidates these guarantees rather than introducing them for the first time.
 
 ## Evaluation architecture
 
@@ -357,14 +370,15 @@ Required classes:
 - recognition precision/recall;
 - retrieval relevance;
 - unrelated-prompt non-injection;
-- memory formation precision;
+- durable-capture precision and recall, including mixed question/statement inputs and multiple facts per turn;
 - false durable-memory rate;
 - conflict/supersession correctness;
-- episodic provenance recovery;
+- episodic provenance and cross-turn rationale recovery, including evidence omitted by semantic extraction;
 - cross-session continuity;
 - session-end consolidation;
 - host failure/open behavior;
 - privacy/no-network invariants;
+- zero secret leakage and scope violations in the regression corpus, including nested payloads and indirect memory-poisoning attempts;
 - token/latency budgets.
 
 The product-level Session A/Session B scenario in `PRODUCT-VISION.md` is the primary end-to-end acceptance test.
