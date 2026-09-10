@@ -875,6 +875,113 @@ integration("PostgreSQL managed provider", () => {
     }
   })
 
+  it("recalls a learned fact/decision/blocker from a short continuity prompt via anchor routing (TASK-004/005/006)", async () => {
+    const providerConfig = {
+      type: "postgres" as const,
+      id: "learning-loop-anchor",
+      connectionString: databaseUrl ?? "",
+      primary: true,
+      maxConnections: 2,
+      catalogLimit: 100,
+    }
+    const base = testConfig()
+    const config = testConfig({
+      providers: [providerConfig],
+      capture: { ...base.capture, enabled: true, autoPromote: true },
+    })
+    const sessionA = {
+      directory: "/workspace/orion-anchor",
+      worktree: "/workspace/orion-anchor",
+      projectId: "learning-loop-anchor",
+      sessionId: "anchor-session-a",
+    }
+    const statements = [
+      "Orion uses PostgreSQL for durable memory.",
+      "We decided to use logical replication for Orion.",
+      "The Orion rollout is blocked on a restore drill.",
+    ]
+    const prompt = `Can you check this? ${statements.join(" ")}`
+    const providerA = new PostgresMemoryProvider(providerConfig)
+    const capture = createCaptureCoordinator([providerA], config, { log: () => undefined })
+    try {
+      capture?.enqueue({
+        host: "opencode-v2" as const,
+        context: sessionA,
+        sessionId: sessionA.sessionId,
+        messageId: "anchor-message-a",
+        text: prompt,
+      })
+      await capture?.idle()
+      expect(capture?.explain(sessionA.sessionId)).toMatchObject({ outcome: "promoted" })
+    } finally {
+      await capture?.dispose()
+      await providerA.dispose()
+    }
+
+    // A fresh provider, connection pool, and orchestrator: no Session A process-local
+    // state. No manual memory writes, approval, or preseeded catalog aliases.
+    const providerB = new PostgresMemoryProvider(providerConfig)
+    const sessionB = { ...sessionA, sessionId: "anchor-session-b" }
+    try {
+      // Exactly the short continuity prompt from TASK-004; the long topic-rich
+      // continuity prompt is covered by the "learns multiple user statements" case
+      // above and must keep passing unchanged.
+      const shortContinuityPrompt = "Let's continue the Orion work."
+      const injection = await new RememOrchestrator([providerB], config).processPrompt(
+        shortContinuityPrompt,
+        sessionB,
+      )
+
+      expect(injection.plan.shouldRetrieve).toBe(true)
+      expect(injection.memoryText, JSON.stringify(injection.trace)).not.toBe("")
+      for (const statement of statements) expect(injection.memoryText).toContain(statement)
+      expect(injection.memoryText).not.toContain("Can you check this?")
+      expect(injection.trace.recallTokens).toBeLessThanOrEqual(config.budgets.recallTokens)
+
+      const records = await providerB.search({
+        ...request("orion"),
+        context: sessionB,
+      })
+      expect(records).toHaveLength(3)
+      for (const { record } of records) {
+        expect(record.provenance?.[0]?.source).toMatchObject({
+          kind: "user",
+          externalId: "anchor-message-a",
+          metadata: { sessionId: sessionA.sessionId },
+        })
+      }
+
+      // TASK-006 negative control: the identical successful prompt in a foreign
+      // project must inject zero detailed memory.
+      const foreign = await new RememOrchestrator([providerB], config).processPrompt(
+        shortContinuityPrompt,
+        { ...sessionB, projectId: "other-anchor-project", sessionId: "anchor-foreign" },
+      )
+      expect(foreign.trace.selectedResults).toBe(0)
+      expect(foreign.memoryText).toBe("")
+
+      // TASK-006 negative control: an unrelated prompt in a fresh same-project
+      // session must inject zero detailed memory.
+      const unrelated = await new RememOrchestrator([providerB], config).processPrompt(
+        "Explain a Python list comprehension.",
+        { ...sessionB, sessionId: "anchor-unrelated" },
+      )
+      expect(unrelated.trace.selectedResults).toBe(0)
+      expect(unrelated.memoryText).toBe("")
+
+      // TASK-006: a bare "continue the work" prompt must not gain a new anchor
+      // route just because catalog entries exist for this project.
+      const bareContinuity = await new RememOrchestrator([providerB], config).processPrompt(
+        "continue the work",
+        { ...sessionB, sessionId: "anchor-bare-continuity" },
+      )
+      expect(bareContinuity.trace.selectedResults).toBe(0)
+      expect(bareContinuity.memoryText).toBe("")
+    } finally {
+      await providerB.dispose()
+    }
+  })
+
   it("persists a captured observation and pending candidate atomically with body-free status", async () => {
     const provider = new PostgresMemoryProvider(
       {
