@@ -1,12 +1,12 @@
 # Future Roadmap
 
-The items below are deferred. Managed PostgreSQL, schema version 4, semantic Stage 1, explicit CRUD,
-backup/restore commands, OpenCode v2 integration, and executable evaluation already exist and are not
-roadmap claims.
+The items below are deferred. Managed PostgreSQL, checksum-verified ordered schema migrations
+(currently through version 7), semantic Stage 1, explicit CRUD, backup/restore commands, OpenCode
+v2 integration, publishing `agentic-remem` to npm, and executable evaluation already exist and are
+not roadmap claims.
 
 ## Phase 1: Harden Distribution and Operations
 
-- Publish `agentic-remem` after package and beta-host compatibility validation.
 - Replace source-only OpenCode setup with tested package installation and upgrade instructions.
 - Validate supported external PostgreSQL/pgvector version ranges and privilege combinations
   explicitly in `doctor`.
