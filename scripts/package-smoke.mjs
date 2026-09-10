@@ -1,11 +1,14 @@
 import { execFileSync } from "node:child_process"
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import process from "node:process"
 import { fileURLToPath, URL } from "node:url"
 
 const repository = fileURLToPath(new URL("..", import.meta.url))
+const { version: expectedVersion } = JSON.parse(
+  await readFile(path.join(repository, "package.json"), "utf8"),
+)
 const temporary = await mkdtemp(path.join(os.tmpdir(), "remem-package-smoke-"))
 const npmEnvironment = { ...process.env }
 delete npmEnvironment.npm_config_allow_scripts
@@ -36,6 +39,19 @@ try {
     throw new Error("installed remem bin is not executable")
   }
   execFileSync(executable, ["--help"], { cwd: application, stdio: "inherit" })
+  // #80/TASK-052: --version/-V must work from the installed tarball, run from
+  // outside the repository, with no user config present in `application`, and
+  // must print exactly the installed package.json version (not a build-time
+  // hardcoded duplicate that could drift, and not something read from cwd).
+  for (const flag of ["--version", "-V"]) {
+    const printed = execFileSync(executable, [flag], {
+      cwd: application,
+      encoding: "utf8",
+    }).trim()
+    if (printed !== expectedVersion) {
+      throw new Error(`installed remem ${flag} printed "${printed}", expected "${expectedVersion}"`)
+    }
+  }
   await writeFile(
     path.join(application, "index.ts"),
     [

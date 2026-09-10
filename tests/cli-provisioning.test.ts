@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { afterEach, describe, expect, it } from "vitest"
 import {
   BACKUP_FLAGS,
@@ -320,5 +321,58 @@ describe("CLI provisioning", () => {
     )
     release?.()
     await first
+  })
+
+  it("prints the installed package version for --version and -V before touching config, a provider, or the install lock", async () => {
+    const expectedVersion = (
+      parseJson(
+        await readFile(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
+      ) as { version: string }
+    ).version
+    expect(expectedVersion).toMatch(/^\d+\.\d+\.\d+/u)
+
+    // A fresh temporary directory with no written app config, so any path that
+    // reaches `readAppConfig` would throw ENOENT -- proving the version flag is
+    // handled before config access, not merely before it happens to fail.
+    const paths = await temporaryPaths()
+
+    for (const flag of ["--version", "-V"]) {
+      const lines: string[] = []
+      const errors: string[] = []
+      const code = await runCli([flag], {
+        paths,
+        runner: {
+          run() {
+            throw new Error(`--version must not invoke a process runner (flag: ${flag})`)
+          },
+        },
+        stdout: (line) => lines.push(line),
+        stderr: (line) => errors.push(line),
+      })
+
+      expect(code).toBe(0)
+      expect(lines).toEqual([expectedVersion])
+      expect(errors).toEqual([])
+    }
+
+    await expect(stat(paths.configDir)).rejects.toThrow()
+  })
+
+  it("still parses --version as an ordinary flag when other arguments are present", async () => {
+    // Only the single-argument invocation is the special version flag (#80); e.g.
+    // `remem status --version` must not short-circuit into printing the version
+    // instead of running `status`, and unknown-flag/command handling elsewhere is
+    // unaffected.
+    const paths = await temporaryPaths()
+    const errors: string[] = []
+    const code = await runCli(["--version", "extra-arg"], {
+      paths,
+      runner: { run: () => Promise.reject(new Error("must not run a process")) },
+      stdout: () => undefined,
+      stderr: (line) => errors.push(line),
+    })
+
+    expect(code).toBe(1)
+    expect(errors.join("\n")).not.toMatch(/^\d+\.\d+\.\d+/mu)
   })
 })
