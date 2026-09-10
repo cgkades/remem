@@ -567,6 +567,7 @@ function usage(): string {
   return `Usage: remem <command> [options]
 
 Commands:
+  --version | -V
   init [--mode managed|external] [--database-url URL] [--opencode|--opencode-v1] [--pi] [--capture]
     --opencode-v1 enables automatic capture and promotion; --capture enables review-based capture
   start | stop | status | doctor | migrate
@@ -582,7 +583,33 @@ Commands:
   reset --confirm`
 }
 
+/**
+ * Reads the installed package version from `package.json` relative to this
+ * module's own URL (never `process.cwd()`, and never a value hardcoded here
+ * that could drift from `package.json`). Resolves correctly whether running
+ * from `src/cli/index.ts` in a source checkout or from the built
+ * `dist/cli/index.js` inside an installed package (#80).
+ */
+async function installedPackageVersion(): Promise<string> {
+  const packageJsonPath = path.join(packageRoot(import.meta.url), "package.json")
+  const parsed: unknown = JSON.parse(await readFile(packageJsonPath, "utf8"))
+  const version =
+    parsed && typeof parsed === "object" && "version" in parsed ? parsed.version : undefined
+  if (typeof version !== "string" || version.length === 0) {
+    throw new Error(`package.json at ${packageJsonPath} has no readable "version"`)
+  }
+  return version
+}
+
 export async function runCli(args: string[], dependencies: CliDependencies = {}): Promise<number> {
+  // Single-argument --version/-V is handled before any argument parsing that
+  // resolves a command, and before paths/runner/config/database/install-lock
+  // access, per #80/TASK-051: it must work even with no config installed yet.
+  if (args.length === 1 && (args[0] === "--version" || args[0] === "-V")) {
+    const output = dependencies.stdout ?? ((line: string) => process.stdout.write(`${line}\n`))
+    output(await installedPackageVersion())
+    return 0
+  }
   const parsed = parseArguments(args)
   const paths = dependencies.paths ?? rememPaths()
   const runner = dependencies.runner ?? new NodeProcessRunner()
