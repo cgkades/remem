@@ -148,13 +148,18 @@ operation and scope before invoking them. No OpenCode event automatically calls 
 
 ## Managed Schema
 
-The current database schema is version 4:
+The database schema version is defined by the migration files under `migrations/` and the
+installed `remem.schema_migrations` ledger; run `remem doctor` or `remem status` for the live value
+(currently version 7 at this baseline). Notable migrations:
 
 - version 1 creates providers, sources, memories, provenance, tags, aliases, topics, entities,
   relationships, catalog entries, full-text indexes, and 384-dimensional pgvector embeddings;
 - version 2 adds session observations, candidate memories, and consolidation records;
-- version 3 scopes entities and adds catalog embeddings; and
-- version 4 adds the `consolidating` candidate status used for restart-safe review and consolidation.
+- version 3 scopes entities and adds catalog embeddings;
+- version 4 adds the `consolidating` candidate status used for restart-safe review and consolidation;
+- version 5 adds durable embedding-model/dimension settings;
+- version 6 adds re-embedding claim tracking on memory embeddings; and
+- version 7 adds correction-candidate storage, revisions, and audit state.
 
 Version 2 tables support an opt-in, reviewable observation pipeline. Automatic capture persists only
 eligible explicit user statements as pending candidates, or a bounded agent-derived `procedure` after

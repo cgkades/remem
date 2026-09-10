@@ -24,17 +24,22 @@ It is deliberately not `prompt -> vector search -> nearest-neighbor dump`.
 ## Architecture Status
 
 The implementation includes the host-independent core, Markdown and PostgreSQL providers, managed
-and external database modes, schema version 4, deterministic and local semantic recognition,
-provider/topic awareness, bounded extractive synthesis, explicit CRUD/supersession APIs, logical
-backup/restore commands, the primary OpenCode v2 adapter, and the isolated v1 adapter.
+and external database modes, checksum-verified ordered schema migrations (currently through version
+7; see [Storage architecture](storage-architecture.md) or run `remem doctor`/`remem status` for the
+live value), deterministic and local semantic recognition, provider/topic awareness, bounded
+extractive synthesis, explicit CRUD/supersession APIs, logical backup/restore commands, the primary
+OpenCode v2 adapter, and the isolated v1 adapter.
 
-Opt-in capture observes only explicit user corrections, decisions, and preferences from the OpenCode
-adapters. It excludes sensitive, reported quoted speech, tool, and retrieved text; writes pending candidates; and
-requires explicit review before consolidation. A general neural embedding model
-(`bge-small-en-v1.5`, via `@huggingface/transformers`) is implemented and is the `remem init`
-default; see [Embeddings](embeddings.md). Arbitrary-depth topic population and branch rendering,
-model planning/synthesis, scheduled backup and retention, and non-Markdown/non-PostgreSQL adapters
-remain target architecture.
+Capture observes only screened user text, not unrestricted model/tool output. It excludes sensitive,
+reported quoted speech, tool, and retrieved text. Plain, v2, and Pi initialization leave capture off
+by default; `remem init --opencode-v1` enables capture and automatic promotion of screened explicit
+user decisions, preferences, and corrections. `remem init --capture` (or `capture.enabled: true`)
+enables capture without automatic promotion, so written candidates require explicit review before
+consolidation. A general neural embedding model (`bge-small-en-v1.5`, via `@huggingface/transformers`)
+is implemented and is the `remem init` default for both managed and external modes, with the
+deterministic hash model as fallback; see [Embeddings](embeddings.md). Arbitrary-depth topic
+population and branch rendering, model planning/synthesis, scheduled backup and retention, and
+non-Markdown/non-PostgreSQL adapters remain target architecture.
 
 OpenCode v2 is the current official API but is still beta as of 2026-09-01. Remem therefore treats
 its API as a versioned adapter boundary rather than as a stable core dependency.

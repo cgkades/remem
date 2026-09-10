@@ -81,7 +81,8 @@ lexical/vector retrieval.
 ## Managed Reset
 
 `reset` is not restore. It destroys the managed Compose volume, starts a new empty database, and
-applies schema version 4:
+applies all checksum-verified schema migrations (currently version 7; run `remem doctor` or
+`remem status` for the live value):
 
 ```sh
 remem reset --confirm
