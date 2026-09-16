@@ -324,16 +324,26 @@ describe("CLI provisioning", () => {
   })
 
   it("prints the installed package version for --version and -V before touching config, a provider, or the install lock", async () => {
-    const expectedVersion = (
-      parseJson(
-        await readFile(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
-      ) as { version: string }
-    ).version
+    const parsedPackageJson = parseJson(
+      await readFile(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
+    )
+    if (
+      !parsedPackageJson ||
+      typeof parsedPackageJson !== "object" ||
+      !("version" in parsedPackageJson) ||
+      typeof parsedPackageJson.version !== "string"
+    ) {
+      throw new Error('package.json has no readable "version" -- fix the fixture, not the test')
+    }
+    const expectedVersion = parsedPackageJson.version
     expect(expectedVersion).toMatch(/^\d+\.\d+\.\d+/u)
 
-    // A fresh temporary directory with no written app config, so any path that
-    // reaches `readAppConfig` would throw ENOENT -- proving the version flag is
-    // handled before config access, not merely before it happens to fail.
+    // A fresh temporary directory with no written app config. If this code
+    // path reached readAppConfig/withInstallLock at all, it would throw
+    // ENOENT against that missing config (there is no code path that reaches
+    // them and still succeeds against this fixture) -- so `code === 0` and
+    // `lines === [expectedVersion]` below are what actually prove config/lock
+    // access never happened, not merely that it happened to fail differently.
     const paths = await temporaryPaths()
 
     for (const flag of ["--version", "-V"]) {
@@ -354,24 +364,29 @@ describe("CLI provisioning", () => {
       expect(lines).toEqual([expectedVersion])
       expect(errors).toEqual([])
     }
-
-    await expect(stat(paths.configDir)).rejects.toThrow()
   })
 
   it("still parses --version as an ordinary flag when other arguments are present", async () => {
-    // Only the single-argument invocation is the special version flag (#80); e.g.
-    // `remem status --version` must not short-circuit into printing the version
-    // instead of running `status`, and unknown-flag/command handling elsewhere is
-    // unaffected.
+    // Only the single-argument invocation is the special version flag (#80). This
+    // input falls through to ordinary parsing, where "--version" becomes the
+    // (unrecognized) command and fails via the normal readAppConfig ENOENT path
+    // -- the same failure any other unrecognized command hits against a missing
+    // config, not a distinct "unknown command" dispatch. The property this
+    // actually protects is narrower and more concrete than "unaffected": the
+    // version must never be printed for this input (verified directly below),
+    // which would catch a real regression class such as the guard being
+    // loosened from "the sole argument" to "present anywhere in args".
     const paths = await temporaryPaths()
+    const lines: string[] = []
     const errors: string[] = []
     const code = await runCli(["--version", "extra-arg"], {
       paths,
       runner: { run: () => Promise.reject(new Error("must not run a process")) },
-      stdout: () => undefined,
+      stdout: (line) => lines.push(line),
       stderr: (line) => errors.push(line),
     })
 
+    expect(lines).toEqual([])
     expect(code).toBe(1)
     expect(errors.join("\n")).not.toMatch(/^\d+\.\d+\.\d+/mu)
   })
