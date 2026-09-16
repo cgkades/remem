@@ -19,5 +19,6 @@ export function testConfig(overrides: Partial<RememConfig> = {}): RememConfig {
     budgets: { ...base.budgets, ...overrides.budgets },
     planner: { ...base.planner, ...overrides.planner },
     capture: { ...base.capture, ...overrides.capture },
+    evidenceAdmission: { ...base.evidenceAdmission, ...overrides.evidenceAdmission },
   }
 }

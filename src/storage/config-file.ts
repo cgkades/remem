@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto"
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { CaptureConfig, MemoryProviderConfig, PlannerConfig, TokenBudgets } from "../config.js"
+import type { EvidenceAdmissionConfig } from "../observation-admission.js"
 import {
   EMBEDDING_DIMENSIONS,
   LOCAL_HASH_MODEL_ID,
@@ -55,6 +56,8 @@ export interface RememAppConfig {
   debug?: boolean
   compaction?: boolean
   capture?: Partial<CaptureConfig>
+  /** Phase 2 (plan/feature-memory-recovery-1.md): additive raw-evidence admission settings, distinct from `capture`. */
+  evidenceAdmission?: Partial<EvidenceAdmissionConfig>
   embedding: EmbeddingAppConfig
   opencode?: {
     configured: boolean
@@ -157,6 +160,10 @@ export async function loadInstalledPluginOptions(options: unknown): Promise<unkn
         isRecord(installed.capture) && isRecord(options.capture)
           ? { ...installed.capture, ...options.capture }
           : (options.capture ?? installed.capture),
+      evidenceAdmission:
+        isRecord(installed.evidenceAdmission) && isRecord(options.evidenceAdmission)
+          ? { ...installed.evidenceAdmission, ...options.evidenceAdmission }
+          : (options.evidenceAdmission ?? installed.evidenceAdmission),
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
