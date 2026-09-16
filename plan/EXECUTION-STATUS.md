@@ -97,9 +97,8 @@
 - **Baseline/branch:** `683ba50` → `feature/cli-version-flag`
 - **Commit:** `efd5d77`
 - **PR:** https://github.com/cgkades/remem/pull/85 (draft, targets `main`
-  independently; CI: Pi adapter + neural eval pass at last check,
-  Node 22/24 + OpenCode v1/v2 E2E + Pi E2E were still pending — recheck
-  before merge)
+  independently; CI: all jobs pass — Node 22/24, OpenCode v1/v2 E2E, Pi
+  adapter/E2E, neural eval — confirmed green later in the same session)
 - **What it does:** `runCli` handles a single-argument `--version`/`-V`
   before any command-resolving argument parsing and before
   paths/runner/config/database/install-lock access. Version is read from
@@ -124,9 +123,8 @@ pack:smoke` pass (exit 0; `--help`, `--version`, `-V`, subpath exports,
   and a consumer `tsc` typecheck all succeed). Database tests not
   applicable (no schema/provider changes).
 - **Skips:** none unexpected.
-- **Blocker/decision needed:** none to implement this PR. Re-verify CI
-  status before merge (see above).
-- **Next action:** maintainer review/merge; recheck remaining CI jobs.
+- **Blocker/decision needed:** none.
+- **Next action:** maintainer review/merge.
 
 ## Not started this run (blocked/deferred, per readiness table)
 
@@ -261,8 +259,6 @@ its volumes; does not touch the unrelated pre-existing container).
 
 ## Remaining risks
 
-- PR #85's CI had not finished all jobs as of this ledger entry; verify
-  green before merge.
 - The full `vitest run` suite is flaky when `REMEM_TEST_DATABASE_URL` is
   set, due to concurrent integration-test files each dropping/recreating
   the shared `remem` schema (pre-existing; not introduced by this run).
