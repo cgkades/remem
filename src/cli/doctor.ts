@@ -3,6 +3,11 @@ import { access, readFile, stat } from "node:fs/promises"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { Pool } from "pg"
+import {
+  DEFAULT_CAPACITY_LIMITS,
+  compactionLevelAtIndex,
+  capacityStatus as computeCapacityStatus,
+} from "../capacity.js"
 import { createProviders } from "../providers/factory.js"
 import { PostgresMemoryProvider } from "../providers/postgres.js"
 import { createEmbeddingModel } from "../storage/embedding-neural.js"
@@ -47,6 +52,66 @@ async function checkPermissions(file: string, name: string): Promise<DoctorCheck
   } catch {
     return { name, status: "error", detail: "file is missing or unreadable" }
   }
+}
+
+/**
+ * TASK-012/TASK-060: surfaces the current soft/hard capacity status and
+ * compaction-aggressiveness level for every provider/project that has any
+ * episodic evidence, per the plan's "the current level must be visible via
+ * `doctor`/`status`, never a silent escalation" requirement. There is no
+ * statically configured list of projects to check (a project is a runtime
+ * concept scoped by `MemoryContext`, not part of provider configuration),
+ * so this discovers every distinct `(provider_id, project_id)` pair that
+ * actually has evidence rows, rather than requiring one.
+ *
+ * Uses `DEFAULT_CAPACITY_LIMITS` -- a project configured with custom
+ * per-project limits (via whatever options a caller passes to
+ * `enforceCapacity`/`getCapacityStatus` directly) may show a different
+ * over-soft/over-hard verdict here than it would under its actual
+ * configured limits; this check is a reasonable default-limits snapshot,
+ * not a substitute for a caller checking its own configured limits.
+ */
+export async function capacityChecks(pool: Pool): Promise<DoctorCheck[]> {
+  const scopes = await pool.query<{ provider_id: string; project_id: string }>(
+    `SELECT DISTINCT provider_id, project_id
+     FROM remem.session_events
+     WHERE evidence_id IS NOT NULL
+     ORDER BY provider_id, project_id`,
+  )
+  const checks: DoctorCheck[] = []
+  for (const scope of scopes.rows) {
+    const totals = await pool.query<{ total: string | null }>(
+      `SELECT SUM(
+         COALESCE(octet_length(safe_text), 0) +
+         COALESCE(octet_length(payload::text), 0) +
+         COALESCE(octet_length(evidence_refs::text), 0)
+       )::bigint AS total
+       FROM remem.session_events
+       WHERE provider_id = $1 AND project_id = $2 AND evidence_id IS NOT NULL`,
+      [scope.provider_id, scope.project_id],
+    )
+    const state = await pool.query<{ compaction_level: number }>(
+      `SELECT compaction_level FROM remem.capacity_state WHERE provider_id = $1 AND project_id = $2`,
+      [scope.provider_id, scope.project_id],
+    )
+    const totalBytes = Number(totals.rows[0]?.total ?? 0)
+    const level = compactionLevelAtIndex(state.rows[0]?.compaction_level ?? 0)
+    const status = computeCapacityStatus(totalBytes, level, DEFAULT_CAPACITY_LIMITS)
+    checks.push({
+      name: `capacity ${scope.provider_id}/${scope.project_id}`,
+      status: status.overHard ? "error" : status.overSoft ? "warn" : "ok",
+      detail:
+        `${totalBytes} of ${DEFAULT_CAPACITY_LIMITS.softLimitBytes} (soft) / ` +
+        `${DEFAULT_CAPACITY_LIMITS.hardLimitBytes} (hard) logical bytes; ` +
+        `compaction level: ${level}` +
+        (status.overHard
+          ? " -- over hard limit"
+          : status.overSoft
+            ? " -- over soft limit, compaction-eligible"
+            : ""),
+    })
+  }
+  return checks
 }
 
 /**
@@ -270,6 +335,14 @@ export async function runDoctor(
     } catch {
       // The main PostgreSQL connectivity check above already reports connection
       // failures; skip silently here rather than double-reporting.
+    }
+
+    try {
+      checks.push(...(await capacityChecks(pool)))
+    } catch {
+      // Table may not exist yet on an unmigrated database (pre-TASK-012);
+      // the main PostgreSQL connectivity/migration checks above already
+      // report that condition.
     }
 
     try {

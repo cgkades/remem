@@ -1,17 +1,36 @@
 import { randomUUID } from "node:crypto"
 import { Pool, type PoolClient, type QueryResultRow } from "pg"
 import type { PostgresProviderConfig } from "../config.js"
+import {
+  COMPACTION_ELIGIBILITY_DAYS,
+  DEFAULT_CAPACITY_LIMITS,
+  bulkArtifactTargetBytes,
+  capacityStatus,
+  compactionLevelAtIndex,
+  compactionLevelIndex,
+  decideEscalation,
+  narrativeTargetBytes,
+  type CapacityLimits,
+  type CapacityStatus,
+  type CompactionLevel,
+} from "../capacity.js"
+import { looksLikeToolOutput, reduceBulkArtifact } from "../bulk-artifact-reduction.js"
 import type {
   CandidateMemory,
   CandidateReviewItem,
   CandidateReviewStore,
   CandidateStatusSummary,
+  CapacityStore,
+  CompactionReport,
+  EnforceCapacityOptions,
+  EnforceCapacityReport,
   EpisodicAppendResult,
   EpisodicNeighbor,
   EpisodicSearchMatch,
   EpisodicSearchOptions,
   EpisodicSearchResult,
   EpisodicSearchStore,
+  HardLimitEvictionReport,
   SessionObservation,
 } from "../observation.js"
 import {
@@ -58,6 +77,17 @@ import type {
   ProviderDescriptor,
   ProviderHealth,
 } from "../types.js"
+
+/**
+ * TASK-012/TASK-060: bounds how many rows one `runCompaction`/
+ * `enforceHardLimit` call processes. A single call is not guaranteed to
+ * fully drain a large backlog -- a caller (or scheduler) invokes these
+ * repeatedly. Deliberately conservative for the current pre-launch scale
+ * of installations; revisit if a project accumulates a backlog large
+ * enough that draining it requires many repeated calls in practice.
+ */
+const COMPACTION_BATCH_SIZE = 500
+const HARD_LIMIT_BATCH_SIZE = 1000
 
 interface MemoryRow extends QueryResultRow {
   id: string
@@ -374,7 +404,7 @@ const BASE_SELECT = `
 `
 
 export class PostgresMemoryProvider
-  implements MemoryProvider, CandidateReviewStore, EpisodicSearchStore
+  implements MemoryProvider, CandidateReviewStore, EpisodicSearchStore, CapacityStore
 {
   readonly id: string
   private readonly pool: Pool
@@ -1009,63 +1039,78 @@ export class PostgresMemoryProvider
         ])
       }
       options.signal?.throwIfAborted()
-      const inserted = await client.query<{ id: string }>(
-        `INSERT INTO remem.session_events
-           (id, session_id, project_id, kind, occurred_at, payload,
-            provider_id, host, role, origin, turn_id, message_id, safe_text,
-            evidence_refs, evidence_id, content_hash, schema_version)
-         VALUES ($1,$2,$3,$4,$5,$6::jsonb,
-                 $7,$8,$9,$10,$11,$12,$13,
-                 $14::jsonb,$15,$16,$17)
-         ON CONFLICT (provider_id, project_id, evidence_id) WHERE evidence_id IS NOT NULL DO NOTHING
-         RETURNING id`,
-        [
-          randomUUID(),
-          sessionId,
-          envelope.context.projectId,
-          envelope.kind,
-          envelope.occurredAt,
-          JSON.stringify(envelope.payload.metadata ?? {}),
-          envelope.providerId,
-          envelope.host,
-          envelope.role,
-          envelope.origin,
-          envelope.turnId ?? null,
-          envelope.messageId ?? null,
-          envelope.payload.text ?? null,
-          JSON.stringify(envelope.evidenceRefs),
-          envelope.id,
-          envelope.contentHash,
-          envelope.schemaVersion,
-        ],
-      )
-      if (inserted.rows[0]) return { outcome: "appended", id: envelope.id }
 
-      // The unique (provider_id, project_id, evidence_id) index rejected the
-      // insert: this is either an exact replay (duplicate, a no-op) or a
-      // genuine collision (same identity, different evidence) --
-      // distinguished by comparing content_hash, never by re-deriving or
-      // trusting the new envelope's own claim.
-      const existing = await client.query<{ content_hash: string | null }>(
-        `SELECT content_hash FROM remem.session_events
-         WHERE provider_id = $1 AND project_id = $2 AND evidence_id = $3`,
-        [envelope.providerId, envelope.context.projectId, envelope.id],
-      )
-      const existingRow = existing.rows[0]
-      if (!existingRow) {
-        // The INSERT reported a conflict, but the conflicting row is now
-        // missing under READ COMMITTED, at which point the conflicting
-        // row is guaranteed already committed and visible to this SELECT.
-        // remem.session_events has no DELETE/UPDATE code path today, so
-        // this branch should be unreachable; treating it as an unlabeled
-        // "collision" would silently misreport a data-integrity anomaly as
-        // ordinary identity contention. Surface it distinctly instead.
-        throw new Error(
-          `episodic evidence conflict reported for ${envelope.providerId}/${envelope.id}, but no conflicting row could be read back`,
+      const insertParams = [
+        sessionId,
+        envelope.context.projectId,
+        envelope.kind,
+        envelope.occurredAt,
+        JSON.stringify(envelope.payload.metadata ?? {}),
+        envelope.providerId,
+        envelope.host,
+        envelope.role,
+        envelope.origin,
+        envelope.turnId ?? null,
+        envelope.messageId ?? null,
+        envelope.payload.text ?? null,
+        JSON.stringify(envelope.evidenceRefs),
+        envelope.id,
+        envelope.contentHash,
+        envelope.schemaVersion,
+      ]
+
+      // At most one retry: TASK-012's enforceHardLimit can now genuinely
+      // DELETE a session_events row (this table previously had no
+      // DELETE/UPDATE path at all when this logic was first written). If
+      // a conflicting row is concurrently evicted between this INSERT's
+      // conflict detection and the follow-up SELECT below, the identity
+      // slot is now free -- a second INSERT attempt should simply
+      // succeed as a fresh append, not be misreported as an anomaly.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const inserted = await client.query<{ id: string }>(
+          `INSERT INTO remem.session_events
+             (id, session_id, project_id, kind, occurred_at, payload,
+              provider_id, host, role, origin, turn_id, message_id, safe_text,
+              evidence_refs, evidence_id, content_hash, schema_version)
+           VALUES ($1,$2,$3,$4,$5,$6::jsonb,
+                   $7,$8,$9,$10,$11,$12,$13,
+                   $14::jsonb,$15,$16,$17)
+           ON CONFLICT (provider_id, project_id, evidence_id) WHERE evidence_id IS NOT NULL DO NOTHING
+           RETURNING id`,
+          [randomUUID(), ...insertParams],
         )
+        if (inserted.rows[0]) return { outcome: "appended", id: envelope.id }
+
+        // The unique (provider_id, project_id, evidence_id) index rejected the
+        // insert: this is either an exact replay (duplicate, a no-op) or a
+        // genuine collision (same identity, different evidence) --
+        // distinguished by comparing content_hash, never by re-deriving or
+        // trusting the new envelope's own claim.
+        const existing = await client.query<{ content_hash: string | null }>(
+          `SELECT content_hash FROM remem.session_events
+           WHERE provider_id = $1 AND project_id = $2 AND evidence_id = $3`,
+          [envelope.providerId, envelope.context.projectId, envelope.id],
+        )
+        const existingRow = existing.rows[0]
+        if (!existingRow) {
+          if (attempt === 0) continue // retry once -- see comment above
+          // Still missing after a retry: this is no longer explainable by
+          // the single-DELETE race the retry exists for (a second
+          // eviction landing in the exact same narrow window, on the very
+          // row this call itself just tried to (re)insert, would be an
+          // extraordinary coincidence) -- surface it distinctly rather
+          // than silently mislabeling a genuine data-integrity anomaly as
+          // ordinary identity contention.
+          throw new Error(
+            `episodic evidence conflict reported for ${envelope.providerId}/${envelope.id}, but no conflicting row could be read back after a retry`,
+          )
+        }
+        const outcome =
+          existingRow.content_hash === envelope.contentHash ? "duplicate" : "collision"
+        return { outcome, id: envelope.id }
       }
-      const outcome = existingRow.content_hash === envelope.contentHash ? "duplicate" : "collision"
-      return { outcome, id: envelope.id }
+      /* istanbul ignore next -- the loop above always returns or throws within its two iterations. */
+      throw new Error("unreachable: appendEvidence retry loop exited without returning")
     } finally {
       client.release()
     }
@@ -1258,6 +1303,394 @@ export class PostgresMemoryProvider
     if (matches.length < matched.rows.length) budgetExhausted = true
 
     return { matches, budgetExhausted }
+  }
+
+  /**
+   * TASK-012/TASK-060: serializes `runCompaction`/`enforceHardLimit` per
+   * `(providerId, projectId)` using a Postgres advisory lock held for the
+   * duration of `fn`, on a single dedicated connection. Without this, two
+   * concurrent callers for the same scope (two scheduler ticks, a manual
+   * CLI invocation racing a background job, etc.) would each read the same
+   * starting `capacity_state`/total-bytes snapshot and independently
+   * decide "enough" rows to delete/compact, and the *union* of both
+   * decisions can jointly do more than either alone would have --
+   * irreversibly over-deleting evidence in `enforceHardLimit`'s case, or
+   * losing an escalation-counter update in `runCompaction`'s case (a
+   * classic lost-update). `hashtextextended` gives a stable 64-bit lock
+   * key from the two identity strings without needing two separate int4
+   * lock keys.
+   */
+  private async withCapacityLock<T>(
+    providerId: string,
+    projectId: string,
+    fn: (client: PoolClient) => Promise<T>,
+  ): Promise<T> {
+    const client = await this.pool.connect()
+    // A NUL byte (`\u0000`) is invalid in a Postgres text parameter and
+    // would fail the query outright -- `\u0001` is a valid, effectively
+    // never-user-visible separator instead. Collision risk between two
+    // different (providerId, projectId) pairs hashing to the same lock key
+    // is only a (harmless) serialization performance concern, never a
+    // correctness one -- this lock exists purely to order operations, not
+    // to authorize them.
+    const lockKey = `${providerId}\u0001${projectId}`
+    try {
+      await client.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [lockKey])
+      try {
+        return await fn(client)
+      } finally {
+        await client.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [lockKey])
+      }
+    } finally {
+      client.release()
+    }
+  }
+
+  /**
+   * TASK-012/TASK-060: "logical bytes" for capacity accounting -- the
+   * serialized size of what a caller actually sees (`safe_text` +
+   * `payload`/metadata + `evidence_refs`), not raw on-disk storage (which
+   * includes index/TOAST overhead this policy is not trying to model
+   * exactly; the plan's limits are stated as approximate logical-byte
+   * budgets, not a precise disk-usage guarantee).
+   */
+  private async computeTotalBytes(
+    providerId: string,
+    projectId: string,
+    queryable: Pool | PoolClient = this.pool,
+  ): Promise<number> {
+    const result = await queryable.query<{ total: string | null }>(
+      `SELECT SUM(
+         COALESCE(octet_length(safe_text), 0) +
+         COALESCE(octet_length(payload::text), 0) +
+         COALESCE(octet_length(evidence_refs::text), 0)
+       )::bigint AS total
+       FROM remem.session_events
+       WHERE provider_id = $1 AND project_id = $2 AND evidence_id IS NOT NULL`,
+      [providerId, projectId],
+    )
+    return Number(result.rows[0]?.total ?? 0)
+  }
+
+  /**
+   * Loads the persisted `remem.capacity_state` row for a provider/project,
+   * creating it with defaults (level "conservative", no prior checks) if
+   * this is the first time capacity has ever been checked for this scope.
+   * `lastTotalBytes`/`lastCheckedAt` being absent (not merely zero) is what
+   * lets `decideEscalation` distinguish "never checked before" from "was
+   * checked and found empty," so a brand-new project is never treated as
+   * having already failed to improve.
+   */
+  private async loadCapacityState(
+    providerId: string,
+    projectId: string,
+    queryable: Pool | PoolClient = this.pool,
+  ): Promise<{
+    level: CompactionLevel
+    previousTotalBytes: number | undefined
+    consecutiveNoImprovement: number
+  }> {
+    const result = await queryable.query<{
+      compaction_level: number
+      last_total_bytes: string
+      consecutive_no_improvement: number
+      last_checked_at: Date | null
+    }>(
+      `INSERT INTO remem.capacity_state (provider_id, project_id)
+       VALUES ($1, $2)
+       ON CONFLICT (provider_id, project_id) DO UPDATE SET provider_id = EXCLUDED.provider_id
+       RETURNING compaction_level, last_total_bytes, consecutive_no_improvement, last_checked_at`,
+      [providerId, projectId],
+    )
+    const row = result.rows[0]!
+    return {
+      level: compactionLevelAtIndex(row.compaction_level),
+      previousTotalBytes: row.last_checked_at === null ? undefined : Number(row.last_total_bytes),
+      consecutiveNoImprovement: row.consecutive_no_improvement,
+    }
+  }
+
+  async getCapacityStatus(
+    providerId: string,
+    projectId: string,
+    limits: CapacityLimits = DEFAULT_CAPACITY_LIMITS,
+  ): Promise<CapacityStatus> {
+    const [totalBytes, state] = await Promise.all([
+      this.computeTotalBytes(providerId, projectId),
+      this.loadCapacityState(providerId, projectId),
+    ])
+    return capacityStatus(totalBytes, state.level, limits)
+  }
+
+  /**
+   * One bounded batch of compaction (see `COMPACTION_BATCH_SIZE`) -- a
+   * caller invokes this repeatedly to fully drain a large backlog. Only
+   * shrinks `safe_text`; never touches `payload`/metadata, mirroring
+   * TASK-059's own scope boundary. Every eligible row considered is
+   * stamped `compacted_at`/`compacted_at_level` regardless of whether its
+   * text actually changed, so a row already within the current level's
+   * target is not re-examined again until the level escalates further.
+   *
+   * Serialized per `(providerId, projectId)` via an advisory lock (see
+   * `withCapacityLock`) so two concurrent calls for the same scope cannot
+   * both read the same starting escalation state and race to write it
+   * back (a lost update).
+   */
+  async runCompaction(
+    providerId: string,
+    projectId: string,
+    options: EnforceCapacityOptions = {},
+  ): Promise<CompactionReport> {
+    const limits = options.limits ?? DEFAULT_CAPACITY_LIMITS
+    const force = options.force ?? false
+
+    return this.withCapacityLock(providerId, projectId, async (client) => {
+      const state = await this.loadCapacityState(providerId, projectId, client)
+      const totalBytesBefore = await this.computeTotalBytes(providerId, projectId, client)
+      const status = capacityStatus(totalBytesBefore, state.level, limits)
+
+      if (!force && !status.overSoft) {
+        // Refresh the baseline even though nothing was compacted -- being
+        // under the soft limit is itself an improvement, so the
+        // non-improvement streak resets rather than staying frozen at
+        // whatever it was during the last pressure episode. Without this,
+        // a project that dips under soft for a long stretch and then
+        // crosses back over would compare its next real compaction run
+        // against an arbitrarily stale total from long before, producing
+        // a meaningless escalation signal. The level itself is never
+        // touched here -- only ever escalated by an actual compaction run
+        // below, never reset by simply checking status.
+        await client.query(
+          `UPDATE remem.capacity_state
+           SET last_total_bytes = $3, consecutive_no_improvement = 0, last_checked_at = now(),
+               updated_at = now()
+           WHERE provider_id = $1 AND project_id = $2`,
+          [providerId, projectId, totalBytesBefore],
+        )
+        return {
+          rowsReduced: 0,
+          rowsProcessed: 0,
+          bytesReclaimed: 0,
+          level: state.level,
+          escalated: false,
+          totalBytesAfter: totalBytesBefore,
+        }
+      }
+
+      const targetLevelIndex = compactionLevelIndex(state.level)
+      const bulkTarget = bulkArtifactTargetBytes(state.level)
+      const narrativeTarget = narrativeTargetBytes(state.level)
+
+      const eligible = await client.query<{ id: string; safe_text: string | null }>(
+        `SELECT id, safe_text FROM remem.session_events
+         WHERE provider_id = $1 AND project_id = $2 AND evidence_id IS NOT NULL
+           AND ($3 OR occurred_at <= now() - ($4 || ' days')::interval)
+           AND (compacted_at_level IS NULL OR compacted_at_level < $5)
+         ORDER BY occurred_at ASC
+         LIMIT $6`,
+        [
+          providerId,
+          projectId,
+          force,
+          COMPACTION_ELIGIBILITY_DAYS,
+          targetLevelIndex,
+          COMPACTION_BATCH_SIZE,
+        ],
+      )
+
+      let rowsReduced = 0
+      let bytesReclaimed = 0
+      const ids: string[] = []
+      const newTexts: (string | null)[] = []
+      for (const row of eligible.rows) {
+        const originalText = row.safe_text
+        let newText = originalText
+        if (originalText !== null) {
+          if (looksLikeToolOutput(originalText)) {
+            const { text, reduced } = reduceBulkArtifact(originalText, bulkTarget)
+            if (reduced) newText = text
+          } else if (
+            narrativeTarget !== undefined &&
+            Buffer.byteLength(originalText, "utf8") > narrativeTarget
+          ) {
+            newText = truncateToTokens(originalText, narrativeTarget).text
+          }
+        }
+        const changed = newText !== originalText
+        if (changed) {
+          rowsReduced++
+          bytesReclaimed +=
+            Buffer.byteLength(originalText ?? "", "utf8") - Buffer.byteLength(newText ?? "", "utf8")
+        }
+        ids.push(row.id)
+        newTexts.push(newText)
+      }
+
+      if (ids.length > 0) {
+        // One batched UPDATE for the whole eligible set, rather than one
+        // round trip per row -- `COMPACTION_BATCH_SIZE` (500) sequential
+        // round trips per call would otherwise be a real, avoidable
+        // latency cost for what is meant to be a backlog-draining
+        // maintenance operation.
+        await client.query(
+          `UPDATE remem.session_events AS se
+           SET safe_text = v.safe_text, compacted_at = now(), compacted_at_level = $3
+           FROM unnest($1::uuid[], $2::text[]) AS v(id, safe_text)
+           WHERE se.id = v.id`,
+          [ids, newTexts, targetLevelIndex],
+        )
+      }
+
+      const totalBytesAfter = await this.computeTotalBytes(providerId, projectId, client)
+      // A forced compaction that ran only because of `force` (the project
+      // was *not* actually over the soft limit) must not feed the
+      // sustained-pressure escalation counter at all -- escalation is
+      // meant to reflect autonomous, pressure-driven behavior, never a
+      // side effect of an on-demand user action on an otherwise healthy
+      // project.
+      const escalationApplies = status.overSoft
+      const decision = escalationApplies
+        ? decideEscalation(
+            {
+              level: state.level,
+              previousTotalBytes: state.previousTotalBytes,
+              consecutiveNoImprovement: state.consecutiveNoImprovement,
+            },
+            totalBytesAfter,
+          )
+        : {
+            level: state.level,
+            consecutiveNoImprovement: state.consecutiveNoImprovement,
+            escalated: false,
+          }
+
+      await client.query(
+        `UPDATE remem.capacity_state
+         SET compaction_level = $3, last_total_bytes = $4, consecutive_no_improvement = $5,
+             last_checked_at = now(),
+             last_compacted_at = CASE WHEN $6 THEN now() ELSE last_compacted_at END,
+             updated_at = now()
+         WHERE provider_id = $1 AND project_id = $2`,
+        [
+          providerId,
+          projectId,
+          compactionLevelIndex(decision.level),
+          totalBytesAfter,
+          decision.consecutiveNoImprovement,
+          ids.length > 0,
+        ],
+      )
+
+      return {
+        rowsReduced,
+        rowsProcessed: eligible.rows.length,
+        bytesReclaimed,
+        level: decision.level,
+        escalated: decision.escalated,
+        totalBytesAfter,
+      }
+    })
+  }
+
+  /**
+   * One bounded batch (see `HARD_LIMIT_BATCH_SIZE`) of oldest-eligible-
+   * first removal. Never considers a row younger than
+   * `COMPACTION_ELIGIBILITY_DAYS`, even if still over the hard limit
+   * afterward (`exhaustedEligibleRows` reports that case explicitly,
+   * rather than silently reaching into recent data).
+   *
+   * Serialized per `(providerId, projectId)` via an advisory lock (see
+   * `withCapacityLock`): this issues a real, irreversible `DELETE`, so two
+   * concurrent callers for the same scope must never independently decide
+   * "enough eligible rows" from the same stale snapshot and jointly delete
+   * more than either alone would have.
+   */
+  async enforceHardLimit(
+    providerId: string,
+    projectId: string,
+    limits: CapacityLimits = DEFAULT_CAPACITY_LIMITS,
+  ): Promise<HardLimitEvictionReport> {
+    return this.withCapacityLock(providerId, projectId, async (client) => {
+      let totalBytes = await this.computeTotalBytes(providerId, projectId, client)
+      if (totalBytes <= limits.hardLimitBytes) {
+        return {
+          rowsRemoved: 0,
+          bytesReclaimed: 0,
+          totalBytesAfter: totalBytes,
+          exhaustedEligibleRows: false,
+        }
+      }
+
+      const candidates = await client.query<{ id: string; bytes: string }>(
+        `SELECT id,
+           (COALESCE(octet_length(safe_text), 0) + COALESCE(octet_length(payload::text), 0) +
+            COALESCE(octet_length(evidence_refs::text), 0))::bigint AS bytes
+         FROM remem.session_events
+         WHERE provider_id = $1 AND project_id = $2 AND evidence_id IS NOT NULL
+           AND occurred_at <= now() - ($3 || ' days')::interval
+         ORDER BY occurred_at ASC
+         LIMIT $4`,
+        [providerId, projectId, COMPACTION_ELIGIBILITY_DAYS, HARD_LIMIT_BATCH_SIZE],
+      )
+
+      const idsToRemove: string[] = []
+      let bytesReclaimed = 0
+      for (const row of candidates.rows) {
+        if (totalBytes <= limits.hardLimitBytes) break
+        idsToRemove.push(row.id)
+        const rowBytes = Number(row.bytes)
+        totalBytes -= rowBytes
+        bytesReclaimed += rowBytes
+      }
+
+      if (idsToRemove.length > 0) {
+        await client.query(`DELETE FROM remem.session_events WHERE id = ANY($1::uuid[])`, [
+          idsToRemove,
+        ])
+      }
+
+      const totalBytesAfter = await this.computeTotalBytes(providerId, projectId, client)
+      return {
+        rowsRemoved: idsToRemove.length,
+        bytesReclaimed,
+        totalBytesAfter,
+        exhaustedEligibleRows: totalBytesAfter > limits.hardLimitBytes,
+      }
+    })
+  }
+
+  /**
+   * The main entry point: checks status, compacts if over the soft limit
+   * (or if `force`d), then evicts if still over the hard limit afterward.
+   * Compaction always runs strictly before eviction within one call --
+   * never the reverse -- matching the plan's "only after compaction has
+   * already run."
+   */
+  async enforceCapacity(
+    providerId: string,
+    projectId: string,
+    options: EnforceCapacityOptions = {},
+  ): Promise<EnforceCapacityReport> {
+    const limits = options.limits ?? DEFAULT_CAPACITY_LIMITS
+    let status = await this.getCapacityStatus(providerId, projectId, limits)
+
+    let compaction: CompactionReport | undefined
+    if (status.overSoft || options.force) {
+      compaction = await this.runCompaction(providerId, projectId, options)
+      status = await this.getCapacityStatus(providerId, projectId, limits)
+    }
+
+    let hardLimitEviction: HardLimitEvictionReport | undefined
+    if (status.overHard) {
+      hardLimitEviction = await this.enforceHardLimit(providerId, projectId, limits)
+      status = await this.getCapacityStatus(providerId, projectId, limits)
+    }
+
+    return {
+      status,
+      ...(compaction !== undefined ? { compaction } : {}),
+      ...(hardLimitEviction !== undefined ? { hardLimitEviction } : {}),
+    }
   }
 
   async listCandidates(status?: CandidateMemory["status"]): Promise<CandidateReviewItem[]> {

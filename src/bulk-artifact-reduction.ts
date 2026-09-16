@@ -128,8 +128,17 @@ export function looksLikeToolOutput(text: string): "stack-trace" | "long-log" | 
  * false`) for anything not classified as such -- this function is the
  * single point that decides "does this get shrunk at all," so a caller
  * never needs to duplicate the classification logic.
+ *
+ * `maxOutputBytes` defaults to `BULK_ARTIFACT_MAX_OUTPUT_BYTES` (TASK-059's
+ * admission-time bound) but may be overridden smaller -- TASK-060's
+ * compaction reuses this same function at progressively smaller bounds as
+ * its aggressiveness level escalates, rather than maintaining a second,
+ * divergent bulk-artifact classifier/extractor.
  */
-export function reduceBulkArtifact(text: string): BulkArtifactReductionResult {
+export function reduceBulkArtifact(
+  text: string,
+  maxOutputBytes: number = BULK_ARTIFACT_MAX_OUTPUT_BYTES,
+): BulkArtifactReductionResult {
   const reason = looksLikeToolOutput(text)
   if (!reason) return { text, reduced: false }
 
@@ -166,7 +175,7 @@ export function reduceBulkArtifact(text: string): BulkArtifactReductionResult {
   ].filter((section) => section.length > 0)
 
   let combined = sections.join("\n")
-  if (Buffer.byteLength(combined, "utf8") > BULK_ARTIFACT_MAX_OUTPUT_BYTES) {
+  if (Buffer.byteLength(combined, "utf8") > maxOutputBytes) {
     // Even the reduced form can exceed the bound for a pathological input
     // (e.g. extremely long individual lines) -- fall back to a hard byte
     // truncation of the already-reduced text rather than leaving an
@@ -179,11 +188,21 @@ export function reduceBulkArtifact(text: string): BulkArtifactReductionResult {
     // returned text never exceeds `BULK_ARTIFACT_MAX_OUTPUT_BYTES` -- it is
     // an actual hard ceiling, not one this fallback path quietly overshoots.
     const suffix = "\n... [reduced output itself truncated to fit the output bound] ..."
-    const bodyBudget = Math.max(
-      0,
-      BULK_ARTIFACT_MAX_OUTPUT_BYTES - Buffer.byteLength(suffix, "utf8"),
-    )
+    const bodyBudget = Math.max(0, maxOutputBytes - Buffer.byteLength(suffix, "utf8"))
     combined = `${truncateUtf8(combined, bodyBudget)}${suffix}`
+  }
+
+  // For a short, low-line-count classified input, the head and tail
+  // windows can substantially overlap the same lines, and the inserted
+  // "... [N line(s) omitted...] ..." annotation adds its own overhead --
+  // together these can make `combined` *larger* than the original text.
+  // Reduction that grows storage while claiming `reduced: true` would be
+  // a real, if narrow, correctness problem for a caller (like TASK-060's
+  // compaction) that accounts bytes reclaimed from this result. Only ever
+  // report a reduction, and only ever return the shrunk form, when it is
+  // genuinely smaller.
+  if (Buffer.byteLength(combined, "utf8") >= Buffer.byteLength(text, "utf8")) {
+    return { text, reduced: false }
   }
 
   return { text: combined, reduced: true, reason }

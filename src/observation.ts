@@ -1,3 +1,4 @@
+import type { CapacityLimits, CapacityStatus, CompactionLevel } from "./capacity.js"
 import type { EvidenceEnvelope } from "./observation-admission.js"
 import type { MemoryContext, MemoryWrite } from "./types.js"
 
@@ -213,5 +214,89 @@ export function isEpisodicSearchStore(value: unknown): value is EpisodicSearchSt
     isEpisodicStore(value) &&
     "searchEpisodes" in value &&
     typeof (value as { searchEpisodes: unknown }).searchEpisodes === "function"
+  )
+}
+
+/**
+ * TASK-012/TASK-060: reports produced by the capacity/compaction store
+ * methods. See `capacity.ts` for the policy this store applies (limits,
+ * ordered levels, escalation decision) -- this interface is the storage
+ * boundary that actually queries/mutates `remem.session_events`/
+ * `remem.capacity_state`.
+ */
+export interface CompactionReport {
+  /** Rows whose `safe_text` was actually reduced (or, for a row already at/under its target, simply stamped as processed at the current level -- see `rowsProcessed`). */
+  rowsReduced: number
+  /** Every eligible row considered this run, including ones left unchanged because they were already within the current level's target. */
+  rowsProcessed: number
+  /** Logical bytes reclaimed by this run's reductions. */
+  bytesReclaimed: number
+  level: CompactionLevel
+  /** True if this run caused an escalation to a more aggressive level than it started at. */
+  escalated: boolean
+  totalBytesAfter: number
+}
+
+export interface HardLimitEvictionReport {
+  rowsRemoved: number
+  bytesReclaimed: number
+  totalBytesAfter: number
+  /** True if still over the hard limit after this run because no more removal-eligible (60+ day old) rows remain -- distinct from "under the limit now." */
+  exhaustedEligibleRows: boolean
+}
+
+export interface EnforceCapacityOptions {
+  limits?: CapacityLimits
+  /** Bypasses both the 60-day eligibility gate and the soft-limit gate for compaction -- an explicit, user-triggered forced full compaction (the plan's "user may also force an immediate full compaction on demand, ignoring the 60-day gate"). Never affects hard-limit eviction's own age gate: removal is never forced. */
+  force?: boolean
+}
+
+export interface EnforceCapacityReport {
+  status: CapacityStatus
+  compaction?: CompactionReport
+  hardLimitEviction?: HardLimitEvictionReport
+}
+
+export interface CapacityStore {
+  getCapacityStatus(
+    providerId: string,
+    projectId: string,
+    limits?: CapacityLimits,
+  ): Promise<CapacityStatus>
+
+  /** Runs one bounded batch of compaction. A caller (or scheduler) invokes this repeatedly to fully drain a large backlog; a single call is not guaranteed to bring a project fully under the soft limit. */
+  runCompaction(
+    providerId: string,
+    projectId: string,
+    options?: EnforceCapacityOptions,
+  ): Promise<CompactionReport>
+
+  /** Runs one bounded batch of oldest-eligible-first removal. Never removes an entry younger than `COMPACTION_ELIGIBILITY_DAYS`, even if still over the hard limit afterward (see `exhaustedEligibleRows`). */
+  enforceHardLimit(
+    providerId: string,
+    projectId: string,
+    limits?: CapacityLimits,
+  ): Promise<HardLimitEvictionReport>
+
+  /** The main entry point: checks status, compacts if over the soft limit (or if forced), then evicts if still over the hard limit afterward. */
+  enforceCapacity(
+    providerId: string,
+    projectId: string,
+    options?: EnforceCapacityOptions,
+  ): Promise<EnforceCapacityReport>
+}
+
+export function isCapacityStore(value: unknown): value is CapacityStore {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "getCapacityStatus" in value &&
+    typeof value.getCapacityStatus === "function" &&
+    "runCompaction" in value &&
+    typeof (value as { runCompaction: unknown }).runCompaction === "function" &&
+    "enforceHardLimit" in value &&
+    typeof (value as { enforceHardLimit: unknown }).enforceHardLimit === "function" &&
+    "enforceCapacity" in value &&
+    typeof (value as { enforceCapacity: unknown }).enforceCapacity === "function"
   )
 }
