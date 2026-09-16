@@ -156,30 +156,89 @@ remains for this run.** This is consistent with the prompt's stated
 expectation of "a small review queue, not unattended completion of all 54
 tasks."
 
-### Concrete decision needed to unblock Phase 2 (the next highest-priority
+### Phase 2 decision — RESOLVED 2026-09-10
 
-work once approved)
+The maintainer reviewed and approved the concrete Phase 2 contract in a
+decision conversation on 2026-09-10. Full text is now recorded in
+`plan/feature-memory-recovery-1.md` §1 under "Maintainer Decisions
+(2026-09-10)", and inlined into the Phase 2/6/8/9 sections. Summary:
 
-TASK-007 asks for maintainer approval of:
+1. **Evidence recording scope (Phase 2, TASK-007):** record all raw
+   evidence from the start once configured — both `direct-user` and
+   host-observed `assistant`/`tool` origins together, not a separately
+   gated toggle. Recording evidence is not the same as promoting it to a
+   fact (that is decision 3, Phase 6). Other TASK-007 development-profile
+   values (disabled until configured; project scope only; 8 KiB/16
+   references/32 queued events; unknown origins cannot auto-promote) are
+   approved as originally proposed.
+2. **Missing-identity handling (Phase 2, TASK-007/TASK-008):** confirmed —
+   skip storing the event's content, do not deduplicate by guessed
+   identity — plus a new requirement: log the rejection as a bounded
+   diagnostic (reason code and count only, never content).
+3. **Fact-promotion boundary (Phase 6, TASK-022 and new TASK-056):** a
+   host-verified action with an observable outcome may promote to a
+   _generalized_ fact (not raw output, not an added unverified causal
+   claim) if not corrected. An unverified explanation/causal claim, or AI
+   output responding to something that needed the user's input, stays
+   episodic-only if the user just moves on — "moved on" is never
+   sufficient by itself for that class. Promotion for that class requires
+   either the existing explicit-user-confirmation capture path (a short
+   "ok, do it" counts — it is an explicit statement, not silence) or
+   independent verification. Corrections always supersede via the
+   existing correction workflow.
+4. **Entity/relationship linking (Phase 6/8, new TASK-055/TASK-057):** the
+   schema (`remem.entities`/`remem.memory_entities`/`remem.relationships`)
+   and types (`MemoryEntity`/`MemoryRelationship` on `MemoryWrite`) already
+   exist and are already returned by point-reads (`BASE_SELECT` in
+   `src/providers/postgres.ts`); extraction should start populating them
+   and `search()`/synthesis should start surfacing them — this is not a
+   new schema design problem.
+5. **Bounded temporal/episode recall (Phase 9, new TASK-058):** a new,
+   explicitly user-triggered recall mode, structured like Phase 1's
+   continuity-anchor trigger. Start with a **fixed, bounded phrase list**
+   (`today`, `yesterday`, `this morning`, `this afternoon`, `last night`,
+   `last week`, `last <weekday>`) for calendar-relative queries, plus a
+   separate entity-scoped trigger ("what else did we do while fixing
+   this/that") that reuses the Phase 1 anchor match and decision 4's
+   relationship links. Open-ended date parsing is explicitly deferred.
 
-1. The additive `SessionObservation` envelope fields (schema version,
-   provider/host/project/session/turn/message identity, role, origin,
-   event kind, evidence references) exactly as listed in the plan's
-   "Observation Field Checklist" (§5).
-2. The identity/collision rule: same identity + different evidence is a
-   rejected collision, not an upsert; missing both a documented host
-   identity and an established stable turn identity yields an explicit
-   unsupported-identity result (no dedup-by-prompt-text fallback).
-3. The **development-profile, not-a-shipped-default** proposed limits: new
-   evidence capture disabled until configured; project scope only; user
-   source allowed when enabled; assistant/tool sources separately
-   disabled; 8 KiB max safe event payload; 16 evidence references; 32
-   queued events.
+This resolves Phase 2's REVIEW-GATED status (now READY in
+`plan/feature-memory-recovery-1.md` §1's readiness table) and unblocks
+TASK-007/008/009. It does **not** pre-approve Phase 3's retention-policy
+values, Phase 4's transaction contract, Phase 5's host-verification
+contract, Phase 6's remaining broader-rule thresholds beyond decision 3,
+Phase 7, Phase 10, or Phase 11 — those remain separately gated and still
+need their own maintainer decision before implementation.
 
-No code in this run touches persistence, admission, or default capture
-behavior in pursuit of Phase 2/3 — those remain unimplemented pending that
-decision, per the "REVIEW-GATED" definition ("A tested draft does not
-satisfy a human-review gate").
+## Not started this run (blocked/deferred, per readiness table)
+
+Per `plan/feature-memory-recovery-1.md` §1's readiness table, every
+remaining phase (other than Phase 2, resolved above) is one of:
+
+- **REVIEW-GATED** (4, 5, 6 remaining thresholds, 7, 10, 11): requires
+  maintainer approval of a concrete contract/patch (managed-
+  transaction/association-ledger schema; host-callback verification
+  contract; any fact-promotion rule broader than the approved boundary;
+  consolidation mutation authority; full-loop default-rollout gate;
+  embedding identity schema) _before_ implementation.
+- **DEPENDENT** on a REVIEW-GATED phase (3 on 2 — now READY, so 3 is
+  DEPENDENT-but-unblocked once Phase 2 lands, though its own retention
+  values in §3 remain separately gated; 8 on 1,7; 9 on 3,4,7): cannot fully
+  land until the review-gated prerequisite lands, though isolated pieces
+  (e.g. TASK-057's `search()` extension) may be draftable once their
+  narrower prerequisite (TASK-055) exists.
+- **DEFERRED** (12, 13, 14; and 15's TASK-053/054, which are explicitly
+  "after phase 10"): not authorized to start per the plan and per the run
+  prompt's Work Selection rule.
+
+## Next eligible package
+
+**TASK-007/008/009 (Phase 2) are now eligible** — the contract is approved
+above. TASK-007 is now largely a matter of encoding the approved contract
+into the actual `SessionObservation`/admission types; TASK-008/009 are
+pure functions (no host SDK/database imports) and can be implemented and
+tested in isolation. This is the recommended next package for a future
+run/session.
 
 ## Work still uncommitted
 
@@ -216,7 +275,6 @@ its volumes; does not touch the unrelated pre-existing container).
 
 ## Recommended next task
 
-Once a maintainer answers the Phase 2 decision above, TASK-007 (define the
-additive envelope/admission-result contracts) becomes the next eligible
-package. Until then, no further code package in this plan is authorized
-to start per the readiness table and this run's Work Selection rule.
+TASK-007/008/009 (Phase 2), per the approved contract recorded above and
+in `plan/feature-memory-recovery-1.md`. See "Next eligible package" above
+for detail.
