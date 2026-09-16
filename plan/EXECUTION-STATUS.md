@@ -210,6 +210,112 @@ pack:smoke` pass (exit 0; `--help`, `--version`, `-V`, subpath exports,
 - **Blocker/decision needed:** none.
 - **Next action:** none — merged.
 
+### Package 4 — TASK-007/008/009 (Phase 2: evidence admission contract)
+
+- **Status:** merged
+- **Baseline/branch:** merge of PRs #83/#84/#85 → `feature/phase2-evidence-admission`
+  (deleted after merge)
+- **Commit:** `9cfb9b4` (single commit; an earlier 2-commit split was
+  squashed after GitHub push protection flagged secret-shaped test
+  fixtures — see Review below)
+- **PR:** https://github.com/cgkades/remem/pull/86 — **merged into `main`**
+  (squash-merged 2026-09-16, CI green: Node 22/24, OpenCode v1/v2 E2E, Pi
+  adapter/E2E, neural eval — all pass)
+- **Review:** a 7-reviewer pr-review pass (code, data-structures/
+  concurrency, security, threat-model, TypeScript-idiom, test-quality,
+  architecture) found real, independently-verified issues before this PR
+  was opened:
+  - **BLOCKER/CRITICAL** (converged across 3 reviewers, each independently
+    reproduced): the module's documented "never throws" contract was
+    violated by null/malformed identity fields, a null context/payload, a
+    non-array `evidenceRefs`, and a circular `payload.metadata`. Fixed via
+    defensive `typeof`/`isPlainRecord`/`Array.isArray` guards throughout,
+    a new `canonicalizePayload` (safe JSON round-trip, fails cleanly on
+    circular/BigInt), and a catch-all wrapper (`admitEvidence` around the
+    real `admitEvidenceUnsafe` logic). Verified with 9 new "never throws"
+    tests.
+  - **HIGH** (security reviewer): credential screening covered only
+    `payload`, so a secret in `sessionId`/`turnId`/`messageId`/
+    `evidenceRefs` bypassed screening entirely. Fixed by screening every
+    identity-like field the same way.
+  - **CONCERN** (data-structures reviewer): a `Map`/getter-based payload
+    value could bypass the recursive credential scanner or create a
+    TOCTOU gap between what was screened and what was persisted;
+    `payload`/`metadata` key order wasn't sorted before hashing (risking
+    a false `identity-collision` verdict for two logically-identical
+    payloads). Fixed via `canonicalizePayload`'s single-snapshot,
+    key-sorted approach, used uniformly for the byte-size check, the
+    credential scan, the hash, and the persisted envelope.
+  - **CONCERN** (architecture reviewer): a hand-rolled 32-bit FNV-1a-style
+    hash had weak collision resistance for the duplicate-vs-collision
+    decision, and the raw NUL-joined namespace string was being returned
+    as the literal `id` — which would have broken a future PostgreSQL
+    `text`-column write in Phase 3 (Postgres rejects embedded NUL bytes).
+    Fixed by switching `id`/`contentHash` derivation to SHA-256 (via
+    `node:crypto`, the same pattern `capture.ts`'s `stableId` already
+    establishes).
+  - **CONCERN** (code reviewer): `enabledOrigins: []` in config couldn't
+    be expressed — it silently widened back to the default two origins.
+    Fixed: `parseEvidenceOrigins` now distinguishes "not an array"
+    (falls back to default) from "an array, even empty" (respected).
+    Also added the missing config-wiring test coverage this reviewer
+    flagged (6 new tests across `tests/config.test.ts`/
+    `tests/storage-config.test.ts`).
+  - **WARN** (TypeScript reviewer): a duplicated `EvidenceOrigin` literal
+    list in `config.ts` risked silent drift from the canonical enum
+    (fixed: exported canonical arrays from `observation-admission.ts`,
+    reused in `config.ts`); an unsafe `stack.pop() as {...}` assertion
+    discarded the compiler's own undefined-check (fixed: replaced with a
+    direct loop check).
+  - **Test-quality reviewer**: added direct tests that rejection `detail`
+    strings never leak the triggering secret/oversized content
+    (previously unverified despite the module's own claim), a byte-size
+    symmetry check on the depth-bound test, a positive-direction
+    `enabledOrigins`-widening test, and an `evidenceRefs.providerId`
+    validation test (only `eventId` was previously covered).
+  - **Not changed** (reviewed, reasoned, accepted): `EvidenceAdmissionConfig`'s
+    type stays defined in `observation-admission.ts` rather than moving to
+    `config.ts` to match `CaptureConfig`'s placement — a judgment call
+    (it's the direct input contract of the one pure function that
+    consumes it; no circular runtime dependency exists, verified). An
+    origin's lack of cryptographic/provenance binding and
+    `maxQueuedEvents` having no enforcement point in this module are both
+    explicitly deferred to later phases per the module's own documented
+    design (Phase 5 host-wiring and caller-owned queueing, respectively),
+    not defects here.
+  - **Push-protection note**: the first push attempt was rejected by
+    GitHub secret scanning — test fixtures used realistic-looking secret
+    formats (an AWS-access-key-shaped string, a Stripe-`sk_live_`-shaped
+    string) to exercise `containsSensitiveCredential`. Replaced with a
+    generic `api_key=<hex>` pattern that still triggers the same
+    detector without matching a real provider's token format. Both
+    commits were then squashed into one (this branch was never
+    successfully pushed before the fix, so no shared history was
+    rewritten).
+- **What it does:** a new, additive, pure module
+  (`src/observation-admission.ts`) defining the normalized evidence
+  envelope, role/origin/kind enums, and `admitEvidence`/
+  `summarizeRejections` pure functions per the approved Phase 2 contract;
+  wired into `src/config.ts`/`src/storage/config-file.ts` config parsing.
+  Does not persist anything, wire into any host adapter, or change any
+  existing capture behavior/default. See the merged commit message for
+  the full implementation breakdown.
+- **Tests:** 59 tests in `tests/observation-admission.test.ts`, 6 in
+  `tests/config.test.ts`, 1 in `tests/storage-config.test.ts` (66 new
+  total).
+- **Verification:** `npm run lint` pass; `npm run typecheck` pass;
+  `npm run build` pass; `npx prettier --check <changed files>` pass;
+  `npm test` 391 passed / 41 skipped (up from 326 pre-merge baseline,
+  unchanged skip set). Re-verified on integrated `main` after merge:
+  391 passed / 41 skipped (unit), `npm run test:postgres` 28/28
+  (disposable container created/torn down for this verification only —
+  this module itself performs no I/O), tarball smoke pass.
+- **Skips:** none unexpected.
+- **Blocker/decision needed:** none.
+- **Next action:** none — merged. Phase 3 (episodic persistence) is now
+  `DEPENDENT`-but-unblocked on this landing; its own retention-policy
+  values remain separately review-gated before implementation.
+
 ### Phase 2 decision — RESOLVED 2026-09-10
 
 The maintainer reviewed and approved the concrete Phase 2 contract in a
@@ -287,12 +393,8 @@ remaining phase (other than Phase 2, resolved above) is one of:
 
 ## Next eligible package
 
-**TASK-007/008/009 (Phase 2) are now eligible** — the contract is approved
-above. TASK-007 is now largely a matter of encoding the approved contract
-into the actual `SessionObservation`/admission types; TASK-008/009 are
-pure functions (no host SDK/database imports) and can be implemented and
-tested in isolation. This is the recommended next package for a future
-run/session.
+**TASK-007/008/009 (Phase 2) are done** — implemented, reviewed, and merged
+as Package 4 (PR #86). See "Recommended next task" below for what's next.
 
 ## Work still uncommitted
 
@@ -307,15 +409,15 @@ committed in this repo's history and is left as local-only reviewer output.
 
 ## Disposable test database
 
-Two disposable, loopback-bound PostgreSQL containers were created and torn
-down across this run's two sessions, both via the repo's own
+Three disposable, loopback-bound PostgreSQL containers were created and
+torn down across this run's three sessions, each via the repo's own
 `compose.test.yaml` (`docker compose -f compose.test.yaml up --detach
 --wait`), producing container `remem-test-postgres-1` on
-`127.0.0.1:54330` with an ephemeral named volume each time. Both were torn
-down via `npm run test:postgres:down` (removes volumes) at the end of
-their respective sessions. An unrelated, already-exited container named
+`127.0.0.1:54330` with a fresh ephemeral named volume each time. Each was
+torn down via `npm run test:postgres:down` (removes volumes) at the end
+of its respective session. An unrelated, already-exited container named
 `remem-test-postgres` (no `-1` suffix, port 15432) predated this run and
-was left untouched throughout both sessions.
+was left untouched throughout all three sessions.
 
 ## Remaining risks
 
@@ -339,6 +441,18 @@ pack:smoke` exit 0, lint/typecheck/build/prettier all clean.
 
 ## Recommended next task
 
-TASK-007/008/009 (Phase 2), per the approved contract recorded above and
-in `plan/feature-memory-recovery-1.md`. See "Next eligible package" above
-for detail.
+TASK-007/008/009 (Phase 2) are **done** (Package 4, merged — see above).
+
+Phase 3 (episodic persistence: TASK-010 through TASK-013) is next in
+dependency order, but per `plan/feature-memory-recovery-1.md` §1's own
+"Storage decision"/"Retention proposal" text, its retention/capacity policy
+values (30-day max age, 64 MiB logical payload per provider/project,
+7-day baseline before significance-based expiry, hard-capacity/explicit-
+privacy-deletion override) are explicitly flagged "Approve these policy
+values before coding eviction" — i.e. still separately review-gated, not
+covered by the Phase 2 decision above. TASK-010/011 (the append/read
+storage and scoped lexical search, which do not depend on the retention
+policy) may be draftable now; TASK-012 (retention/capacity enforcement)
+needs that additional maintainer decision first. TASK-013 (explicit
+forget preview/confirmation) is review-gated independently of the rest of
+Phase 3 per the plan's exit criterion for this phase.
