@@ -10,7 +10,14 @@ import type {
   EpisodicStore,
   SessionObservation,
 } from "../observation.js"
-import type { EvidenceEnvelope, EvidenceReference } from "../observation-admission.js"
+import {
+  EVIDENCE_KINDS,
+  EVIDENCE_ORIGINS,
+  EVIDENCE_ROLES,
+  EVIDENCE_SCHEMA_VERSION,
+  type EvidenceEnvelope,
+  type EvidenceReference,
+} from "../observation-admission.js"
 import {
   DeterministicConsolidationPipeline,
   PostgresConsolidationRunner,
@@ -82,7 +89,9 @@ interface EpisodicEventRow extends QueryResultRow {
   origin: EvidenceEnvelope["origin"]
   turn_id: string | null
   message_id: string | null
-  safe_text: string
+  safe_text: string | null
+  /** The pre-existing `payload jsonb` column, holding `EvidencePayload.metadata` for evidence-admission rows (`{}` if the envelope had none). */
+  payload: Record<string, unknown>
   evidence_refs: EvidenceReference[]
   evidence_id: string
   content_hash: string
@@ -100,8 +109,17 @@ interface EpisodicEventRow extends QueryResultRow {
  * authoritative.
  */
 function episodicRowToEnvelope(row: EpisodicEventRow): EvidenceEnvelope {
+  // schema_version has no DB CHECK constraint (unlike role/origin/kind) --
+  // its entire purpose is to let a future incompatible envelope shape be
+  // detected rather than silently mis-cast as today's shape. Reject rather
+  // than blindly narrow an unexpected value into the current literal type.
+  if (row.schema_version !== EVIDENCE_SCHEMA_VERSION) {
+    throw new Error(
+      `episodic evidence row has unsupported schemaVersion ${row.schema_version} (expected ${EVIDENCE_SCHEMA_VERSION})`,
+    )
+  }
   return {
-    schemaVersion: row.schema_version as EvidenceEnvelope["schemaVersion"],
+    schemaVersion: EVIDENCE_SCHEMA_VERSION,
     id: row.evidence_id,
     providerId: row.provider_id,
     host: row.host,
@@ -117,7 +135,10 @@ function episodicRowToEnvelope(row: EpisodicEventRow): EvidenceEnvelope {
     origin: row.origin,
     kind: row.kind,
     occurredAt: row.occurred_at.toISOString(),
-    payload: { text: row.safe_text },
+    payload: {
+      ...(row.safe_text !== null ? { text: row.safe_text } : {}),
+      ...(Object.keys(row.payload ?? {}).length > 0 ? { metadata: row.payload } : {}),
+    },
     evidenceRefs: row.evidence_refs,
     contentHash: row.content_hash,
   }
@@ -901,6 +922,22 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
     options.signal?.throwIfAborted()
     const sessionId = envelope.context.sessionId
     if (!sessionId) throw new TypeError("episodic evidence requires a session id")
+    // Defense-in-depth: `admitEvidence` (observation-admission.ts) already
+    // validates these against the same allowlists before an EvidenceEnvelope
+    // is ever constructed, but TypeScript's compile-time types are not
+    // enforced at runtime -- a caller that bypasses admission (a future code
+    // path, a test harness, or a manually-constructed object at a JS/TS
+    // boundary) must not reach an unhandled Postgres CHECK-violation
+    // exception; it gets a clear, typed error instead.
+    if (!EVIDENCE_ROLES.includes(envelope.role)) {
+      throw new TypeError(`invalid evidence role: ${envelope.role}`)
+    }
+    if (!EVIDENCE_ORIGINS.includes(envelope.origin)) {
+      throw new TypeError(`invalid evidence origin: ${envelope.origin}`)
+    }
+    if (!EVIDENCE_KINDS.includes(envelope.kind)) {
+      throw new TypeError(`invalid evidence kind: ${envelope.kind}`)
+    }
 
     const client = await this.pool.connect()
     try {
@@ -918,7 +955,7 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
          VALUES ($1,$2,$3,$4,$5,$6::jsonb,
                  $7,$8,$9,$10,$11,$12,$13,
                  $14::jsonb,$15,$16,$17)
-         ON CONFLICT (provider_id, evidence_id) WHERE evidence_id IS NOT NULL DO NOTHING
+         ON CONFLICT (provider_id, project_id, evidence_id) WHERE evidence_id IS NOT NULL DO NOTHING
          RETURNING id`,
         [
           randomUUID(),
@@ -933,7 +970,7 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
           envelope.origin,
           envelope.turnId ?? null,
           envelope.messageId ?? null,
-          envelope.payload.text ?? "",
+          envelope.payload.text ?? null,
           JSON.stringify(envelope.evidenceRefs),
           envelope.id,
           envelope.contentHash,
@@ -942,18 +979,30 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
       )
       if (inserted.rows[0]) return { outcome: "appended", id: envelope.id }
 
-      // The unique (provider_id, evidence_id) index rejected the insert:
-      // this is either an exact replay (duplicate, a no-op) or a genuine
-      // collision (same identity, different evidence) -- distinguished by
-      // comparing content_hash, never by re-deriving or trusting the new
-      // envelope's own claim.
+      // The unique (provider_id, project_id, evidence_id) index rejected the
+      // insert: this is either an exact replay (duplicate, a no-op) or a
+      // genuine collision (same identity, different evidence) --
+      // distinguished by comparing content_hash, never by re-deriving or
+      // trusting the new envelope's own claim.
       const existing = await client.query<{ content_hash: string | null }>(
         `SELECT content_hash FROM remem.session_events
-         WHERE provider_id = $1 AND evidence_id = $2`,
-        [envelope.providerId, envelope.id],
+         WHERE provider_id = $1 AND project_id = $2 AND evidence_id = $3`,
+        [envelope.providerId, envelope.context.projectId, envelope.id],
       )
-      const outcome =
-        existing.rows[0]?.content_hash === envelope.contentHash ? "duplicate" : "collision"
+      const existingRow = existing.rows[0]
+      if (!existingRow) {
+        // The INSERT reported a conflict, but the conflicting row is now
+        // missing under READ COMMITTED, at which point the conflicting
+        // row is guaranteed already committed and visible to this SELECT.
+        // remem.session_events has no DELETE/UPDATE code path today, so
+        // this branch should be unreachable; treating it as an unlabeled
+        // "collision" would silently misreport a data-integrity anomaly as
+        // ordinary identity contention. Surface it distinctly instead.
+        throw new Error(
+          `episodic evidence conflict reported for ${envelope.providerId}/${envelope.id}, but no conflicting row could be read back`,
+        )
+      }
+      const outcome = existingRow.content_hash === envelope.contentHash ? "duplicate" : "collision"
       return { outcome, id: envelope.id }
     } finally {
       client.release()
@@ -972,7 +1021,7 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
   ): Promise<EvidenceEnvelope | undefined> {
     const result = await this.pool.query<EpisodicEventRow>(
       `SELECT id, session_id, project_id, provider_id, kind, occurred_at, host, role, origin,
-              turn_id, message_id, safe_text, evidence_refs, evidence_id,
+              turn_id, message_id, safe_text, payload, evidence_refs, evidence_id,
               content_hash, schema_version
        FROM remem.session_events
        WHERE provider_id = $1 AND evidence_id = $2 AND project_id = $3
