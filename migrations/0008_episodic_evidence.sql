@@ -45,14 +45,20 @@ ALTER TABLE remem.session_events
                      'task-opened', 'task-resolved', 'project-state', 'turn-completed', 'tool-result', 'lifecycle'))
     NOT VALID,
   -- Ties the evidence-admission columns together: any row with evidence_id
-  -- set must also carry provider_id/content_hash/schema_version (all
-  -- otherwise-nullable for legacy-row compatibility), so a future bug or
-  -- manual data fix-up cannot silently produce a half-populated evidence
-  -- row that application code assumes is fully populated.
+  -- set must also carry provider_id/content_hash/schema_version/role/origin
+  -- (all otherwise-nullable for legacy-row compatibility), so a future bug
+  -- or manual data fix-up cannot silently produce a half-populated evidence
+  -- row that application code assumes is fully populated. role/origin are
+  -- included here, not just the identity columns, because a downstream
+  -- consumer (TASK-011's searchEpisodes) relies on every evidence row
+  -- exposing a non-null role/origin so a caller can label an unclassified
+  -- or historical/untrusted result -- a row that slipped past this check
+  -- with a null role would silently defeat that guarantee.
   ADD CONSTRAINT session_events_evidence_identity_complete_check
     CHECK (
       evidence_id IS NULL
-      OR (provider_id IS NOT NULL AND content_hash IS NOT NULL AND schema_version IS NOT NULL)
+      OR (provider_id IS NOT NULL AND content_hash IS NOT NULL AND schema_version IS NOT NULL
+          AND role IS NOT NULL AND origin IS NOT NULL)
     ) NOT VALID;
 
 ALTER TABLE remem.session_events
