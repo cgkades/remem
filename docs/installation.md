@@ -2,7 +2,8 @@
 
 ## Status and Requirements
 
-`agentic-remem` has not been published to npm. Install from a source checkout.
+`agentic-remem` is published to npm (registry version `0.2.3`, verified on 2026-09-09). Source
+checkout installation remains supported for development.
 
 Required for all modes:
 
@@ -42,7 +43,8 @@ Initialization:
 3. selects an available port starting at `54329`;
 4. creates a generated database password and protected Compose files;
 5. starts `pgvector/pgvector:0.8.1-pg16` on `127.0.0.1` only;
-6. applies schema migrations through version 4; and
+6. applies all checksum-verified schema migrations (currently through version 7; run `remem doctor`
+   or `remem status` for the live value); and
 7. runs doctor checks.
 
 `remem init` selects the `bge-small-en-v1.5` neural embedding model by

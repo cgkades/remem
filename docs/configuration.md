@@ -77,7 +77,10 @@ This `embedding` object is the app-config shape (`provider`/`model`/`dimensions`
 from the plugin-options `embedding` shape described in
 [Embedding Options](#embedding-options) below — see that section for the difference.
 
-Config format `version: 1` is not the database schema version. The current database schema is version 4.
+Config format `version: 1` is not the database schema version. The database schema version is
+defined by the migration files under `migrations/` and the installed `remem.schema_migrations`
+ledger (currently version 7 at this baseline); run `remem doctor` or `remem status` for the live
+value rather than assuming a fixed number.
 
 The config and managed `.env` contain credentials. On POSIX platforms Remem writes config, `.env`,
 and generated Compose files with mode `0600`, and creates config/data/backup directories with mode

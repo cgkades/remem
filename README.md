@@ -10,8 +10,8 @@ when prior work may matter, routes bounded recall across memory providers, and i
 working context instead of dumping an entire search result into the model prompt.
 
 Remem does not replace Markdown, Obsidian, Mem0, Cognee, MCP servers, or other systems of record. It
-provides a control plane over those stores and uses a managed PostgreSQL provider as the default for
-Remem-native memory.
+uses a managed PostgreSQL provider as the default for Remem-native memory. PostgreSQL and Markdown
+are the current built-in providers; the other adapters remain planned extensions of the control plane.
 
 This project is not affiliated with the unrelated Rust project
 [`majiayu000/remem`](https://github.com/majiayu000/remem). The npm package identity for this
@@ -23,16 +23,21 @@ recognition -> retrieval planning -> recall -> synthesis -> context injection
 
 ## Status
 
-Remem is pre-1.0 and has **not been published to npm yet**. Install it from source. The primary host
-adapter targets the current OpenCode v2 beta API, pinned and tested at
-`@opencode-ai/plugin@0.0.0-beta-18743`. OpenCode `1.18.26` remains available through a separate,
-weaker compatibility entry.
+Remem is pre-1.0 and published as `agentic-remem` (registry version `0.2.3` verified on 2026-09-09).
+Source installation remains supported. OpenCode v2 is the primary adapter; v1 compatibility has a
+separate, weaker trust boundary. See [OpenCode integration](docs/opencode-integration.md) for the
+supported runtime and configuration details.
+
+For development, start with the [executable recovery plan](plan/feature-memory-recovery-1.md) and
+[issue audit](docs/ISSUE-AUDIT.md). The [product vision](docs/PRODUCT-VISION.md) and
+[target architecture](docs/TARGET-ARCHITECTURE.md) outrank stale roadmap prose. ReMem has working
+capture/recall foundations, but the complete automatic episodic learning loop is not finished.
 
 What works now:
 
 - managed Docker storage using `pgvector/pgvector:0.8.1-pg16`, exposed on loopback only;
 - operator-managed external PostgreSQL with pgvector;
-- checksum-verified, ordered migrations through database schema version 4;
+- checksum-verified, ordered migrations; the migration set and installed database ledger define schema version;
 - PostgreSQL full-text and 384-dimensional pgvector retrieval;
 - local semantic Stage 1 recognition, deterministic routing, provider/topic awareness, ranking,
   deduplication, token budgets, and attributed synthesis;
@@ -40,16 +45,18 @@ What works now:
 - managed CRUD and supersession through `PostgresMemoryProvider` and `MemoryManager`;
 - deterministic, bounded consolidation of approved candidates with duplicate merging, provenance,
   conflict preservation, supersession, and restart-safe PostgreSQL run records;
-- opt-in bounded, deterministic capture of explicit user corrections, decisions, and preferences into
-  reviewable pending candidates;
+- bounded, deterministic multi-statement user capture with review-based or configured automatic
+  promotion, provenance, and safe processed-identity replay;
 - OpenCode and Pi tools `memory_search`, `memory_status`, and `memory_explain`, plus Pi's
   `before_agent_start` memory injection and optional compaction-context injection;
 - logical backup and guarded restore/reset commands; and
 - an executable evaluation corpus plus PostgreSQL integration tests in CI on Node.js 22 and 24.
 
-Remem never stores model or tool output as durable memory. Capture is disabled by default and must be
-enabled with `remem init --capture` or `capture.enabled`; it writes only eligible explicit user
-statements into **pending** candidates. Review/approval and consolidation remain explicit operations.
+Current host capture observes screened user text, not unrestricted model/tool output. Plain, v2, and
+Pi initialization leave capture off unless requested; `remem init --opencode-v1` enables capture and
+automatic promotion. Review-based capture keeps candidates pending. A verified-procedure extraction
+API also exists, but its production host-outcome wiring remains recovery work. See
+[Configuration](docs/configuration.md) for exact defaults, exclusions, and limitations.
 
 ## Install from Source
 
@@ -69,7 +76,7 @@ details.
 
 ## OpenCode v2
 
-Because the package is not published, point OpenCode at the built v2 package-root entry:
+For a source checkout, point OpenCode at the built v2 package-root entry:
 
 ```json
 {
@@ -144,7 +151,8 @@ review and act on expert corrections an OpenCode session submitted. Read
 
 ## Semantic Recognition
 
-The default `remem-local-hash-v1` model is a deterministic 384-dimensional feature hash over words,
+Managed/external initialization selects local BGE neural embeddings, with the hash model as fallback.
+The `remem-local-hash-v1` model is a deterministic 384-dimensional feature hash over words,
 character trigrams, adjacent word pairs, and a small set of hand-written concept groups. It is local
 and dependency-free, but it is **not a general neural embedding model**. It improves a bounded set of
 paraphrases while remaining lexical in character. `EmbeddingModel` is extensible so applications can
@@ -176,6 +184,11 @@ be visible in every context that configures the provider.
 
 ## Documentation
 
+- [Executable recovery plan](plan/feature-memory-recovery-1.md)
+- [GitHub issue audit and proposed updates](docs/ISSUE-AUDIT.md)
+- [Product vision](docs/PRODUCT-VISION.md)
+- [Target architecture](docs/TARGET-ARCHITECTURE.md)
+- [Recovery milestone checklist](docs/IMPLEMENTATION-PLAN.md)
 - [Architecture and diagrams](docs/architecture.md)
 - [Storage architecture](docs/storage-architecture.md)
 - [Installation](docs/installation.md)

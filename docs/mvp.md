@@ -1,5 +1,11 @@
 # MVP
 
+> **Historical snapshot.** This document records the original MVP milestone's scope and has not been
+> updated for capture, consolidation, correction-review, and procedure-learning work delivered after
+> it. For current status see [README](../README.md), the
+> [recovery milestone checklist](IMPLEMENTATION-PLAN.md), and the
+> [executable recovery plan](../plan/feature-memory-recovery-1.md).
+
 ## Hypothesis
 
 A compact provider/topic catalog plus staged local recognition can recover useful prior context
@@ -15,7 +21,7 @@ that path durable without coupling orchestration policy to one database.
 - Managed and external `PostgresMemoryProvider` using the same schema.
 - Docker Compose provisioning pinned to `pgvector/pgvector:0.8.1-pg16` on loopback.
 - CLI lifecycle, diagnostics, migrations, backup, restore, and managed reset.
-- Database schema version 4 with checksummed transactional migrations.
+- Checksum-verified, ordered transactional schema migrations.
 - PostgreSQL full-text search and 384-dimensional pgvector search.
 - Deterministic Stage 0 and local semantic Stage 1 provider/topic recognition.
 - `EmbeddingModel` extension point and the local `remem-local-hash-v1` feature-hash model.
@@ -32,7 +38,14 @@ The canonical runtime, storage, installation, and future-learning diagrams remai
 
 ## Not Included
 
-- Automatic session observation, candidate extraction, durable capture, or consolidation.
+At MVP delivery, this list was accurate. Bounded user-text capture, candidate extraction, review,
+and consolidation shipped in later work; broad/automatic session-observation and durable episodic
+evidence beyond that bounded capture remain outstanding (see the
+[executable recovery plan](../plan/feature-memory-recovery-1.md) phases 2-5). The npm package is now
+published; see [README](../README.md) for the current install/version status.
+
+- Broad automatic session observation and durable episodic evidence persistence beyond bounded,
+  screened user-text capture.
 - Standing background re-embedding for idle instances; re-embedding after a model change only
   progresses opportunistically while OpenCode is in active use (see [Embeddings](embeddings.md)).
 - An LLM planner or model-backed synthesizer.
@@ -43,7 +56,6 @@ The canonical runtime, storage, installation, and future-learning diagrams remai
 - Semantic contradiction resolution or near-duplicate merging.
 - A `/memory` TUI command or graphical dashboard.
 - Exact model-specific tokenizers.
-- A published npm artifact.
 
 ## Acceptance Scenarios
 
@@ -85,9 +97,9 @@ remem restore /path/to/remem-backup.dump --confirm
 remem reset --confirm
 ```
 
-Managed provisioning must generate protected files, publish only to `127.0.0.1`, reach schema
-version 2, and pass doctor. Restore and reset require explicit confirmation, and reset must refuse an
-external database.
+Managed provisioning must generate protected files, publish only to `127.0.0.1`, apply all
+checksum-verified migrations, and pass doctor. Restore and reset require explicit confirmation, and
+reset must refuse an external database.
 
 ## Success Metrics
 

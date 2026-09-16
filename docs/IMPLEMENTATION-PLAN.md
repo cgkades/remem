@@ -4,6 +4,10 @@
 >
 > Agents working on ReMem should read those two documents before selecting or implementing work from this checklist.
 
+For bounded coding tasks, use the [executable recovery plan](../plan/feature-memory-recovery-1.md).
+The [issue audit](ISSUE-AUDIT.md) records all open/closed dispositions and proposed GitHub updates.
+Those documents refine execution scope; they do not replace this checklist's full milestone criteria.
+
 ## How to use this document
 
 - `[ ]` means not verified complete on `main`.

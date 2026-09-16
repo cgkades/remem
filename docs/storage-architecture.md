@@ -48,7 +48,7 @@ flowchart TD
     URL --> Operator[Operator lifecycle, TLS, backup policy]
     Loopback --> Migrate[Checksum-verified migrations]
     Operator --> Migrate
-    Migrate --> Schema[(remem schema v3)]
+    Migrate --> Schema[(remem schema)]
 ```
 
 Managed mode generates a unique 32-byte base64url password, writes protected Compose/environment
@@ -63,7 +63,7 @@ enforce a broader server-version matrix.
 
 Both modes instantiate the same `PostgresMemoryProvider` after connection establishment.
 
-## Schema Version 3
+## Migrations 0001-0007
 
 Migration `0001_initial_schema.sql` creates:
 
@@ -87,8 +87,16 @@ Migration `0003_scoped_entities_catalog_embeddings.sql` splits legacy entities b
 then adds metadata-only catalog embeddings. Migration `0001` remains immutable so databases created
 by earlier builds upgrade without checksum drift.
 
-The application config has `version: 1`; that is the config-file format and is independent of
-database schema version 4.
+Migration `0004_consolidation_recovery.sql` adds the `consolidating` candidate status for
+restart-safe review and consolidation. Migration `0005_embedding_settings.sql` adds a durable
+embedding model/dimension settings row. Migration `0006_reembed_claims.sql` adds re-embedding claim
+tracking on memory embeddings. Migration `0007_correction_candidates.sql` adds correction-candidate
+storage with revisions, state, and audit fields.
+
+The application config has `version: 1`; that is the config-file format and is independent of the
+database schema version, which is defined by the migration set above and the installed
+`remem.schema_migrations` ledger (currently version 7 at this baseline). Run `remem doctor` or
+`remem status` for the live value rather than assuming a fixed number.
 
 ## Migration Integrity
 
