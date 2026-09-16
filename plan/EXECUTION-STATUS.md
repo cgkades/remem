@@ -1,9 +1,12 @@
 # Autonomous Recovery Run — Execution Ledger
 
-> Coordination/documentation branch for this run:
-> `docs/restore-recovery-planning-foundation`. Other worktrees/branches for
-> this run must not independently rewrite this file; append/update it here
-> and merge forward.
+> This ledger lived on `docs/restore-recovery-planning-foundation`, which has
+> since merged into `main` (see Package 1 below). It now lives at
+> `plan/EXECUTION-STATUS.md` on `main` directly. All three packages below
+> have since been reviewed (via the pr-review skill, multi-reviewer passes
+> with independent empirical verification of every BLOCKER/CONCERN finding)
+> and merged; see each package's "Review" note for what was found and fixed
+> before merge.
 
 - **Run prompt:** `plan/autonomous-recovery-prompt.md`
 - **Execution plan:** `plan/feature-memory-recovery-1.md`
@@ -15,11 +18,19 @@
 
 ### Package 1 — TASK-001/TASK-002 (Phase 0: docs reconciliation)
 
-- **Status:** draft-awaiting-review
+- **Status:** merged
 - **Baseline/branch:** `683ba50` → `docs/restore-recovery-planning-foundation`
-- **Commit:** `5b1030e`
-- **PR:** https://github.com/cgkades/remem/pull/83 (draft, CI green: Node 22/24,
-  OpenCode v1/v2 E2E, Pi adapter/E2E, neural eval — all pass)
+  (deleted after merge)
+- **Commit:** `5b1030e` (plus `a451fdd`, `e00a0da` — maintainer-decision
+  recording and a ledger staleness fix found during review)
+- **PR:** https://github.com/cgkades/remem/pull/83 — **merged into `main`**
+  (squash-merged 2026-09-16, CI green: Node 22/24, OpenCode v1/v2 E2E, Pi
+  adapter/E2E, neural eval — all pass)
+- **Review:** pr-review pass found one self-authored staleness issue (this
+  ledger's own CI-pending prose for PR #85 was outdated) — fixed before
+  merge. No other findings (docs-only diff; doc-claim-verification agent
+  independently confirmed all schema-version/migration/publish-status
+  claims against actual source).
 - **What it does:** preserves the prior planning session's intended artifacts
   (`plan/feature-memory-recovery-1.md`, `plan/autonomous-recovery-prompt.md`,
   `docs/ISSUE-AUDIT.md`, `README.md`, `docs/IMPLEMENTATION-PLAN.md`) and
@@ -37,21 +48,54 @@
   `npm run build` not re-run for this PR (no source changed). CI ran the
   full matrix anyway and is green.
 - **Skips:** none.
-- **Blocker/decision needed:** none to implement this PR. TASK-003
-  (applying the issue audit's proposed GitHub issue-body/state updates) is
-  explicitly out of scope for this run (GitHub-administration task, not
-  authorized) and is reported, not applied, in `docs/ISSUE-AUDIT.md`.
-- **Next action:** maintainer review/merge. No further work queued on this
-  branch.
+- **Blocker/decision needed:** none. TASK-003 (applying the issue audit's
+  proposed GitHub issue-body/state updates) is explicitly out of scope for
+  this run (GitHub-administration task, not authorized) and is reported,
+  not applied, in `docs/ISSUE-AUDIT.md`.
+- **Next action:** none — merged.
 
 ### Package 2 — TASK-004/005/006 (Phase 1: short-continuity anchor fallback)
 
-- **Status:** draft-awaiting-review
-- **Baseline/branch:** `683ba50` → `feature/phase1-short-continuity-anchor-fallback`
-- **Commit:** `f760720`
-- **PR:** https://github.com/cgkades/remem/pull/84 (draft, targets `main`
-  independently of PR #83; CI green: Node 22/24, OpenCode v1/v2 E2E, Pi
-  adapter/E2E, neural eval — all pass)
+- **Status:** merged
+- **Baseline/branch:** `683ba50` →
+  `feature/phase1-short-continuity-anchor-fallback` (deleted after merge)
+- **Commit:** `f760720` (plus `3f1761f` — pr-review fix-loop commit, see
+  Review below)
+- **PR:** https://github.com/cgkades/remem/pull/84 — **merged into `main`**
+  (squash-merged 2026-09-16, CI green after fixes: Node 22/24, OpenCode
+  v1/v2 E2E, Pi adapter/E2E, neural eval — all pass)
+- **Review:** pr-review pass (code, data-structures/concurrency, security,
+  TypeScript-idiom, test-quality reviewers) found real gaps, independently
+  re-verified by direct execution (reverting `src/planner.ts` and re-running
+  tests) rather than trusting reviewer claims:
+  - 2 of the original 8 anchor tests passed unchanged against the pre-fix
+    planner (didn't actually pin the claimed behavior); 2 more had weaker
+    gaps (an unexercised exclusion list, a duplicate empty-catalog test).
+    Fixed: rewrote the institutional-gate test as a true A/B toggle on one
+    entry, added a genuinely discriminating provider-exclusion test, added
+    a positive control for the exclusion list, replaced the duplicate test
+    with a non-trivial-catalog case, and added a frequency-vs-order
+    tie-break test. Re-verified: 6 of 11 anchor tests now genuinely fail
+    without the fix (up from 3).
+  - The new integration test couldn't distinguish "the anchor path worked"
+    from "the orchestrator's independent semantic-recognition fallback
+    happened to compensate" (semantic recognition always attempts when
+    deterministic confidence < 0.82, and the anchor fallback's confidence
+    is a fixed 0.62). Verified empirically (`recognitionStage:
+"deterministic"`, signals include `"anchor-routed continuity
+fallback"`) that the anchor path is genuinely responsible, and added
+    assertions on both fields.
+  - Fixed a dead tie-break branch in `selectContinuityAnchor` (correct
+    output was an accident of loop iteration order, not of the written
+    comparison) and merged a two-variable `anchor`/`anchorRoutedProviderIds`
+    pair into one `Map<providerId, ContinuityAnchor>` (TypeScript reviewer
+    WARN, same risk class as an earlier real issue in this file).
+  - Not changed (accepted as intentional/out of scope): single-token query
+    narrowing is TASK-005's approved design; shared 0.62 confidence between
+    anchor and blind-fallback paths is a legitimate future refinement.
+  - Security review: no injection risk (parameterized bind value, further
+    restricted to `\p{L}\p{N}` by the tokenizer); confirmed institutional
+    gating is applied before anchor candidacy in code, not just claimed.
 - **What it does:** `DeterministicRetrievalPlanner.plan`'s existing
   continuity/no-qualified-match fallback derives one bounded "anchor" token
   from the prompt (>=3 chars, excluded-token-list-filtered) that also names
@@ -62,42 +106,82 @@
   anchor, or no available provider for the matched anchor, the pre-existing
   full-prompt/all-available-providers fallback is unchanged.
   `minimumConfidence`, scoring, and non-continuity behavior are untouched.
-- **Tests added:** 8 unit tests in `tests/planner.test.ts` (anchor
-  routing+query substitution, provider-availability restriction,
-  institutional-gate exclusion, document-frequency tie-break,
-  case/punctuation normalization, no-anchor fallback preserved, bare
-  "continue the work" no-route, qualified-match behavior unchanged). 1
-  PostgreSQL integration test in `tests/postgres-provider.integration.test.ts`
-  reproducing TASK-004's exact short prompt
-  (`Let's continue the Orion work.`) end-to-end through capture → promote
-  → fresh provider/orchestrator/session, plus TASK-006's 3 negative
-  controls (foreign project, unrelated prompt, bare continuity phrase).
-- **Verification:** `npm run lint` pass; `npm run typecheck` pass;
-  `npm run build` pass; `npx prettier --check <changed files>` pass;
-  `npm test` 321 passed / 41 skipped (unchanged skip set — no
-  `REMEM_TEST_DATABASE_URL` for that run); `npm run test:postgres` 28
-  passed / 0 skipped against a disposable, freshly-created, loopback-bound
-  PostgreSQL container (`compose.test.yaml`, container
-  `remem-test-postgres-1`, `127.0.0.1:54330`, ephemeral named volume). Red
-  state confirmed by temporarily reverting `src/planner.ts` alone and
-  re-running the new integration test: `resultCount: 0`, empty
-  `memoryText` (recorded in the PR body, not shipped as a separate commit).
+- **Tests (after review fixes):** 11 unit tests in `tests/planner.test.ts`
+  (up from 8 — see Review above) plus 1 PostgreSQL integration test in
+  `tests/postgres-provider.integration.test.ts` reproducing TASK-004's exact
+  short prompt (`Let's continue the Orion work.`) end-to-end through
+  capture → promote → fresh provider/orchestrator/session, plus TASK-006's
+  3 negative controls (foreign project, unrelated prompt, bare continuity
+  phrase), now with recognition-stage/signal assertions pinning the code
+  path.
+- **Verification (post-fix):** `npm run lint` pass; `npm run typecheck`
+  pass; `npm run build` pass; `npx prettier --check <changed files>` pass;
+  `npm test` 324 passed / 41 skipped; `npm run test:postgres` 28 passed / 0
+  skipped against a disposable, freshly-created, loopback-bound PostgreSQL
+  container. Re-verified on integrated `main` after all 3 packages merged:
+  326 passed / 41 skipped (unit), 28/28 (integration), tarball smoke pass.
 - **Skips:** none unexpected. Full-suite `vitest run` with
   `REMEM_TEST_DATABASE_URL` set is flaky (multiple integration test files
   each run their own `DROP SCHEMA ... CASCADE` in `beforeAll`, and vitest
   runs files concurrently by default) — reproduced with and without this
   change; not a regression. Use the repo's own `npm run test:postgres`
-  (single file) instead, as done here.
-- **Blocker/decision needed:** none to implement this PR.
-- **Next action:** maintainer review/merge.
+  (single file) instead.
+- **Blocker/decision needed:** none.
+- **Next action:** none — merged.
 
 ### Package 3 — TASK-051/052 (Phase 15: `--version`/`-V` CLI flag)
 
-- **Status:** draft-awaiting-review
-- **Baseline/branch:** `683ba50` → `feature/cli-version-flag`
-- **Commit:** `efd5d77`
-- **PR:** https://github.com/cgkades/remem/pull/85 (draft, targets `main`
-  independently; CI: all jobs pass — Node 22/24, OpenCode v1/v2 E2E, Pi
+- **Status:** merged
+- **Baseline/branch:** `683ba50` → `feature/cli-version-flag` (deleted after
+  merge)
+- **Commit:** `efd5d77` (plus `a1af6c1` — pr-review fix-loop commit, see
+  Review below)
+- **PR:** https://github.com/cgkades/remem/pull/85 — **merged into `main`**
+  (squash-merged 2026-09-16, CI green after fixes: Node 22/24, OpenCode
+  v1/v2 E2E, Pi adapter/E2E, neural eval — all pass)
+- **Review:** pr-review pass (code, security, TypeScript-idiom,
+  test-quality, and a substituted CLI-contract reviewer) found a real bug,
+  independently re-verified by direct execution:
+  - `installedPackageVersion()`'s early-return sat outside `runCli`'s
+    existing try/catch (4 of 5 reviewers independently flagged this), so a
+    corrupted install (missing/malformed `package.json`) would surface as
+    an unhandled promise rejection instead of the CLI's normal
+    `Remem <command> failed: ...` + exit-1 convention. Verified by
+    temporarily removing `"version"` from this repo's own `package.json`
+    (immediately restored, confirmed via `git diff --stat` showing no
+    changes) — confirmed the crash, then confirmed the fix. Fixed by
+    wrapping the branch in its own try/catch and hoisting the shared
+    output/errorOutput closures.
+  - A test-quality BLOCKER claim ("test passes vacuously") was
+    independently re-verified via two targeted mutations rather than
+    trusted at face value: confirmed the test correctly fails when the
+    guard is loosened from "sole argument" to "present anywhere in args"
+    (the realistic regression), downgraded from BLOCKER to
+    clarify-and-strengthen, and fixed a docstring that incorrectly claimed
+    the test hit an "Unknown command" dispatch path (it actually hits
+    `readAppConfig`'s ENOENT failure — verified directly).
+  - Fixed an unchecked `as {version: string}` cast in the test fixture;
+    removed a `stat(configDir)` assertion that passes/fails identically
+    regardless of whether config access occurred; added
+    `--version | -V (must be the only argument)` to `usage()` output.
+  - Not changed (accepted as this bounded task's approved scope):
+    `--version` combined with other args isn't honored/rejected the way
+    git/npm/docker handle theirs — TASK-051 explicitly scoped
+    single-argument-only.
+  - Known, disclosed limitation: no permanent automated test for
+    `installedPackageVersion()`'s own failure path (verified manually via
+    direct execution instead, since a clean automated test would need
+    either an unsafe live-mutation of the real `package.json` or a deeper
+    path-injection refactor).
+- **What it does:** `runCli` handles a single-argument `--version`/`-V`
+  before any command-resolving argument parsing and before
+  paths/runner/config/database/install-lock access. Version is read from
+  `package.json` via `packageRoot(import.meta.url)` (same pattern as
+  `doctor.ts`'s existing host-integration checks), never
+  `process.cwd()`/a hardcoded duplicate. `--help` and all other
+  command/flag parsing unchanged; `--version` combined with other
+  arguments is not special-cased (see Review above for the accepted
+  scope boundary).
   adapter/E2E, neural eval — confirmed green later in the same session)
 - **What it does:** `runCli` handles a single-argument `--version`/`-V`
   before any command-resolving argument parsing and before
@@ -124,35 +208,7 @@ pack:smoke` pass (exit 0; `--help`, `--version`, `-V`, subpath exports,
   applicable (no schema/provider changes).
 - **Skips:** none unexpected.
 - **Blocker/decision needed:** none.
-- **Next action:** maintainer review/merge.
-
-## Not started this run (blocked/deferred, per readiness table)
-
-Per `plan/feature-memory-recovery-1.md` §1's readiness table, every
-remaining phase is one of:
-
-- **REVIEW-GATED** (2, 4, 5, 6, 7, 10, 11): requires maintainer approval of
-  a concrete contract/patch (observation/admission envelope and identity
-  rules; managed-transaction/association-ledger schema; host-callback
-  verification contract; four-outcome learning policy; consolidation
-  mutation authority; full-loop default-rollout gate; embedding identity
-  schema) _before_ implementation, per the plan's explicit gates (e.g.
-  "Maintainer approval of these proposed values is part of TASK-007; do
-  not present them as today's defaults").
-- **DEPENDENT** on a REVIEW-GATED phase (3 on 2; 8 on 1,7; 9 on 3,4,7):
-  cannot start until the review-gated prerequisite lands.
-- **DEFERRED** (12, 13, 14; and 15's TASK-053/054, which are explicitly
-  "after phase 10"): not authorized to start per the plan and per this
-  run's Work Selection rule ("Do not use a blocker as permission to start
-  deferred reranking, Pi UI, sync, or enterprise work").
-
-Per the run prompt's Work Selection section, TASK-051/052 (Package 3
-above) was exactly the one authorized independent package available once
-Phase 0/1 (Packages 1-2) were complete and Phase 2+ was confirmed
-review-gated. **No further code-eligible, non-review-gated package
-remains for this run.** This is consistent with the prompt's stated
-expectation of "a small review queue, not unattended completion of all 54
-tasks."
+- **Next action:** none — merged.
 
 ### Phase 2 decision — RESOLVED 2026-09-10
 
@@ -240,34 +296,46 @@ run/session.
 
 ## Work still uncommitted
 
-None. All completed edits for this run are committed on the three branches
-above and pushed to `origin`. `docs/code-review/` remains untouched and
-untracked, as instructed (unrelated to this run).
+None. All three packages are merged into `main` (PRs #83, #84, #85). Their
+feature/coordination branches were deleted after merge. `docs/code-review/`
+remains untouched and untracked, as instructed (unrelated to this run) —
+this now also includes a new review artifact
+(`docs/code-review/2026-09-16-pr-84-anchor-continuity-review.md`) written
+by a security-reviewer subagent during the pr-review pass on PR #84;
+consistent with the pre-existing file in that directory, it has never been
+committed in this repo's history and is left as local-only reviewer output.
 
 ## Disposable test database
 
-A disposable, loopback-bound PostgreSQL container was created for this
-run's `npm run test:postgres` verification via the repo's own
+Two disposable, loopback-bound PostgreSQL containers were created and torn
+down across this run's two sessions, both via the repo's own
 `compose.test.yaml` (`docker compose -f compose.test.yaml up --detach
 --wait`), producing container `remem-test-postgres-1` on
-`127.0.0.1:54330` with an ephemeral named volume
-(`remem-test_remem-test-postgres-data`). An unrelated, already-exited
-container named `remem-test-postgres` (no `-1` suffix, port 15432) predated
-this run and was left untouched throughout. The disposable container is
-torn down via `npm run test:postgres:down` at the end of this run (removes
-its volumes; does not touch the unrelated pre-existing container).
+`127.0.0.1:54330` with an ephemeral named volume each time. Both were torn
+down via `npm run test:postgres:down` (removes volumes) at the end of
+their respective sessions. An unrelated, already-exited container named
+`remem-test-postgres` (no `-1` suffix, port 15432) predated this run and
+was left untouched throughout both sessions.
 
 ## Remaining risks
 
 - The full `vitest run` suite is flaky when `REMEM_TEST_DATABASE_URL` is
   set, due to concurrent integration-test files each dropping/recreating
   the shared `remem` schema (pre-existing; not introduced by this run).
-  Anyone re-verifying Package 2 should use `npm run test:postgres`
-  (single file), matching this ledger and the repo's own script, not a
-  bare `vitest run` with the database URL set.
-- None of the three PRs have been merged; they are independent (not
-  stacked) and can merge in any order — there is no cross-PR dependency
-  among Packages 1-3.
+  Use `npm run test:postgres` (single file) instead, as this ledger and the
+  repo's own script both do.
+- All findings from the pr-review passes on PRs #84 and #85 that were
+  accepted as out-of-scope/intentional (see each package's Review note
+  above) remain as-is: the anchor fallback's single-token query narrowing
+  and shared 0.62 confidence value; the `--version` flag's
+  not-honored-when-combined-with-other-args behavior; and
+  `installedPackageVersion()`'s failure path lacking a permanent automated
+  test (verified manually instead). None of these were rated
+  BLOCKER/CRITICAL by any reviewer, and each is documented with its
+  rationale in the corresponding PR's merged commit message.
+- Final integrated verification on `main` after all 3 merges: `npm test`
+  326 passed / 41 skipped, `npm run test:postgres` 28/28, `npm run
+pack:smoke` exit 0, lint/typecheck/build/prettier all clean.
 
 ## Recommended next task
 
