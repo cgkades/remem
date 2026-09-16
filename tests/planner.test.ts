@@ -201,7 +201,15 @@ describe("DeterministicRetrievalPlanner", () => {
       expect(plan.requests[0]?.reason).toContain("anchor routing")
     })
 
-    it("does not route an anchor's owning provider when it is unavailable, and falls back safely for the rest", () => {
+    it("falls back safely to the full prompt when the anchor's owning provider is unavailable", () => {
+      // Note: with only one available provider that doesn't own the anchor,
+      // this scenario is inherently identical whether or not anchor logic
+      // exists at all -- when no available provider owns the matched anchor,
+      // the implementation intentionally falls through to the same blanket
+      // fallback the pre-anchor code always used. This test pins that safe
+      // fallback behavior; it does not by itself prove the anchor logic ran.
+      // See the next test for a scenario that does discriminate old vs. new
+      // behavior (an unrelated available provider that owns no anchor entry).
       const plan = planner.plan(
         "Let's continue the Orion work.",
         [orionMemory, zephyrDecision],
@@ -219,13 +227,39 @@ describe("DeterministicRetrievalPlanner", () => {
       })
     })
 
-    it("excludes institutionally blocked entries from anchor candidacy", () => {
-      const blockedOrion: CatalogEntry = {
+    it("does not send a broad fallback to an available provider that owns no anchor-matched entry, once an anchor route is established elsewhere", () => {
+      // Discriminates old vs. new behavior directly: pre-anchor code always
+      // sent every available provider the full-prompt fallback. Here,
+      // "postgres-a" owns the anchor match and is available, but
+      // "postgres-c" is also available and owns nothing catalog-relevant at
+      // all. Old code would send postgres-c the full prompt too; the anchor
+      // implementation must restrict routing to only the anchor-owning
+      // provider and must not send postgres-c anything.
+      const plan = planner.plan(
+        "Let's continue the Orion work.",
+        [orionMemory, zephyrDecision],
+        ["postgres-a", "postgres-c"],
+      )
+
+      expect(plan.signals).toContain("anchor-routed continuity fallback")
+      expect(plan.requests.map((request) => request.providerId)).toEqual(["postgres-a"])
+      expect(plan.requests[0]).toMatchObject({ query: "orion" })
+    })
+
+    it("excludes institutionally blocked entries from anchor candidacy, isolated by an A/B context toggle on the same entry", () => {
+      // The same entry and prompt are used for both calls; only
+      // context.projectId differs, which flips this entry's institutional
+      // applicability (its gate requires projectId "other-project"). This
+      // isolates the institutional-gate variable specifically: if
+      // institutional blocking did not apply to anchor candidacy (only to
+      // scoreEntry's normal matching), the "blocked" call below would still
+      // wrongly select "orion" as an anchor.
+      const gatedOrion: CatalogEntry = {
         ...orionMemory,
-        id: "postgres:orion-blocked",
+        id: "postgres:orion-gated",
         institutional: {
           role: "procedure",
-          id: "procedure.orion-blocked",
+          id: "procedure.orion-gated",
           steps: [{ id: "plan", instruction: "Prepare the plan." }],
           positionIds: ["position.orion"],
           requiredEvidence: ["approval"],
@@ -240,25 +274,24 @@ describe("DeterministicRetrievalPlanner", () => {
           review: { reviewedAt: "2026-09-01T00:00:00.000Z", expiresAt: null },
         },
       }
+      const prompt = "Let's continue the Orion work."
 
-      const plan = planner.plan(
-        "Let's continue the Orion work.",
-        [blockedOrion, zephyrDecision],
-        ["postgres-a", "postgres-b"],
-        memoryContext,
-      )
+      const blockedPlan = planner.plan(prompt, [gatedOrion], ["postgres-a"], memoryContext)
+      expect(blockedPlan.signals).not.toContain("anchor-routed continuity fallback")
+      expect(blockedPlan.requests).toHaveLength(1)
+      expect(blockedPlan.requests[0]).toMatchObject({
+        providerId: "postgres-a",
+        query: prompt,
+        reason: "continuity phrase with no catalog match",
+      })
 
-      // The only Orion-titled entry is institutionally blocked, so it must not
-      // contribute an anchor candidate; there is no fallback anchor left to match
-      // "orion" or "zephyr", so the existing full-prompt/all-providers fallback runs.
-      expect(plan.requests.map((request) => request.providerId).sort()).toEqual([
-        "postgres-a",
-        "postgres-b",
-      ])
-      for (const request of plan.requests) {
-        expect(request.reason).toBe("continuity phrase with no catalog match")
-        expect(request.query).not.toBe("orion")
-      }
+      const allowedPlan = planner.plan(prompt, [gatedOrion], ["postgres-a"], {
+        ...memoryContext,
+        projectId: "other-project",
+      })
+      expect(allowedPlan.signals).toContain("anchor-routed continuity fallback")
+      expect(allowedPlan.requests).toHaveLength(1)
+      expect(allowedPlan.requests[0]).toMatchObject({ providerId: "postgres-a", query: "orion" })
     })
 
     it("breaks a document-frequency tie by earliest prompt order", () => {
@@ -299,6 +332,44 @@ describe("DeterministicRetrievalPlanner", () => {
       expect(plan.requests[0]).toMatchObject({ providerId: "postgres-c", query: "nebula" })
     })
 
+    it("prefers a lower-document-frequency anchor over an earlier-but-more-common one", () => {
+      // "titan" appears earlier in the prompt but in 2 catalog entries
+      // (document frequency 2); "vega" appears later but in only 1 entry
+      // (frequency 1). This exercises the primary ranking rule (lowest
+      // frequency wins), not the order tie-break exercised above -- "vega"
+      // must win despite not being first.
+      const titanPipeline: CatalogEntry = {
+        id: "postgres:titan-pipeline",
+        title: "The platform team investigated Titan as a candidate pipeline runtime.",
+        aliases: [],
+        summary: "",
+        providerIds: ["postgres-a"],
+        scope: { kind: "project", id: "project-test" },
+        tags: [],
+        importance: 0.5,
+        unresolved: false,
+      }
+      const titanVegaMerge: CatalogEntry = {
+        id: "postgres:titan-vega-merge",
+        title: "The platform team eventually adopted Titan alongside Vega for the merge pipeline.",
+        aliases: [],
+        summary: "",
+        providerIds: ["postgres-b"],
+        scope: { kind: "project", id: "project-test" },
+        tags: [],
+        importance: 0.5,
+        unresolved: false,
+      }
+      const plan = planner.plan(
+        "Let's continue the Titan and Vega work.",
+        [titanPipeline, titanVegaMerge],
+        ["postgres-a", "postgres-b"],
+      )
+
+      expect(plan.requests).toHaveLength(1)
+      expect(plan.requests[0]).toMatchObject({ providerId: "postgres-b", query: "vega" })
+    })
+
     it("ignores case and punctuation when matching the anchor", () => {
       const plan = planner.plan(
         "LET'S CONTINUE THE ORION!!! WORK???",
@@ -310,8 +381,28 @@ describe("DeterministicRetrievalPlanner", () => {
       expect(plan.requests[0]).toMatchObject({ providerId: "postgres-a", query: "orion" })
     })
 
-    it("preserves the full-prompt/all-providers fallback when the catalog has no anchor", () => {
-      const plan = planner.plan("What did we decide last time?", [], ["postgres-a", "postgres-b"])
+    it("preserves the full-prompt/all-providers fallback when no catalog entry shares an anchor token with the prompt", () => {
+      // Uses a non-empty catalog (unlike the pre-existing empty-catalog
+      // fallback test above) so selectContinuityAnchor actually runs its
+      // document-frequency scan over real entries and must correctly find
+      // no candidate, rather than trivially short-circuiting on an empty
+      // entries array.
+      const unrelatedEntry: CatalogEntry = {
+        id: "postgres:unrelated",
+        title: "Nebula caching subsystem",
+        aliases: [],
+        summary: "",
+        providerIds: ["postgres-a"],
+        scope: { kind: "project", id: "project-test" },
+        tags: [],
+        importance: 0.5,
+        unresolved: false,
+      }
+      const plan = planner.plan(
+        "What did we decide last time?",
+        [unrelatedEntry],
+        ["postgres-a", "postgres-b"],
+      )
 
       expect(plan.shouldRetrieve).toBe(true)
       expect(plan.signals).not.toContain("anchor-routed continuity fallback")
@@ -343,6 +434,32 @@ describe("DeterministicRetrievalPlanner", () => {
       }
     })
 
+    it("excludes an excluded-list token from anchor candidacy even when a catalog entry shares it (positive control)", () => {
+      // Without ANCHOR_EXCLUDED_TOKENS, this exact fixture would select
+      // "work" as a valid single-token anchor match against this entry's
+      // title -- proving the exclusion list has real effect, not just that
+      // no catalog entry happens to overlap (the bare-continuity test above
+      // cannot distinguish those two cases on its own).
+      const workInitiative: CatalogEntry = {
+        id: "postgres:work-initiative",
+        title: "Work initiative tracking",
+        aliases: [],
+        summary: "",
+        providerIds: ["postgres-a"],
+        scope: { kind: "project", id: "project-test" },
+        tags: [],
+        importance: 0.5,
+        unresolved: false,
+      }
+      const plan = planner.plan("continue the work", [workInitiative], ["postgres-a"])
+
+      expect(plan.signals).not.toContain("anchor-routed continuity fallback")
+      expect(plan.requests).toHaveLength(1)
+      expect(plan.requests[0]).toMatchObject({
+        reason: "continuity phrase with no catalog match",
+      })
+    })
+
     it("preserves qualified catalog matches and non-continuity behavior unchanged", () => {
       // A normal qualified match (no continuity phrase, no fallback) must be
       // unaffected by the anchor fallback: minimumConfidence and scoring rules apply
@@ -357,7 +474,7 @@ describe("DeterministicRetrievalPlanner", () => {
       expect(plan.topics).toEqual(["Project Phoenix"])
       expect(plan.requests).toHaveLength(1)
       expect(plan.requests[0]?.providerId).toBe("notes")
-      expect(plan.requests[0]?.query).not.toBe("phoenix")
+      expect(plan.requests[0]?.query).toBe("Continue the Phoenix database work")
       expect(plan.confidence).toBeGreaterThan(0.8)
     })
   })

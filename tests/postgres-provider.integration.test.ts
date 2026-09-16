@@ -933,6 +933,15 @@ integration("PostgreSQL managed provider", () => {
       )
 
       expect(injection.plan.shouldRetrieve).toBe(true)
+      // Positively pin that the *deterministic anchor path* (not the
+      // orchestrator's independent semantic-recognition fallback, which
+      // also attempts on this same low-confidence deterministic plan and
+      // could otherwise coincidentally produce a passing recall on its
+      // own) is what produced this recall. Confirmed empirically: without
+      // this assertion, a regression that silently broke anchor routing
+      // could go undetected if the semantic layer happened to compensate.
+      expect(injection.plan.signals).toContain("anchor-routed continuity fallback")
+      expect(injection.trace.recognitionStage).toBe("deterministic")
       expect(injection.memoryText, JSON.stringify(injection.trace)).not.toBe("")
       for (const statement of statements) expect(injection.memoryText).toContain(statement)
       expect(injection.memoryText).not.toContain("Can you check this?")

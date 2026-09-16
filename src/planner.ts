@@ -83,16 +83,19 @@ function selectContinuityAnchor(
     (token) => token.length >= 3 && !ANCHOR_EXCLUDED_TOKENS.has(token),
   )
 
-  let best: { anchor: string; frequency: number; order: number } | undefined
-  for (const [order, token] of candidates.entries()) {
+  // `candidates` preserves the original prompt-token order (from
+  // `promptTokens.filter(...)`), and this loop visits it strictly forward. Ties
+  // are resolved by simply *not* replacing `best` on an equal-frequency
+  // candidate, so the earliest (first-seen) token silently wins -- no explicit
+  // order/index bookkeeping is needed to express that. Do not reorder or
+  // re-filter `candidates` (e.g. sorting by frequency) without revisiting this:
+  // doing so would silently invert the "earliest" tie-break rule.
+  let best: { anchor: string; frequency: number } | undefined
+  for (const token of candidates) {
     const frequency = entryTerms.filter(({ terms }) => terms.has(token)).length
     if (frequency === 0) continue
-    if (
-      !best ||
-      frequency < best.frequency ||
-      (frequency === best.frequency && order < best.order)
-    ) {
-      best = { anchor: token, frequency, order }
+    if (!best || frequency < best.frequency) {
+      best = { anchor: token, frequency }
     }
   }
   if (!best) return undefined
@@ -246,8 +249,13 @@ export class DeterministicRetrievalPlanner {
         providerReasons.set(providerId, reasons)
       }
     }
-    let anchor: ContinuityAnchor | undefined
-    const anchorRoutedProviderIds = new Set<string>()
+    // Keyed by providerId rather than tracked as a separate `ContinuityAnchor`
+    // plus a parallel `Set<string>` of routed provider IDs: a single map keeps
+    // "this provider was anchor-routed" and "using this anchor" as one
+    // structurally-enforced fact instead of two bindings a future edit could
+    // update independently and silently fall out of sync.
+    const anchorByProvider = new Map<string, ContinuityAnchor>()
+    let anchorSignaled = false
     if (fallbackToProviders) {
       const candidate = selectContinuityAnchor(promptTokens, entries)
       const routedProviderIds = candidate
@@ -256,12 +264,12 @@ export class DeterministicRetrievalPlanner {
           )
         : []
       if (candidate && routedProviderIds.length > 0) {
-        anchor = candidate
+        anchorSignaled = true
         for (const providerId of routedProviderIds) {
           providerReasons.set(providerId, [
             `anchor routing: catalog title/alias token "${candidate.anchor}"`,
           ])
-          anchorRoutedProviderIds.add(providerId)
+          anchorByProvider.set(providerId, candidate)
         }
       } else {
         for (const providerId of availableProviderIds) {
@@ -269,23 +277,26 @@ export class DeterministicRetrievalPlanner {
         }
       }
     }
-    if (anchor) signals.push("anchor-routed continuity fallback")
+    if (anchorSignaled) signals.push("anchor-routed continuity fallback")
 
     const query = prompt.trim().slice(0, 2_000)
     const requests: ProviderRetrievalRequest[] = [...providerReasons].map(
-      ([providerId, reasons]) => ({
-        providerId,
-        query: anchor && anchorRoutedProviderIds.has(providerId) ? anchor.anchor : query,
-        reason: reasons.join("; "),
-        limit: 8,
-        topics: anchorRoutedProviderIds.has(providerId)
-          ? (anchor?.entries
-              .filter((entry) => entry.providerIds.includes(providerId))
-              .map((entry) => entry.title) ?? [])
-          : selected
-              .filter((match) => match.entry.providerIds.includes(providerId))
-              .map((match) => match.entry.title),
-      }),
+      ([providerId, reasons]) => {
+        const anchor = anchorByProvider.get(providerId)
+        return {
+          providerId,
+          query: anchor?.anchor ?? query,
+          reason: reasons.join("; "),
+          limit: 8,
+          topics: anchor
+            ? anchor.entries
+                .filter((entry) => entry.providerIds.includes(providerId))
+                .map((entry) => entry.title)
+            : selected
+                .filter((match) => match.entry.providerIds.includes(providerId))
+                .map((match) => match.entry.title),
+        }
+      },
     )
 
     return {
