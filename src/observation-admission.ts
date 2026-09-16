@@ -29,6 +29,7 @@
  * cannot violate the documented "never throws" contract.
  */
 import { createHash } from "node:crypto"
+import { looksLikeToolOutput, reduceBulkArtifact } from "./bulk-artifact-reduction.js"
 import { containsSensitiveCredential } from "./sensitive-data.js"
 import type { MemoryContext } from "./types.js"
 
@@ -161,6 +162,21 @@ export interface EvidenceAdmissionConfig {
   maxEvidenceRefs: number
   /** Maximum events a caller may queue before this admission boundary; enforced by the caller's own queue, not by this stateless function. */
   maxQueuedEvents: number
+  /**
+   * TASK-059: an optional, explicitly-configured summarizer that may
+   * replace the deterministic bulk-artifact reduction (`reduceBulkArtifact`,
+   * `bulk-artifact-reduction.ts`) for a payload classified as tool-output-
+   * shaped. Never required and never the only path: if unset, or if it
+   * throws, or if it returns a non-string/empty value, admission falls back
+   * to the deterministic reduction -- this function is never the sole
+   * gate between a raw bulk artifact and persistence. Deliberately
+   * synchronous (matching `admitEvidence`'s own synchronous, pure-function
+   * contract); a caller wanting an LLM-backed summarizer must have already
+   * resolved it to a plain string before this call, e.g. via a cache
+   * populated by an earlier async step -- this boundary does not perform
+   * I/O itself.
+   */
+  bulkArtifactSummarizer?: (text: string) => string | undefined
 }
 
 export const DEFAULT_EVIDENCE_ADMISSION_CONFIG: EvidenceAdmissionConfig = {
@@ -173,6 +189,16 @@ export const DEFAULT_EVIDENCE_ADMISSION_CONFIG: EvidenceAdmissionConfig = {
 
 /** Bound shared by every identity-like field (`providerId`, `host`, `turnId`, `messageId`, and `context`'s own string fields). */
 export const IDENTITY_FIELD_MAX_LENGTH = 256
+
+/**
+ * TASK-059: cheap upper bound on raw `payload.text` size *before* the
+ * credential scan and bulk-artifact classification/reduction pipeline runs
+ * on it. Deliberately far larger than any realistic `maxPayloadBytes`
+ * configuration (which bounds the *reduced* output) -- this exists solely
+ * to cap the CPU cost of processing a pathologically large raw payload,
+ * not to be a realistic ceiling for legitimate tool output.
+ */
+export const RAW_TEXT_MAX_BYTES_BEFORE_REDUCTION = 2 * 1024 * 1024
 
 /** Bounds on recursive payload-metadata screening, independent of `maxPayloadBytes`: protects against a pathologically deep/wide object stalling the scan before the byte-size check alone would catch it. The root `metadata` object itself is depth 0, so `PAYLOAD_MAX_SCAN_DEPTH` actually permits `PAYLOAD_MAX_SCAN_DEPTH + 1` levels (0 through the bound, inclusive) before rejecting. */
 const PAYLOAD_MAX_SCAN_DEPTH = 6
@@ -335,6 +361,45 @@ function screenPayload(payload: EvidencePayload): "too-complex" | "unscreenable"
 
 function serializedByteLength(payload: EvidencePayload): number {
   return Buffer.byteLength(JSON.stringify(payload), "utf8")
+}
+
+/**
+ * TASK-059: applies bulk-artifact reduction to `payload.text`, if any --
+ * `metadata` is never touched here (it is already bounded independently by
+ * `maxPayloadBytes`/the recursive scan-depth screen). Prefers a configured
+ * `bulkArtifactSummarizer` when present, falling back to the deterministic
+ * `reduceBulkArtifact` if the summarizer is absent, throws, or returns a
+ * non-string/empty value -- per the plan, an optional summarizer may
+ * augment or replace the deterministic path for a given source, but never
+ * is the only path.
+ */
+function applyBulkArtifactReduction(
+  payload: EvidencePayload,
+  config: EvidenceAdmissionConfig,
+): EvidencePayload {
+  if (payload.text === undefined) return payload
+  // The deterministic content-shape classifier is always the gate, even
+  // when a summarizer is configured -- a summarizer never runs on a
+  // payload that was never classified as a bulk artifact in the first
+  // place, so ordinary short/structured/narrative text is unaffected by
+  // this option existing at all.
+  if (!looksLikeToolOutput(payload.text)) return payload
+
+  if (config.bulkArtifactSummarizer) {
+    try {
+      const summarized = config.bulkArtifactSummarizer(payload.text)
+      if (typeof summarized === "string" && summarized.length > 0) {
+        return { ...payload, text: summarized }
+      }
+    } catch {
+      // Falls through to the deterministic path below -- a misbehaving
+      // optional summarizer must never block admission entirely.
+    }
+  }
+
+  const { text, reduced } = reduceBulkArtifact(payload.text)
+  if (!reduced) return payload
+  return { ...payload, text }
 }
 
 /**
@@ -530,7 +595,45 @@ function admitEvidenceUnsafe(
     return rejected("malformed-envelope", "payload could not be canonicalized")
   }
 
-  const payloadBytes = serializedByteLength(canonicalPayload)
+  // TASK-059: a cheap raw-size guard before the more expensive credential
+  // scan/classification pipeline below -- pre-TASK-059, an oversized raw
+  // payload was rejected via an immediate byte-length check before ever
+  // running the credential-pattern/entropy scan. TASK-059 must still screen
+  // and classify the *raw* text before reduction can discard anything (see
+  // below), but that must not remove the fast-reject path for a grossly
+  // oversized payload -- a caller or buggy host adapter submitting
+  // multi-megabyte text would otherwise always pay for a full credential
+  // scan plus line-splitting/classification, even though no realistic
+  // stack trace or log needs anywhere near this much raw material to
+  // reduce from. This ceiling is intentionally far larger than
+  // `config.maxPayloadBytes` (which bounds the *reduced* output) -- it
+  // exists only to bound the cost of processing raw input, not to be a
+  // realistic size for legitimate tool output.
+  if (
+    canonicalPayload.text !== undefined &&
+    Buffer.byteLength(canonicalPayload.text, "utf8") > RAW_TEXT_MAX_BYTES_BEFORE_REDUCTION
+  ) {
+    return rejected(
+      "payload-too-large",
+      `raw payload text is too large to process (over ${RAW_TEXT_MAX_BYTES_BEFORE_REDUCTION} bytes)`,
+    )
+  }
+
+  // TASK-059: screen the *raw, unreduced* text for a credential before any
+  // bulk-artifact reduction below can discard content -- otherwise a
+  // credential embedded only in a portion a deterministic extraction would
+  // omit (or a configured summarizer would drop) could slip through
+  // undetected in the reduced form that actually gets persisted.
+  if (canonicalPayload.text !== undefined && containsSensitiveCredential(canonicalPayload.text)) {
+    return rejected(
+      "unscreenable-content",
+      "payload contains an unscreenable credential-like value",
+    )
+  }
+
+  const reducedPayload = applyBulkArtifactReduction(canonicalPayload, config)
+
+  const payloadBytes = serializedByteLength(reducedPayload)
   if (payloadBytes > config.maxPayloadBytes) {
     return rejected(
       "payload-too-large",
@@ -538,7 +641,7 @@ function admitEvidenceUnsafe(
     )
   }
 
-  const screenResult = screenPayload(canonicalPayload)
+  const screenResult = screenPayload(reducedPayload)
   if (screenResult === "too-complex") {
     return rejected("payload-too-complex", "payload metadata exceeds the bounded scan depth/size")
   }
@@ -550,7 +653,27 @@ function admitEvidenceUnsafe(
   }
 
   const id = deriveEvidenceId(authority, candidate)
-  const contentHash = computeContentHash(candidate, canonicalPayload, evidenceRefs, id)
+  // Hashes the *reduced* payload, not the raw canonical one -- contentHash
+  // is the identity of what is actually persisted (decision 6's "never
+  // storing the raw form" applies to the hash's semantics too, not just
+  // the stored bytes); two raw bulk artifacts that happen to reduce to the
+  // same bounded output are equivalent evidence at the storage layer.
+  //
+  // Known, accepted tradeoff: identity (`id`, from `deriveEvidenceId`) is
+  // scoped by turnId/messageId, so a "duplicate" vs. "collision" decision
+  // (`admitEvidence`'s `existing` comparison, below) only ever compares two
+  // admission attempts for the *same* turn/message. Within that scope,
+  // this means "duplicate" now means "same identity + same *reduced*
+  // content," which is a strictly weaker guarantee than pre-TASK-059's
+  // "same identity + same raw content": two genuinely different retries
+  // for the same turn (e.g. differing only in intermediate stack frames
+  // that don't match a key-line pattern, with identical head/tail) can
+  // collapse into "duplicate," silently discarding the fact that the raw
+  // content actually differed. This is considered acceptable because (a)
+  // it can never merge two independent turns/messages into one record,
+  // and (b) the plan's evidence-admission contract already treats content
+  // hash as "same persisted evidence," not "byte-identical raw input."
+  const contentHash = computeContentHash(candidate, reducedPayload, evidenceRefs, id)
 
   if (existing) {
     if (existing.contentHash === contentHash) return { outcome: "duplicate", id }
@@ -571,7 +694,7 @@ function admitEvidenceUnsafe(
       origin: candidate.origin,
       kind: candidate.kind,
       occurredAt: candidate.occurredAt,
-      payload: canonicalPayload,
+      payload: reducedPayload,
       evidenceRefs,
       contentHash,
     },
