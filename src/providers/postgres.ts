@@ -7,8 +7,17 @@ import type {
   CandidateReviewStore,
   CandidateStatusSummary,
   EpisodicAppendResult,
-  EpisodicStore,
+  EpisodicNeighbor,
+  EpisodicSearchMatch,
+  EpisodicSearchOptions,
+  EpisodicSearchResult,
+  EpisodicSearchStore,
   SessionObservation,
+} from "../observation.js"
+import {
+  EPISODIC_SEARCH_MAX_NEIGHBORS_PER_SIDE,
+  EPISODIC_SEARCH_MAX_OUTPUT_TOKENS,
+  EPISODIC_SEARCH_MAX_RESULTS,
 } from "../observation.js"
 import {
   EVIDENCE_KINDS,
@@ -30,6 +39,7 @@ import {
 import { PostgresReembedRunner } from "../reembedding.js"
 import { LocalHashEmbeddingModel, vectorLiteral } from "../storage/embedding.js"
 import { EMBEDDING_DIMENSIONS } from "../storage/embedding-model-ids.js"
+import { estimateTokens, truncateToTokens } from "../token-budget.js"
 import type {
   CatalogEntry,
   EmbeddingModel,
@@ -141,6 +151,56 @@ function episodicRowToEnvelope(row: EpisodicEventRow): EvidenceEnvelope {
     },
     evidenceRefs: row.evidence_refs,
     contentHash: row.content_hash,
+  }
+}
+
+/**
+ * TASK-011: shrinks an envelope's `payload.text` (never `metadata` or any
+ * other field) to fit within `remainingTokens`, so a single verbose event
+ * cannot silently consume the entire output-token budget meant to also
+ * cover its neighbors and the remaining ranked matches. Token cost is
+ * estimated over the whole envelope (not just the text) so the running
+ * budget also accounts for metadata/refs/identity fields, not merely the
+ * free-text portion.
+ *
+ * `fits: false` means the envelope could not be brought under
+ * `remainingTokens` even after shrinking `text` to nothing (either because
+ * there was no `text` to shrink -- a metadata-only event -- or because the
+ * fixed (non-text) portion of the envelope alone already exceeds the
+ * budget). The caller must omit the envelope entirely in that case: this
+ * function never returns an envelope known to exceed the caller's stated
+ * budget, so `EPISODIC_SEARCH_MAX_OUTPUT_TOKENS` remains a real ceiling
+ * rather than one a large-metadata, no-text event can silently blow past.
+ */
+function fitEnvelopeToBudget(
+  envelope: EvidenceEnvelope,
+  remainingTokens: number,
+): { envelope: EvidenceEnvelope; truncated: boolean; tokensUsed: number; fits: boolean } {
+  const wholeCost = estimateTokens(JSON.stringify(envelope))
+  if (wholeCost <= remainingTokens) {
+    return { envelope, truncated: false, tokensUsed: wholeCost, fits: true }
+  }
+  if (envelope.payload.text === undefined) {
+    // No free text to shrink -- a metadata-only envelope that alone
+    // exceeds the budget cannot be fit by this function at all.
+    return { envelope, truncated: false, tokensUsed: wholeCost, fits: false }
+  }
+  const fixedCost = estimateTokens(
+    JSON.stringify({ ...envelope, payload: { ...envelope.payload, text: "" } }),
+  )
+  if (fixedCost > remainingTokens) {
+    // Even fully truncating text to "" wouldn't fit -- the envelope's
+    // non-text fields alone (metadata, refs, identity) exceed the budget.
+    return { envelope, truncated: false, tokensUsed: fixedCost, fits: false }
+  }
+  const textBudget = Math.max(0, remainingTokens - fixedCost)
+  const { text, truncated } = truncateToTokens(envelope.payload.text, textBudget)
+  const fitted: EvidenceEnvelope = { ...envelope, payload: { ...envelope.payload, text } }
+  return {
+    envelope: fitted,
+    truncated,
+    tokensUsed: estimateTokens(JSON.stringify(fitted)),
+    fits: true,
   }
 }
 
@@ -313,7 +373,9 @@ const BASE_SELECT = `
   LEFT JOIN remem.sources s ON s.id = m.source_id
 `
 
-export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewStore, EpisodicStore {
+export class PostgresMemoryProvider
+  implements MemoryProvider, CandidateReviewStore, EpisodicSearchStore
+{
   readonly id: string
   private readonly pool: Pool
   private readonly embeddingModel: EmbeddingModel
@@ -1031,6 +1093,171 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
     const row = result.rows[0]
     if (!row) return undefined
     return episodicRowToEnvelope(row)
+  }
+
+  /**
+   * TASK-011: scoped lexical search over `remem.session_events` evidence
+   * rows, with bounded same-session neighbor expansion. Deliberately
+   * lexical (`plainto_tsquery`/`search_vector`) only -- vector/semantic
+   * episode indexing is explicitly deferred per the plan. Performs no
+   * `role`/`origin` trust filtering: an unclassified or failed-approach
+   * event is just as findable as any other, so a caller can always
+   * independently locate and label historical/untrusted evidence rather
+   * than have it silently excluded from search.
+   *
+   * Neighbor `preceding_id`/`following_id` are computed with `LAG`/`LEAD`
+   * over *every* evidence row in the session (not just the matched rows),
+   * so a neighbor that itself never matched the query is still found --
+   * that is the entire point of "surrounding context". A second, single
+   * batched query then fetches all neighbor rows by id at once, so a
+   * search returning up to `EPISODIC_SEARCH_MAX_RESULTS` matches costs
+   * exactly two queries total, not one-plus-N.
+   */
+  async searchEpisodes(
+    providerId: string,
+    query: string,
+    context: MemoryContext,
+    options: EpisodicSearchOptions = {},
+  ): Promise<EpisodicSearchResult> {
+    // `Number.isFinite` guards against a caller-supplied `NaN` (which
+    // survives `Math.min`/`Math.max` unclamped -- `Math.min(NaN, 10)` is
+    // `NaN`, not `10`) reaching the SQL `LIMIT` parameter as an invalid
+    // value; a non-finite request falls back to the hard ceiling, mirroring
+    // the existing `clamp` helper used elsewhere in this file for the same
+    // class of untrusted numeric input.
+    const requestedLimit = options.limit
+    const limit = Math.max(
+      0,
+      Math.min(
+        Number.isFinite(requestedLimit) ? (requestedLimit as number) : EPISODIC_SEARCH_MAX_RESULTS,
+        EPISODIC_SEARCH_MAX_RESULTS,
+      ),
+    )
+    const requestedMaxOutputTokens = options.maxOutputTokens
+    const maxOutputTokens = Math.max(
+      0,
+      Math.min(
+        Number.isFinite(requestedMaxOutputTokens)
+          ? (requestedMaxOutputTokens as number)
+          : EPISODIC_SEARCH_MAX_OUTPUT_TOKENS,
+        EPISODIC_SEARCH_MAX_OUTPUT_TOKENS,
+      ),
+    )
+    if (limit === 0 || maxOutputTokens === 0 || query.trim().length === 0) {
+      return { matches: [], budgetExhausted: false }
+    }
+
+    interface MatchRow extends EpisodicEventRow {
+      preceding_id: string | null
+      following_id: string | null
+    }
+    const matched = await this.pool.query<MatchRow>(
+      `WITH scope AS (
+         SELECT id, session_id, project_id, provider_id, kind, occurred_at, host, role, origin,
+                turn_id, message_id, safe_text, payload, evidence_refs, evidence_id,
+                content_hash, schema_version, search_vector,
+                LAG(id) OVER (PARTITION BY session_id ORDER BY occurred_at, id) AS preceding_id,
+                LEAD(id) OVER (PARTITION BY session_id ORDER BY occurred_at, id) AS following_id
+         FROM remem.session_events
+         WHERE provider_id = $1 AND project_id = $2 AND evidence_id IS NOT NULL
+       ),
+       query AS (SELECT plainto_tsquery('simple', $3) AS terms)
+       SELECT scope.id, scope.session_id, scope.project_id, scope.provider_id, scope.kind,
+              scope.occurred_at, scope.host, scope.role, scope.origin, scope.turn_id,
+              scope.message_id, scope.safe_text, scope.payload, scope.evidence_refs,
+              scope.evidence_id, scope.content_hash, scope.schema_version,
+              scope.preceding_id, scope.following_id
+       FROM scope, query
+       WHERE scope.search_vector @@ query.terms
+       ORDER BY ts_rank_cd(scope.search_vector, query.terms) DESC, scope.occurred_at DESC
+       LIMIT $4`,
+      [providerId, context.projectId, query, limit],
+    )
+    if (matched.rows.length === 0) return { matches: [], budgetExhausted: false }
+
+    const neighborIds = [
+      ...new Set(
+        matched.rows.flatMap((row) =>
+          [row.preceding_id, row.following_id].filter((id) => id !== null),
+        ),
+      ),
+    ]
+    const neighborRowsById = new Map<string, EpisodicEventRow>()
+    if (neighborIds.length > 0) {
+      const neighborResult = await this.pool.query<EpisodicEventRow>(
+        `SELECT id, session_id, project_id, provider_id, kind, occurred_at, host, role, origin,
+                turn_id, message_id, safe_text, payload, evidence_refs, evidence_id,
+                content_hash, schema_version
+         FROM remem.session_events
+         WHERE id = ANY($1::uuid[]) AND provider_id = $2 AND project_id = $3`,
+        [neighborIds, providerId, context.projectId],
+      )
+      for (const row of neighborResult.rows) neighborRowsById.set(row.id, row)
+    }
+
+    let remainingTokens = maxOutputTokens
+    let budgetExhausted = false
+    const matches: EpisodicSearchMatch[] = []
+    for (const row of matched.rows) {
+      if (remainingTokens <= 0) {
+        budgetExhausted = true
+        break
+      }
+      const fittedMatch = fitEnvelopeToBudget(episodicRowToEnvelope(row), remainingTokens)
+      if (!fittedMatch.fits) {
+        // This ranked match (and, by the rank-descending order, every
+        // match after it) cannot be brought under the remaining budget even
+        // after truncating its own text to nothing -- stop here rather
+        // than silently returning an over-budget envelope, which would
+        // defeat `EPISODIC_SEARCH_MAX_OUTPUT_TOKENS` as a real ceiling.
+        budgetExhausted = true
+        break
+      }
+      remainingTokens -= fittedMatch.tokensUsed
+      const neighbors: EpisodicNeighbor[] = []
+      for (const [position, neighborId] of [
+        ["preceding", row.preceding_id],
+        ["following", row.following_id],
+      ] as const) {
+        if (!neighborId) continue
+        if (remainingTokens <= 0) {
+          budgetExhausted = true
+          break
+        }
+        const neighborRow = neighborRowsById.get(neighborId)
+        if (!neighborRow) continue // should be unreachable: fetched by the ids just collected above
+        const fittedNeighbor = fitEnvelopeToBudget(
+          episodicRowToEnvelope(neighborRow),
+          remainingTokens,
+        )
+        if (!fittedNeighbor.fits) {
+          // Unlike a match, a neighbor that cannot fit is simply omitted --
+          // the primary match itself is still a valid, on-budget result.
+          budgetExhausted = true
+          continue
+        }
+        remainingTokens -= fittedNeighbor.tokensUsed
+        neighbors.push({
+          position,
+          envelope: fittedNeighbor.envelope,
+          truncated: fittedNeighbor.truncated,
+        })
+      }
+      // The query shape only ever computes one LAG and one LEAD id per row,
+      // so `neighbors` structurally cannot exceed one preceding + one
+      // following entry -- this assertion exists to fail loudly (not
+      // silently exceed the plan's bound) if a future SQL change to the
+      // neighbor query ever violates that invariant.
+      if (neighbors.length > EPISODIC_SEARCH_MAX_NEIGHBORS_PER_SIDE * 2) {
+        throw new Error(
+          `episodic search produced ${neighbors.length} neighbors for one match, exceeding the ${EPISODIC_SEARCH_MAX_NEIGHBORS_PER_SIDE}-per-side bound`,
+        )
+      }
+      matches.push({ envelope: fittedMatch.envelope, truncated: fittedMatch.truncated, neighbors })
+    }
+    if (matches.length < matched.rows.length) budgetExhausted = true
+
+    return { matches, budgetExhausted }
   }
 
   async listCandidates(status?: CandidateMemory["status"]): Promise<CandidateReviewItem[]> {

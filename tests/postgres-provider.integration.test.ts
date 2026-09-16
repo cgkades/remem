@@ -2552,4 +2552,543 @@ integration("PostgreSQL managed provider", () => {
       }
     })
   })
+
+  describe("episodic evidence: searchEpisodes (TASK-011)", () => {
+    const searchProviderConfig = {
+      type: "postgres" as const,
+      id: "episodic-search-provider",
+      connectionString: databaseUrl ?? "",
+      primary: true,
+      maxConnections: 2,
+      catalogLimit: 100,
+    }
+    const enabledConfig = { ...DEFAULT_EVIDENCE_ADMISSION_CONFIG, enabled: true }
+
+    function contextFor(sessionId: string, projectId = "episodic-search-project"): MemoryContext {
+      return {
+        directory: "/workspace/episodic-search",
+        worktree: "/workspace/episodic-search",
+        projectId,
+        sessionId,
+      }
+    }
+
+    async function seed(
+      provider: PostgresMemoryProvider,
+      sessionId: string,
+      turns: {
+        turnId: string
+        text: string
+        occurredAt: string
+        role?: "user" | "assistant" | "tool"
+      }[],
+      projectId = "episodic-search-project",
+    ) {
+      const authority: AdmissionAuthority = {
+        providerId: "episodic-search-provider",
+        host: "opencode-v2",
+        projectId,
+      }
+      for (const turn of turns) {
+        const admitted = admitEvidence(
+          {
+            providerId: "episodic-search-provider",
+            host: "opencode-v2",
+            context: contextFor(sessionId, projectId),
+            turnId: turn.turnId,
+            messageId: `${turn.turnId}-message`,
+            role: turn.role ?? "user",
+            origin: "direct-user",
+            kind: "turn-completed",
+            occurredAt: turn.occurredAt,
+            payload: { text: turn.text },
+          },
+          authority,
+          enabledConfig,
+        )
+        if (admitted.outcome !== "admitted")
+          throw new Error(`seed admission failed: ${admitted.outcome}`)
+        const result = await provider.appendEvidence(admitted.envelope)
+        if (result.outcome !== "appended") throw new Error(`seed append failed: ${result.outcome}`)
+      }
+    }
+
+    it("finds a matching event and includes its preceding and following neighbor", async () => {
+      const provider = new PostgresMemoryProvider(searchProviderConfig)
+      try {
+        const sessionId = "search-neighbors-session"
+        const projectId = "search-neighbors-project"
+        await seed(
+          provider,
+          sessionId,
+          [
+            {
+              turnId: "t1",
+              text: "We started planning the Orion migration rollout.",
+              occurredAt: "2026-09-16T00:00:00.000Z",
+            },
+            {
+              turnId: "t2",
+              text: "We decided to use logical replication for the cutover.",
+              occurredAt: "2026-09-16T00:01:00.000Z",
+            },
+            {
+              turnId: "t3",
+              text: "The migration finished without incident.",
+              occurredAt: "2026-09-16T00:02:00.000Z",
+            },
+          ],
+          projectId,
+        )
+
+        const result = await provider.searchEpisodes(
+          "episodic-search-provider",
+          "logical replication",
+          contextFor(sessionId, projectId),
+        )
+        expect(result.budgetExhausted).toBe(false)
+        expect(result.matches).toHaveLength(1)
+        const match = result.matches[0]
+        expect(match?.envelope.turnId).toBe("t2")
+        expect(match?.truncated).toBe(false)
+        expect(match?.neighbors).toHaveLength(2)
+        const preceding = match?.neighbors.find((neighbor) => neighbor.position === "preceding")
+        const following = match?.neighbors.find((neighbor) => neighbor.position === "following")
+        expect(preceding?.envelope.turnId).toBe("t1")
+        expect(following?.envelope.turnId).toBe("t3")
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("a neighbor that never matched the query is still found -- neighbors are computed over the whole session, not just matched rows", async () => {
+      const provider = new PostgresMemoryProvider(searchProviderConfig)
+      try {
+        const sessionId = "search-neighbor-unrelated-session"
+        const projectId = "search-neighbor-unrelated-project"
+        await seed(
+          provider,
+          sessionId,
+          [
+            {
+              turnId: "u1",
+              text: "Completely unrelated small talk about the weather.",
+              occurredAt: "2026-09-16T00:00:00.000Z",
+            },
+            {
+              turnId: "u2",
+              text: "We decided to adopt trunk-based development.",
+              occurredAt: "2026-09-16T00:01:00.000Z",
+            },
+          ],
+          projectId,
+        )
+
+        const result = await provider.searchEpisodes(
+          "episodic-search-provider",
+          "trunk-based development",
+          contextFor(sessionId, projectId),
+        )
+        expect(result.matches).toHaveLength(1)
+        expect(result.matches[0]?.neighbors).toHaveLength(1)
+        expect(result.matches[0]?.neighbors[0]?.position).toBe("preceding")
+        expect(result.matches[0]?.neighbors[0]?.envelope.turnId).toBe("u1")
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("has no preceding neighbor for the first event and no following neighbor for the last", async () => {
+      const provider = new PostgresMemoryProvider(searchProviderConfig)
+      try {
+        const sessionId = "search-edge-neighbors-session"
+        const projectId = "search-edge-neighbors-project"
+        await seed(
+          provider,
+          sessionId,
+          [
+            {
+              turnId: "e1",
+              text: "We decided the deployment window opens at midnight.",
+              occurredAt: "2026-09-16T00:00:00.000Z",
+            },
+          ],
+          projectId,
+        )
+
+        const result = await provider.searchEpisodes(
+          "episodic-search-provider",
+          "deployment window",
+          contextFor(sessionId, projectId),
+        )
+        expect(result.matches).toHaveLength(1)
+        expect(result.matches[0]?.neighbors).toEqual([])
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("ranks and clamps to the requested limit, most relevant first", async () => {
+      const provider = new PostgresMemoryProvider(searchProviderConfig)
+      try {
+        const sessionId = "search-rank-limit-session"
+        const projectId = "search-rank-limit-project"
+        await seed(
+          provider,
+          sessionId,
+          [
+            {
+              turnId: "r1",
+              text: "We decided to use PostgreSQL for the rollout database.",
+              occurredAt: "2026-09-16T00:00:00.000Z",
+            },
+            {
+              turnId: "r2",
+              text: "PostgreSQL PostgreSQL rollout rollout rollout, the rollout is the main topic here.",
+              occurredAt: "2026-09-16T00:01:00.000Z",
+            },
+            {
+              turnId: "r3",
+              text: "Completely unrelated note about lunch.",
+              occurredAt: "2026-09-16T00:02:00.000Z",
+            },
+          ],
+          projectId,
+        )
+
+        const result = await provider.searchEpisodes(
+          "episodic-search-provider",
+          "rollout",
+          contextFor(sessionId, projectId),
+          { limit: 1 },
+        )
+        expect(result.matches).toHaveLength(1)
+        // r2 repeats "rollout" far more densely, so it must rank first.
+        expect(result.matches[0]?.envelope.turnId).toBe("r2")
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("a caller-supplied limit/maxOutputTokens above the hard ceiling is clamped, never honored as-is", async () => {
+      const provider = new PostgresMemoryProvider(searchProviderConfig)
+      try {
+        const sessionId = "search-clamp-session"
+        const projectId = "search-clamp-project"
+        await seed(
+          provider,
+          sessionId,
+          Array.from({ length: 15 }, (_, index) => ({
+            turnId: `c${index}`,
+            text: `We decided option ${index} for the clamp test scenario.`,
+            occurredAt: `2026-09-16T00:${String(index).padStart(2, "0")}:00.000Z`,
+          })),
+          projectId,
+        )
+
+        const result = await provider.searchEpisodes(
+          "episodic-search-provider",
+          "decided option",
+          contextFor(sessionId, projectId),
+          { limit: 9999, maxOutputTokens: 9_999_999 },
+        )
+        expect(result.matches.length).toBeLessThanOrEqual(10)
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("the maxOutputTokens ceiling is actually enforced, not merely the limit -- a caller requesting far more tokens than the ceiling still gets budgetExhausted", async () => {
+      const provider = new PostgresMemoryProvider(searchProviderConfig)
+      try {
+        const sessionId = "search-token-ceiling-session"
+        const projectId = "search-token-ceiling-project"
+        // Ten reasonably-sized matches, each carrying enough fixed envelope
+        // overhead (identity fields, hashes) plus text that their combined
+        // cost is well beyond EPISODIC_SEARCH_MAX_OUTPUT_TOKENS (2000) --
+        // if maxOutputTokens were *not* clamped down from the caller's
+        // 9,999,999 request to the 2000 ceiling, every one of these ten
+        // would fit and budgetExhausted would be false.
+        await seed(
+          provider,
+          sessionId,
+          Array.from({ length: 10 }, (_, index) => ({
+            turnId: `k${index}`,
+            text: `We decided token-ceiling option ${index}: ${"padding text to add bulk ".repeat(10)}`,
+            occurredAt: `2026-09-16T00:${String(index).padStart(2, "0")}:00.000Z`,
+          })),
+          projectId,
+        )
+
+        const result = await provider.searchEpisodes(
+          "episodic-search-provider",
+          "decided token-ceiling option",
+          contextFor(sessionId, projectId),
+          { maxOutputTokens: 9_999_999 },
+        )
+        expect(result.budgetExhausted).toBe(true)
+        expect(result.matches.length).toBeLessThan(10)
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("performs no role/origin trust filtering -- matches across different roles are all findable and each carries its own label", async () => {
+      const provider = new PostgresMemoryProvider(searchProviderConfig)
+      try {
+        const projectId = "search-labeled-project"
+        // A naive implementation might filter to only "trusted" roles/origins
+        // (e.g. direct-user turns) -- these three deliberately span every
+        // role, so the test fails if any role is silently excluded. Each
+        // uses its own session id so no cross-match neighbor expansion
+        // competes for the output-token budget -- this test is about role
+        // diversity, not neighbor/budget interaction (covered separately).
+        await seed(
+          provider,
+          "search-labeled-session-l1",
+          [
+            {
+              turnId: "l1",
+              text: "Attempted approach: caching layer v1, abandoned after review.",
+              occurredAt: "2026-09-16T00:00:00.000Z",
+              role: "assistant",
+            },
+          ],
+          projectId,
+        )
+        await seed(
+          provider,
+          "search-labeled-session-l2",
+          [
+            {
+              turnId: "l2",
+              text: "Attempted approach: caching layer v2, still under evaluation.",
+              occurredAt: "2026-09-16T00:01:00.000Z",
+              role: "user",
+            },
+          ],
+          projectId,
+        )
+        await seed(
+          provider,
+          "search-labeled-session-l3",
+          [
+            {
+              turnId: "l3",
+              text: "Attempted approach: caching layer v3, failed load test.",
+              occurredAt: "2026-09-16T00:02:00.000Z",
+              role: "tool",
+            },
+          ],
+          projectId,
+        )
+
+        const result = await provider.searchEpisodes(
+          "episodic-search-provider",
+          "caching layer attempted approach",
+          contextFor("search-labeled-session-l2", projectId),
+        )
+        expect(result.matches).toHaveLength(3)
+        const byTurnId = new Map(
+          result.matches.map((match) => [match.envelope.turnId, match.envelope]),
+        )
+        expect(byTurnId.get("l1")?.role).toBe("assistant")
+        expect(byTurnId.get("l2")?.role).toBe("user")
+        expect(byTurnId.get("l3")?.role).toBe("tool")
+        for (const envelope of byTurnId.values()) {
+          expect(envelope.origin).toBe("direct-user")
+        }
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("scopes strictly by project -- a matching event in another project is never returned", async () => {
+      const provider = new PostgresMemoryProvider(searchProviderConfig)
+      try {
+        const sessionId = "search-scope-session"
+        const projectId = "search-scope-project"
+        await seed(
+          provider,
+          sessionId,
+          [
+            {
+              turnId: "s1",
+              text: "We decided a project-scoped secret rotation policy.",
+              occurredAt: "2026-09-16T00:00:00.000Z",
+            },
+          ],
+          "search-scope-other-project",
+        )
+
+        const result = await provider.searchEpisodes(
+          "episodic-search-provider",
+          "secret rotation policy",
+          contextFor(sessionId, projectId),
+        )
+        expect(result.matches).toHaveLength(0)
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("a session id shared across two projects never leaks a neighbor from the other project", async () => {
+      const provider = new PostgresMemoryProvider(searchProviderConfig)
+      try {
+        // Deliberately reuse the *same* session id across two different
+        // projects -- session ids are not guaranteed globally unique across
+        // projects in general, so neighbor computation must be scoped by
+        // project (and provider), not by session id alone.
+        const sharedSessionId = "search-cross-project-shared-session"
+        const projectA = "search-cross-project-a"
+        const projectB = "search-cross-project-b"
+
+        await seed(
+          provider,
+          sharedSessionId,
+          [
+            {
+              turnId: "b-other",
+              text: "An event in project B, timed to sort adjacent to project A's event.",
+              occurredAt: "2026-09-16T00:00:30.000Z",
+            },
+          ],
+          projectB,
+        )
+        await seed(
+          provider,
+          sharedSessionId,
+          [
+            {
+              turnId: "a-match",
+              text: "We decided the cross-project neighbor isolation policy.",
+              occurredAt: "2026-09-16T00:01:00.000Z",
+            },
+          ],
+          projectA,
+        )
+
+        const result = await provider.searchEpisodes(
+          "episodic-search-provider",
+          "cross-project neighbor isolation",
+          contextFor(sharedSessionId, projectA),
+        )
+        expect(result.matches).toHaveLength(1)
+        expect(result.matches[0]?.envelope.turnId).toBe("a-match")
+        // Project B's event sorts immediately before project A's by
+        // occurred_at within the shared session id -- if neighbor
+        // computation were not scoped by project, it would appear here as
+        // a "preceding" neighbor.
+        expect(result.matches[0]?.neighbors).toEqual([])
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("truncates an oversized match's text to fit a small output-token budget and reports budgetExhausted", async () => {
+      const provider = new PostgresMemoryProvider(searchProviderConfig)
+      try {
+        const sessionId = "search-budget-session"
+        const projectId = "search-budget-project"
+        const longText = `We decided ${"a very long repeated justification clause ".repeat(50)}for the budget test.`
+        await seed(
+          provider,
+          sessionId,
+          [{ turnId: "b1", text: longText, occurredAt: "2026-09-16T00:00:00.000Z" }],
+          projectId,
+        )
+
+        const result = await provider.searchEpisodes(
+          "episodic-search-provider",
+          "decided",
+          contextFor(sessionId, projectId),
+          { maxOutputTokens: 700 },
+        )
+        expect(result.matches).toHaveLength(1)
+        expect(result.matches[0]?.truncated).toBe(true)
+        expect(result.matches[0]?.envelope.payload.text?.length ?? 0).toBeLessThan(longText.length)
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("a tight budget that fits the match plus one neighbor omits the second neighbor and reports budgetExhausted", async () => {
+      const provider = new PostgresMemoryProvider(searchProviderConfig)
+      try {
+        const sessionId = "search-neighbor-budget-session"
+        const projectId = "search-neighbor-budget-project"
+        // Each envelope's fixed (non-text) overhead alone is already a few
+        // hundred tokens (identity fields, two 64-char hex hashes), so
+        // three short-text events plus their JSON overhead comfortably
+        // exceed a deliberately tight ~1200-token budget -- just not by so
+        // much that even one neighbor is excluded.
+        await seed(
+          provider,
+          sessionId,
+          [
+            {
+              turnId: "n1",
+              text: "Preceding context event.",
+              occurredAt: "2026-09-16T00:00:00.000Z",
+            },
+            {
+              turnId: "n2",
+              text: "We decided the neighbor-budget matching event.",
+              occurredAt: "2026-09-16T00:01:00.000Z",
+            },
+            {
+              turnId: "n3",
+              text: "Following context event.",
+              occurredAt: "2026-09-16T00:02:00.000Z",
+            },
+          ],
+          projectId,
+        )
+
+        const result = await provider.searchEpisodes(
+          "episodic-search-provider",
+          "neighbor-budget matching event",
+          contextFor(sessionId, projectId),
+          { maxOutputTokens: 1200 },
+        )
+        expect(result.matches).toHaveLength(1)
+        expect(result.matches[0]?.envelope.turnId).toBe("n2")
+        // The match itself must never be sacrificed to make room for a
+        // neighbor -- only the second neighbor may be dropped.
+        expect(result.matches[0]?.neighbors.length).toBeLessThan(2)
+        expect(result.budgetExhausted).toBe(true)
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("returns no matches (not an error) for an empty query", async () => {
+      const provider = new PostgresMemoryProvider(searchProviderConfig)
+      try {
+        const sessionId = "search-empty-query-session"
+        const projectId = "search-empty-query-project"
+        await seed(
+          provider,
+          sessionId,
+          [
+            {
+              turnId: "eq1",
+              text: "We decided something for the empty query test.",
+              occurredAt: "2026-09-16T00:00:00.000Z",
+            },
+          ],
+          projectId,
+        )
+
+        const result = await provider.searchEpisodes(
+          "episodic-search-provider",
+          "   ",
+          contextFor(sessionId, projectId),
+        )
+        expect(result).toEqual({ matches: [], budgetExhausted: false })
+      } finally {
+        await provider.dispose()
+      }
+    })
+  })
 })
