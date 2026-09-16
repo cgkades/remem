@@ -6,8 +6,11 @@ import type {
   CandidateReviewItem,
   CandidateReviewStore,
   CandidateStatusSummary,
+  EpisodicAppendResult,
+  EpisodicStore,
   SessionObservation,
 } from "../observation.js"
+import type { EvidenceEnvelope, EvidenceReference } from "../observation-admission.js"
 import {
   DeterministicConsolidationPipeline,
   PostgresConsolidationRunner,
@@ -64,6 +67,60 @@ interface MemoryRow extends QueryResultRow {
   provenance?: MemoryProvenance[]
   entities?: MemoryEntity[]
   relationships?: MemoryRelationship[]
+}
+
+/** Phase 3 (TASK-010): the columns `appendEvidence`/`readEvidence` (and TASK-011's search) read back from `remem.session_events` for the evidence-admission path. Only rows with `evidence_id IS NOT NULL` are ever selected into this shape. */
+interface EpisodicEventRow extends QueryResultRow {
+  id: string
+  session_id: string
+  project_id: string
+  provider_id: string
+  kind: EvidenceEnvelope["kind"]
+  occurred_at: Date
+  host: string
+  role: EvidenceEnvelope["role"]
+  origin: EvidenceEnvelope["origin"]
+  turn_id: string | null
+  message_id: string | null
+  safe_text: string
+  evidence_refs: EvidenceReference[]
+  evidence_id: string
+  content_hash: string
+  schema_version: number
+}
+
+/**
+ * Reconstructs an `EvidenceEnvelope` from a stored row. `directory`/
+ * `worktree` are not persisted columns (the plan's Observation Field
+ * Checklist scopes episodic admission by project/session, not by a
+ * specific filesystem path) -- they are not meaningful to reconstruct from
+ * storage, so this returns an empty-string placeholder for both regardless
+ * of what the original admitting session's filesystem path was; callers
+ * must not treat a read-back envelope's `context.directory`/`worktree` as
+ * authoritative.
+ */
+function episodicRowToEnvelope(row: EpisodicEventRow): EvidenceEnvelope {
+  return {
+    schemaVersion: row.schema_version as EvidenceEnvelope["schemaVersion"],
+    id: row.evidence_id,
+    providerId: row.provider_id,
+    host: row.host,
+    context: {
+      directory: "",
+      worktree: "",
+      projectId: row.project_id,
+      sessionId: row.session_id,
+    },
+    ...(row.turn_id !== null ? { turnId: row.turn_id } : {}),
+    ...(row.message_id !== null ? { messageId: row.message_id } : {}),
+    role: row.role,
+    origin: row.origin,
+    kind: row.kind,
+    occurredAt: row.occurred_at.toISOString(),
+    payload: { text: row.safe_text },
+    evidenceRefs: row.evidence_refs,
+    contentHash: row.content_hash,
+  }
 }
 
 interface CatalogRow extends QueryResultRow {
@@ -235,7 +292,7 @@ const BASE_SELECT = `
   LEFT JOIN remem.sources s ON s.id = m.source_id
 `
 
-export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewStore {
+export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewStore, EpisodicStore {
   readonly id: string
   private readonly pool: Pool
   private readonly embeddingModel: EmbeddingModel
@@ -827,6 +884,104 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
     }
     for (const row of result.rows) summary[row.status] = Number(row.count)
     return summary
+  }
+
+  /**
+   * Phase 3 (TASK-010): persists an admitted `EvidenceEnvelope` into
+   * `remem.session_events`, independently of semantic candidate extraction.
+   * "Episode" is initially the provider/host/project/session grouping (per
+   * the plan's storage decision), so a session id is required -- the same
+   * requirement `persistCandidate` above already enforces for the legacy
+   * capture path.
+   */
+  async appendEvidence(
+    envelope: EvidenceEnvelope,
+    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<EpisodicAppendResult> {
+    options.signal?.throwIfAborted()
+    const sessionId = envelope.context.sessionId
+    if (!sessionId) throw new TypeError("episodic evidence requires a session id")
+
+    const client = await this.pool.connect()
+    try {
+      if (options.timeoutMs) {
+        await client.query("SELECT set_config('statement_timeout', $1, true)", [
+          String(options.timeoutMs),
+        ])
+      }
+      options.signal?.throwIfAborted()
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO remem.session_events
+           (id, session_id, project_id, kind, occurred_at, payload,
+            provider_id, host, role, origin, turn_id, message_id, safe_text,
+            evidence_refs, evidence_id, content_hash, schema_version)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,
+                 $7,$8,$9,$10,$11,$12,$13,
+                 $14::jsonb,$15,$16,$17)
+         ON CONFLICT (provider_id, evidence_id) WHERE evidence_id IS NOT NULL DO NOTHING
+         RETURNING id`,
+        [
+          randomUUID(),
+          sessionId,
+          envelope.context.projectId,
+          envelope.kind,
+          envelope.occurredAt,
+          JSON.stringify(envelope.payload.metadata ?? {}),
+          envelope.providerId,
+          envelope.host,
+          envelope.role,
+          envelope.origin,
+          envelope.turnId ?? null,
+          envelope.messageId ?? null,
+          envelope.payload.text ?? "",
+          JSON.stringify(envelope.evidenceRefs),
+          envelope.id,
+          envelope.contentHash,
+          envelope.schemaVersion,
+        ],
+      )
+      if (inserted.rows[0]) return { outcome: "appended", id: envelope.id }
+
+      // The unique (provider_id, evidence_id) index rejected the insert:
+      // this is either an exact replay (duplicate, a no-op) or a genuine
+      // collision (same identity, different evidence) -- distinguished by
+      // comparing content_hash, never by re-deriving or trusting the new
+      // envelope's own claim.
+      const existing = await client.query<{ content_hash: string | null }>(
+        `SELECT content_hash FROM remem.session_events
+         WHERE provider_id = $1 AND evidence_id = $2`,
+        [envelope.providerId, envelope.id],
+      )
+      const outcome =
+        existing.rows[0]?.content_hash === envelope.contentHash ? "duplicate" : "collision"
+      return { outcome, id: envelope.id }
+    } finally {
+      client.release()
+    }
+  }
+
+  /**
+   * A foreign (different project than `context`) or otherwise-unknown
+   * `(providerId, evidenceId)` returns `undefined` -- a non-disclosing
+   * not-found result, not evidence about another project's retention state.
+   */
+  async readEvidence(
+    providerId: string,
+    evidenceId: string,
+    context: MemoryContext,
+  ): Promise<EvidenceEnvelope | undefined> {
+    const result = await this.pool.query<EpisodicEventRow>(
+      `SELECT id, session_id, project_id, provider_id, kind, occurred_at, host, role, origin,
+              turn_id, message_id, safe_text, evidence_refs, evidence_id,
+              content_hash, schema_version
+       FROM remem.session_events
+       WHERE provider_id = $1 AND evidence_id = $2 AND project_id = $3
+         AND evidence_id IS NOT NULL`,
+      [providerId, evidenceId, context.projectId],
+    )
+    const row = result.rows[0]
+    if (!row) return undefined
+    return episodicRowToEnvelope(row)
   }
 
   async listCandidates(status?: CandidateMemory["status"]): Promise<CandidateReviewItem[]> {

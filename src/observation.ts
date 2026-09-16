@@ -1,3 +1,4 @@
+import type { EvidenceEnvelope } from "./observation-admission.js"
 import type { MemoryContext, MemoryWrite } from "./types.js"
 
 export type SessionEventKind =
@@ -84,4 +85,59 @@ export interface CandidateValidator {
 
 export interface ConsolidationPipeline {
   consolidate(candidates: CandidateMemory[], signal?: AbortSignal): Promise<CandidateMemory[]>
+}
+
+/**
+ * Phase 3 (TASK-010) of `plan/feature-memory-recovery-1.md`: persists and
+ * reads admitted evidence (`EvidenceEnvelope`, from
+ * `observation-admission.ts`'s `admitEvidence`) independently of semantic
+ * candidate extraction -- proposed beside `ObservationStore`, not replacing
+ * it. `episodicHistory` capability alone does not establish method support
+ * (see `isEpisodicStore`); a provider must actually implement these methods.
+ */
+export type EpisodicAppendOutcome = "appended" | "duplicate" | "collision"
+
+export interface EpisodicAppendResult {
+  outcome: EpisodicAppendOutcome
+  /** The envelope's own derived id (present regardless of outcome, including `collision`, so a caller can log which identity conflicted without needing the rejected content). */
+  id: string
+}
+
+export interface EpisodicStore {
+  /**
+   * Exact repeated append (same id, same contentHash) is a no-op
+   * (`"duplicate"`). Same id with a different contentHash is a collision
+   * (`"collision"`) and does not modify the first record -- this is a
+   * persistence-layer enforcement of the same invariant
+   * `observation-admission.ts`'s `admitEvidence` already expresses at the
+   * admission layer (same identity, different evidence is a collision, not
+   * an upsert), now backed by an actual unique constraint rather than a
+   * caller-supplied `existing` parameter.
+   */
+  appendEvidence(
+    envelope: EvidenceEnvelope,
+    options?: { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<EpisodicAppendResult>
+  /**
+   * A foreign (different project than `context`) or otherwise-unknown
+   * `(providerId, evidenceId)` returns `undefined` -- a non-disclosing
+   * not-found result, not evidence about another project's retention
+   * state (matches the plan's Observation Field Checklist).
+   */
+  readEvidence(
+    providerId: string,
+    evidenceId: string,
+    context: MemoryContext,
+  ): Promise<EvidenceEnvelope | undefined>
+}
+
+export function isEpisodicStore(value: unknown): value is EpisodicStore {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "appendEvidence" in value &&
+    typeof value.appendEvidence === "function" &&
+    "readEvidence" in value &&
+    typeof value.readEvidence === "function"
+  )
 }
