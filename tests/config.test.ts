@@ -79,6 +79,58 @@ describe("parseConfig", () => {
     })
   })
 
+  it("defaults evidenceAdmission to disabled with the approved default origins/bounds", () => {
+    const parsed = parseConfig(undefined)
+
+    expect(parsed.config.evidenceAdmission).toEqual({
+      enabled: false,
+      enabledOrigins: ["direct-user", "host-observed"],
+      maxPayloadBytes: 8 * 1024,
+      maxEvidenceRefs: 16,
+      maxQueuedEvents: 32,
+    })
+  })
+
+  it("respects an explicit empty evidenceAdmission.enabledOrigins array rather than silently widening it back to the default", () => {
+    const parsed = parseConfig({
+      providers: [],
+      evidenceAdmission: { enabled: true, enabledOrigins: [] },
+    })
+
+    expect(parsed.config.evidenceAdmission.enabledOrigins).toEqual([])
+  })
+
+  it("falls back to the default evidenceAdmission.enabledOrigins only when the field is omitted or not an array", () => {
+    expect(parseConfig({ providers: [] }).config.evidenceAdmission.enabledOrigins).toEqual([
+      "direct-user",
+      "host-observed",
+    ])
+    expect(
+      parseConfig({ providers: [], evidenceAdmission: { enabledOrigins: "not-an-array" } }).config
+        .evidenceAdmission.enabledOrigins,
+    ).toEqual(["direct-user", "host-observed"])
+  })
+
+  it("drops unrecognized evidenceAdmission.enabledOrigins entries without dropping the whole array", () => {
+    const parsed = parseConfig({
+      providers: [],
+      evidenceAdmission: { enabledOrigins: ["direct-user", "not-a-real-origin", "retrieved"] },
+    })
+
+    expect(parsed.config.evidenceAdmission.enabledOrigins).toEqual(["direct-user", "retrieved"])
+  })
+
+  it("bounds evidenceAdmission's payload/ref/queue limits", () => {
+    const parsed = parseConfig({
+      providers: [],
+      evidenceAdmission: { maxPayloadBytes: 1, maxEvidenceRefs: -1, maxQueuedEvents: 0 },
+    })
+
+    expect(parsed.config.evidenceAdmission.maxPayloadBytes).toBe(256)
+    expect(parsed.config.evidenceAdmission.maxEvidenceRefs).toBe(0)
+    expect(parsed.config.evidenceAdmission.maxQueuedEvents).toBe(1)
+  })
+
   it("disables duplicate provider IDs deterministically", () => {
     const provider = { type: "markdown", id: "notes", paths: ["notes"] }
     const parsed = parseConfig({ providers: [provider, provider] })

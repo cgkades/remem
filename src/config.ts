@@ -1,4 +1,10 @@
 import path from "node:path"
+import {
+  DEFAULT_EVIDENCE_ADMISSION_CONFIG,
+  EVIDENCE_ORIGINS,
+  type EvidenceAdmissionConfig,
+  type EvidenceOrigin,
+} from "./observation-admission.js"
 import { DEFAULT_REEMBED_COOLDOWN_MS } from "./reembedding.js"
 import type { MemoryScopeKind } from "./types.js"
 
@@ -78,6 +84,8 @@ export interface RememConfig extends OrchestratorConfig {
   providers: MemoryProviderConfig[]
   compaction: boolean
   capture: CaptureConfig
+  /** Phase 2 (plan/feature-memory-recovery-1.md): additive, host-neutral raw-evidence admission -- distinct from and does not replace `capture`. See src/observation-admission.ts. */
+  evidenceAdmission: EvidenceAdmissionConfig
   embedding: EmbeddingPluginOptions
   /** Minimum time between hook-triggered opportunistic re-embed attempts (see `shouldAttemptReembed`). */
   reembedCooldownMs: number
@@ -109,6 +117,23 @@ function finiteNumber(value: unknown, fallback: number, minimum: number, maximum
 function strings(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+}
+
+const EVIDENCE_ORIGIN_VALUES = new Set<EvidenceOrigin>(EVIDENCE_ORIGINS)
+
+/**
+ * Falls back to the default enabled-origins set only when `value` is not an
+ * array at all (omitted/wrong type in raw config) -- an explicit, valid
+ * empty array (`[]`) is respected as-is (admits nothing) rather than
+ * silently widened back to the default. Unrecognized entries within an
+ * otherwise-valid array are dropped individually, not treated as "the whole
+ * array is absent".
+ */
+function parseEvidenceOrigins(value: unknown): EvidenceOrigin[] {
+  if (!Array.isArray(value)) return DEFAULT_EVIDENCE_ADMISSION_CONFIG.enabledOrigins
+  return strings(value).filter((entry): entry is EvidenceOrigin =>
+    EVIDENCE_ORIGIN_VALUES.has(entry as EvidenceOrigin),
+  )
 }
 
 function parseProvider(
@@ -294,6 +319,7 @@ export function parseConfig(options: unknown): ParsedConfig {
   const budgetOptions = isRecord(root.budgets) ? root.budgets : {}
   const plannerOptions = isRecord(root.planner) ? root.planner : {}
   const captureOptions = isRecord(root.capture) ? root.capture : {}
+  const evidenceAdmissionOptions = isRecord(root.evidenceAdmission) ? root.evidenceAdmission : {}
 
   return {
     config: {
@@ -333,6 +359,28 @@ export function parseConfig(options: unknown): ParsedConfig {
           10_000,
         ),
         timeoutMs: finiteNumber(captureOptions.timeoutMs, 1_000, 50, 10_000),
+      },
+      evidenceAdmission: {
+        enabled: evidenceAdmissionOptions.enabled === true,
+        enabledOrigins: parseEvidenceOrigins(evidenceAdmissionOptions.enabledOrigins),
+        maxPayloadBytes: finiteNumber(
+          evidenceAdmissionOptions.maxPayloadBytes,
+          DEFAULT_EVIDENCE_ADMISSION_CONFIG.maxPayloadBytes,
+          256,
+          1024 * 1024,
+        ),
+        maxEvidenceRefs: finiteNumber(
+          evidenceAdmissionOptions.maxEvidenceRefs,
+          DEFAULT_EVIDENCE_ADMISSION_CONFIG.maxEvidenceRefs,
+          0,
+          256,
+        ),
+        maxQueuedEvents: finiteNumber(
+          evidenceAdmissionOptions.maxQueuedEvents,
+          DEFAULT_EVIDENCE_ADMISSION_CONFIG.maxQueuedEvents,
+          1,
+          10_000,
+        ),
       },
       embedding: parseEmbedding(root.embedding, diagnostics),
       reembedCooldownMs: finiteNumber(

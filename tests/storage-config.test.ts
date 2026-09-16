@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
+import type { EvidenceOrigin } from "../src/observation-admission.js"
 import {
   loadInstalledPluginOptions,
   readAppConfig,
@@ -96,5 +97,27 @@ describe("installed configuration", () => {
         capture: { enabled: false },
       }),
     ).toEqual({ providers: [], capture: { enabled: false } })
+  })
+
+  it("merges an evidenceAdmission-only inline override with installed settings, distinctly from capture", async () => {
+    const location = await paths()
+    const installed = {
+      ...config("managed", "postgres://managed/remem"),
+      providers: [],
+      capture: { enabled: true },
+      evidenceAdmission: {
+        enabled: true,
+        enabledOrigins: ["direct-user", "host-observed"] as EvidenceOrigin[],
+      },
+    }
+    await writeAppConfig(installed, location)
+    vi.stubEnv("REMEM_CONFIG", location.configFile)
+
+    expect(
+      await loadInstalledPluginOptions({ evidenceAdmission: { enabled: false } }),
+    ).toMatchObject({
+      capture: { enabled: true },
+      evidenceAdmission: { enabled: false, enabledOrigins: ["direct-user", "host-observed"] },
+    })
   })
 })
