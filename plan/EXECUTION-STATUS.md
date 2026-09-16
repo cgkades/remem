@@ -364,16 +364,74 @@ decision conversation on 2026-09-10. Full text is now recorded in
 
 This resolves Phase 2's REVIEW-GATED status (now READY in
 `plan/feature-memory-recovery-1.md` §1's readiness table) and unblocks
-TASK-007/008/009. It does **not** pre-approve Phase 3's retention-policy
-values, Phase 4's transaction contract, Phase 5's host-verification
-contract, Phase 6's remaining broader-rule thresholds beyond decision 3,
-Phase 7, Phase 10, or Phase 11 — those remain separately gated and still
-need their own maintainer decision before implementation.
+TASK-007/008/009. It does **not** pre-approve Phase 4's transaction
+contract, Phase 5's host-verification contract, Phase 6's remaining
+broader-rule thresholds beyond decision 3, Phase 7, Phase 10, or Phase 11 —
+those remain separately gated and still need their own maintainer decision
+before implementation. Phase 3's retention-policy values are resolved
+separately below (2026-09-16).
+
+### Phase 3 decision — RESOLVED 2026-09-16
+
+The maintainer reviewed and approved Phase 3's retention/capacity policy in
+a second decision conversation on 2026-09-16, replacing the plan's original
+age-based retention proposal entirely. Full text is recorded in
+`plan/feature-memory-recovery-1.md` §1 as decision 6 under "Maintainer
+Decisions (2026-09-10, amended 2026-09-16)", and inlined into Phase 3.
+Summary:
+
+- **No age-based deletion of any kind.** Retention is governed entirely by
+  size pressure, in two configurable tiers per provider/project.
+- **Soft limit (default 1 GiB logical bytes, new TASK-060):** makes 60+-day
+  entries eligible for _compaction_ (shrinking, not deleting) — heavy
+  reduction of bulk artifacts (tool output, stack traces, long logs),
+  minimal reduction of reasoning/narrative text. Compaction starts
+  conservative; its aggressiveness may only escalate in response to
+  sustained soft-to-hard gap closure, never silently, and the current level
+  must be visible via `doctor`/`status`. A user-triggered forced full
+  compaction (ignoring the 60-day gate) is also required.
+- **Hard limit (default 2 GiB logical bytes, part of the revised TASK-012):**
+  the only point where anything is actually _removed_, oldest-eligible-first,
+  and only after compaction has already run. Explicit privacy deletion
+  (TASK-013) still overrides both tiers immediately.
+- **Bulk artifacts are never persisted raw in the first place (new
+  TASK-059):** tool-output-shaped payloads (stack traces, long logs) get a
+  deterministic extraction (key error/exception lines + bounded head/tail)
+  applied before storage, independent of the 60-day compaction gate; an
+  LLM-based summarizer is an optional upgrade to that step, never required.
+  This is intentionally narrower than "never lose detail" — if truly raw
+  output is needed later, the operator's own host-level logging (e.g.
+  OpenCode's own log configuration) remains the system of record for that,
+  not ReMem's episodic store.
+- **Supersession review is AI-suggested, human-confirmed only (new
+  TASK-061):** candidates are generated deterministically from decision 4's
+  entity/relationship links (not a free-roaming AI scan of all history); an
+  optional AI-assisted step may summarize _why_ a candidate looks
+  superseded; every suggestion requires explicit human confirmation via
+  TASK-013's forget path before anything is removed. Fully automatic
+  deletion is explicitly rejected for now — the maintainer intends to trial
+  the manually-confirmed workflow first and revisit automation later based
+  on real usage.
+- **Session-start hard-limit capacity warning only (new TASK-062):** when a
+  provider/project is at/near the **hard** limit only (never the soft
+  limit) at session start, inject one bounded, body-free notice (byte
+  count/limit only, no content) into the same attributed context-injection
+  channel Session A/Session B recall already uses, rather than requiring a
+  manually-run `status`/`doctor` command. The exact per-session-vs-throttled
+  firing cadence is still an open implementation question the maintainer
+  flagged for resolution at TASK-062 implementation time, not decided here.
+
+This resolves Phase 3's retention-policy REVIEW-GATED status (now READY in
+`plan/feature-memory-recovery-1.md` §1's readiness table) and unblocks
+TASK-010/011/012/059/060/061/062. It does not change TASK-013's own
+existing review-gated status (explicit forget preview/confirmation)
+independent of this decision.
 
 ## Not started this run (blocked/deferred, per readiness table)
 
 Per `plan/feature-memory-recovery-1.md` §1's readiness table, every
-remaining phase (other than Phase 2, resolved above) is one of:
+remaining phase (other than Phase 2, resolved above, and Phase 3, also
+resolved above) is one of:
 
 - **REVIEW-GATED** (4, 5, 6 remaining thresholds, 7, 10, 11): requires
   maintainer approval of a concrete contract/patch (managed-
@@ -381,12 +439,10 @@ remaining phase (other than Phase 2, resolved above) is one of:
   contract; any fact-promotion rule broader than the approved boundary;
   consolidation mutation authority; full-loop default-rollout gate;
   embedding identity schema) _before_ implementation.
-- **DEPENDENT** on a REVIEW-GATED phase (3 on 2 — now READY, so 3 is
-  DEPENDENT-but-unblocked once Phase 2 lands, though its own retention
-  values in §3 remain separately gated; 8 on 1,7; 9 on 3,4,7): cannot fully
-  land until the review-gated prerequisite lands, though isolated pieces
-  (e.g. TASK-057's `search()` extension) may be draftable once their
-  narrower prerequisite (TASK-055) exists.
+- **DEPENDENT** on a REVIEW-GATED phase (8 on 1,7; 9 on 3,4,7): cannot
+  fully land until the review-gated prerequisite lands, though isolated
+  pieces (e.g. TASK-057's `search()` extension) may be draftable once
+  their narrower prerequisite (TASK-055) exists.
 - **DEFERRED** (12, 13, 14; and 15's TASK-053/054, which are explicitly
   "after phase 10"): not authorized to start per the plan and per the run
   prompt's Work Selection rule.
@@ -442,17 +498,25 @@ pack:smoke` exit 0, lint/typecheck/build/prettier all clean.
 ## Recommended next task
 
 TASK-007/008/009 (Phase 2) are **done** (Package 4, merged — see above).
+The Phase 3 retention/capacity policy decision is also **done** (see
+"Phase 3 decision — RESOLVED 2026-09-16" above).
 
-Phase 3 (episodic persistence: TASK-010 through TASK-013) is next in
-dependency order, but per `plan/feature-memory-recovery-1.md` §1's own
-"Storage decision"/"Retention proposal" text, its retention/capacity policy
-values (30-day max age, 64 MiB logical payload per provider/project,
-7-day baseline before significance-based expiry, hard-capacity/explicit-
-privacy-deletion override) are explicitly flagged "Approve these policy
-values before coding eviction" — i.e. still separately review-gated, not
-covered by the Phase 2 decision above. TASK-010/011 (the append/read
-storage and scoped lexical search, which do not depend on the retention
-policy) may be draftable now; TASK-012 (retention/capacity enforcement)
-needs that additional maintainer decision first. TASK-013 (explicit
-forget preview/confirmation) is review-gated independently of the rest of
-Phase 3 per the plan's exit criterion for this phase.
+**Phase 3 (episodic persistence: TASK-010, 011, 012, 013, 059, 060, 061, 062) is now the fully-unblocked next package**, per the revised policy:
+two size tiers (1 GiB soft/compaction, 2 GiB hard/eviction, both
+configurable, no age-based deletion), deterministic bulk-artifact
+reduction before persistence, entity-linked human-confirmed supersession
+review, and a hard-limit-only session-start capacity notice. TASK-013
+(explicit forget preview/confirmation) remains its own review-gated item
+per the plan's exit criterion for this phase, independent of this
+decision, but TASK-061's supersession review is designed to depend on
+TASK-013's forget path once it lands, not to duplicate it.
+
+Suggested implementation order within Phase 3: TASK-010 (storage) and
+TASK-011 (search) first, since nothing else in this phase can be
+exercised without them; TASK-059 (bulk-artifact reduction) next, since
+TASK-060's compaction policy is easier to reason about once raw bulk
+content is already bounded at the door; then TASK-012 (soft/hard capacity
+accounting) and TASK-060 (compaction) together, since they share the same
+size-accounting mechanism; TASK-062 (session-start warning) once TASK-012
+gives it something real to check; TASK-013 and TASK-061 last, since
+TASK-061 depends on TASK-013's confirmation path.

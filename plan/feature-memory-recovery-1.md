@@ -41,36 +41,37 @@ This handbook turns [PRODUCT-VISION](../docs/PRODUCT-VISION.md), [TARGET-ARCHITE
 
 `READY` permits starting after dependencies. `DEPENDENT` requires prerequisites to land. `REVIEW-GATED` additionally requires maintainer approval of the concrete contract/patch before shipping. `DEFERRED` follows the core loop unless repairing a demonstrated regression. These statuses do not authorize live operations.
 
-| Phase | Work                                        | Readiness                                                                | Prerequisite phases             | Tracking                    | Recovery mapping     |
-| ----- | ------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------- | --------------------------- | -------------------- |
-| 0     | Docs/backlog reconciliation                 | READY                                                                    | None                            | #50                         | P0                   |
-| 1     | Short-continuity query fix                  | READY                                                                    | 0                               | Existing recovery checklist | P1/P9                |
-| 2     | Observation/admission contract              | READY (contract approved 2026-09-10 -- see "Maintainer Decisions" below) | 0                               | #43                         | P2/P13               |
-| 3     | Episodic persistence/retrieval/retention    | DEPENDENT                                                                | 2                               | #43                         | P3/P13               |
-| 4     | Durable identity/audit/learning transaction | REVIEW-GATED                                                             | 3                               | #49                         | P5/P8                |
-| 5     | Host outcome wiring                         | REVIEW-GATED                                                             | 2, 3, 4                         | #75 proposed reopen         | P2/P4                |
-| 6     | Evidence extraction/four-way policy         | REVIEW-GATED                                                             | 3, 4, 5                         | #43; #74 baseline history   | P4/P6                |
-| 7     | Current truth/consolidation lifecycle       | REVIEW-GATED                                                             | 4, 6                            | #49; #4 baseline history    | P7/P8                |
-| 8     | Catalog evolution                           | DEPENDENT                                                                | 1, 7                            | Recovery checklist          | P9                   |
-| 9     | Working context/explanations/guidance       | DEPENDENT                                                                | 3, 4, 7                         | #56 guidance; #76 baseline  | P11/P12              |
-| 10    | Full acceptance/default rollout gate        | REVIEW-GATED                                                             | 5, 6, 7, 8, 9                   | #43/#75                     | P1/P6/P13            |
-| 11    | Embedding identity completion               | REVIEW-GATED                                                             | 0                               | #45                         | Compatibility safety |
-| 12    | Ranking experiments                         | DEFERRED                                                                 | 10, 11                          | #44                         | P10                  |
-| 13    | Shared policy/review infrastructure         | DEFERRED                                                                 | 4, 7                            | #48/#49                     | Remaining P5         |
-| 14    | Pi parity/skills/RPC/UI                     | DEFERRED                                                                 | 9 for shared guidance           | #53/#55/#56/#57             | Integration/UX       |
-| 15    | Version flag; later expansion               | READY for version; expansion DEFERRED                                    | 0 for version; 10 for expansion | #80                         | Housekeeping/P14/P15 |
+| Phase | Work                                        | Readiness                                                                                                 | Prerequisite phases             | Tracking                    | Recovery mapping     |
+| ----- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------- | --------------------------- | -------------------- |
+| 0     | Docs/backlog reconciliation                 | READY                                                                                                     | None                            | #50                         | P0                   |
+| 1     | Short-continuity query fix                  | READY                                                                                                     | 0                               | Existing recovery checklist | P1/P9                |
+| 2     | Observation/admission contract              | READY (contract approved 2026-09-10 -- see "Maintainer Decisions" below)                                  | 0                               | #43                         | P2/P13               |
+| 3     | Episodic persistence/retrieval/retention    | READY (Phase 2 merged; retention/capacity policy approved 2026-09-16 -- see "Maintainer Decisions" below) | 2                               | #43                         | P3/P13               |
+| 4     | Durable identity/audit/learning transaction | REVIEW-GATED                                                                                              | 3                               | #49                         | P5/P8                |
+| 5     | Host outcome wiring                         | REVIEW-GATED                                                                                              | 2, 3, 4                         | #75 proposed reopen         | P2/P4                |
+| 6     | Evidence extraction/four-way policy         | REVIEW-GATED                                                                                              | 3, 4, 5                         | #43; #74 baseline history   | P4/P6                |
+| 7     | Current truth/consolidation lifecycle       | REVIEW-GATED                                                                                              | 4, 6                            | #49; #4 baseline history    | P7/P8                |
+| 8     | Catalog evolution                           | DEPENDENT                                                                                                 | 1, 7                            | Recovery checklist          | P9                   |
+| 9     | Working context/explanations/guidance       | DEPENDENT                                                                                                 | 3, 4, 7                         | #56 guidance; #76 baseline  | P11/P12              |
+| 10    | Full acceptance/default rollout gate        | REVIEW-GATED                                                                                              | 5, 6, 7, 8, 9                   | #43/#75                     | P1/P6/P13            |
+| 11    | Embedding identity completion               | REVIEW-GATED                                                                                              | 0                               | #45                         | Compatibility safety |
+| 12    | Ranking experiments                         | DEFERRED                                                                                                  | 10, 11                          | #44                         | P10                  |
+| 13    | Shared policy/review infrastructure         | DEFERRED                                                                                                  | 4, 7                            | #48/#49                     | Remaining P5         |
+| 14    | Pi parity/skills/RPC/UI                     | DEFERRED                                                                                                  | 9 for shared guidance           | #53/#55/#56/#57             | Integration/UX       |
+| 15    | Version flag; later expansion               | READY for version; expansion DEFERRED                                                                     | 0 for version; 10 for expansion | #80                         | Housekeeping/P14/P15 |
 
 Phases 1 and 2 are independent after phase 0. Phase 11 can run in parallel, but does not block deterministic observation unless embedding identity changes. Do not run concurrent agents editing the same provider/schema/configuration files.
 
 Within a phase, tasks execute in numerical order unless explicitly described as independent. Phase 0's technical exit depends on TASK-001/TASK-002, not authorization for the administrative TASK-003. Do not submit a failing test-only PR; keep a red test with its corresponding implementation and verification in one working branch.
 
-### Maintainer Decisions (2026-09-10)
+### Maintainer Decisions (2026-09-10, amended 2026-09-16)
 
 The maintainer reviewed and approved the following concrete Phase 2 contract and related
 follow-on scope in a decision conversation on 2026-09-10. This satisfies Phase 2's REVIEW-GATED
-requirement for TASK-007; it does not pre-approve later review-gated phases (3's retention
-values, 4's transaction contract, 5's host-verification contract, 6's remaining policy
-thresholds, 7, 10, or 11 remain separately gated). Full detail is inlined in each phase below;
+requirement for TASK-007. A second decision conversation on 2026-09-16 (decision 6 below) approves
+Phase 3's retention/capacity policy, replacing the original age-based retention proposal. Phase 4's
+transaction contract, Phase 5's host-verification contract, Phase 6's remaining policy thresholds,
+Phase 7, Phase 10, and Phase 11 remain separately gated. Full detail is inlined in each phase below;
 this is the index.
 
 1. **Evidence recording scope (Phase 2, TASK-007):** record all raw evidence from the start once
@@ -108,6 +109,48 @@ this is the index.
    open-ended date parsing; expand the list later only from observed real usage. A second, separate
    trigger for "what else did we do while fixing this/that" reuses the Phase 1 anchor match plus
    decision 4's relationship links, independent of any timestamp.
+6. **Retention/capacity policy (Phase 3, replaces the original retention proposal; new
+   TASK-059/060/061/062), approved 2026-09-16:** no age-based deletion of any kind. Retention is
+   governed entirely by size pressure, in two tiers per provider/project:
+   - **Soft limit, default 1 GiB logical bytes:** eligible entries 60+ days old become candidates for
+     **compaction** (shrinking, not deleting): heavy reduction of bulk artifacts (tool-output
+     dumps, stack traces, long logs), minimal reduction of reasoning/narrative text (a user's or
+     the system's stated "why" survives compaction essentially verbatim). Compaction starts
+     conservative (small shrinkage) and its aggressiveness is an explicit, escalating level that
+     the system may raise on its own only if the soft-to-hard gap keeps closing despite the
+     current level running; the current level is visible via `remem doctor`/`status`, never a
+     silent escalation. The user may also force an immediate full compaction on demand, ignoring
+     the 60-day gate.
+   - **Hard limit, default 2 GiB logical bytes:** only past this does anything get _removed_,
+     oldest-eligible-first, and only after compaction has already run. Explicit privacy deletion
+     (Phase 3's existing forget path, TASK-013) still overrides both tiers immediately regardless
+     of age.
+     Both defaults are configurable per project. Additionally: tool-output-shaped payloads (stack
+     traces, long logs) are never admitted/persisted raw in the first place -- a deterministic
+     extraction rule (key error/exception lines plus a bounded head/tail) reduces them _before_
+     storage, independent of and prior to the 60-day compaction above; an LLM-based summarizer is an
+     optional, explicitly-configured upgrade to that same extraction step, never a required one. This
+     is intentionally narrower than "never lose detail": if genuinely raw output is needed later, it
+     is the operator's own host-level logging (e.g. OpenCode's own log configuration) that remains the
+     system of record for that, not ReMem's episodic store.
+
+   **Supersession review (ties to decision 4's entity/relationship links):** a candidate list for
+   possible removal/compaction is generated deterministically from entity/relationship links (e.g.
+   multiple episodic entries linked to the same entity, where a newer one records a decision) --
+   not a free-roaming AI review over all history. An optional AI-assisted step may summarize
+   _why_ a pre-narrowed candidate looks superseded. Every suggestion requires **explicit human
+   confirmation before anything is removed**; fully automatic deletion is explicitly rejected for
+   now, matching the plan's existing forget-review gate (TASK-013). The maintainer intends to trial
+   this manually-confirmed workflow before deciding whether any part of it should later become
+   automatic.
+
+   **Session-start capacity warning:** only at the **hard** limit (2 GiB), not the soft limit,
+   inject a bounded, body-free notice into the same context-injection channel recall already uses
+   (Session A/Session B's normal attributed-context path), so it reaches the user regardless of
+   host UI support, rather than requiring a manually-run `status`/`doctor` command. This shares the
+   memory-injection channel deliberately (per the maintainer's choice); it must remain rare (fires
+   only when actually near/at the hard limit, not routinely) and must never include content, only a
+   bounded diagnostic-style message and the current byte count/limit.
 
 ### Existing Foundations
 
@@ -173,16 +216,32 @@ Host identity must be documented or use an established stable turn identity. Mis
 
 **API decision:** add a proposed `EpisodicStore` beside `ObservationStore` with bounded append, search, and evidence-read operations. `episodicHistory` capability alone does not establish method support. Implement PostgreSQL storage in the existing provider or a connection-sharing internal module; do not introduce another pool/configuration lifecycle. Initially search only the requested project/provider. Return role/origin/status/source identity with excerpts; neighbor expansion stays inside the episode and budget.
 
-**Retention proposal:** 30-day maximum age and 64 MiB logical safe payload per provider/project; seven-day baseline before significance-based expiry. Hard capacity and explicit privacy deletion override that baseline and produce body-free gap diagnostics. Approve these policy values before coding eviction. Define deterministic oldest-eligible eviction, transactionally coordinate capacity accounting across writers, and distinguish logical bytes from physical PostgreSQL disk/VACUUM usage.
+**Retention/capacity policy, approved 2026-09-16 (see "Maintainer Decisions" decision 6 above;
+replaces the original age-based retention proposal):** no age-based deletion. Two size tiers per
+provider/project, both configurable: a **soft limit** (default 1 GiB logical bytes) makes 60+-day-old
+entries eligible for **compaction** (heavy reduction of bulk artifacts, minimal reduction of
+reasoning/narrative text, escalating aggressiveness visible via `doctor`/`status`, user-forceable
+on demand); a **hard limit** (default 2 GiB logical bytes) is the only point at which anything is
+actually _removed_, oldest-eligible-first, only after compaction has already run. Explicit privacy
+deletion (TASK-013) still overrides both tiers immediately. Tool-output-shaped payloads (stack
+traces, long logs) are never admitted/persisted raw at all -- a deterministic extraction rule
+reduces them before storage, independent of the 60-day compaction gate; an LLM-based summarizer is
+an optional upgrade to that same step, never required. Transactionally coordinate capacity
+accounting across writers, and distinguish logical bytes from physical PostgreSQL disk/VACUUM
+usage.
 
-| Task     | Description                                                                                                                                                                                                                                                                                      | Completed | Date          |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- | ------------- |
-| TASK-010 | Add the next migration and append/read methods. Preserve legacy rows and candidate foreign keys. Exact repeated append is a no-op; same identity/different safe evidence fails without changing the first record. Test rollback and cross-provider/project collisions.                           | No        | Not completed |
-| TASK-011 | Add scoped lexical episode search and neighbors: at most ten events, one preceding/following neighbor, and 2,000 output tokens; caller budgets may lower limits. An unclassified failed approach must be independently findable and labeled historical/untrusted. Defer vector episode indexing. | No        | Not completed |
-| TASK-012 | Implement approved retention/capacity policy with boundary and concurrent-writer tests. Expired evidence is explicitly unavailable; surviving semantic knowledge is not reclassified as freshly verified. Neither admission nor retention requires a candidate.                                  | No        | Not completed |
-| TASK-013 | Define and test explicit forget preview/confirmation and derived-data scope before default enablement. Distinguish episode expiry from forgetting related candidates/memories/embeddings/catalog entries. Keep content out of tombstones/audit; document backup expiry and restore suppression.  | No        | Not completed |
+| Task     | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Completed | Date          |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- | ------------- |
+| TASK-010 | Add the next migration and append/read methods. Preserve legacy rows and candidate foreign keys. Exact repeated append is a no-op; same identity/different safe evidence fails without changing the first record. Test rollback and cross-provider/project collisions.                                                                                                                                                                                                                                                                                                                                                                                 | No        | Not completed |
+| TASK-011 | Add scoped lexical episode search and neighbors: at most ten events, one preceding/following neighbor, and 2,000 output tokens; caller budgets may lower limits. An unclassified failed approach must be independently findable and labeled historical/untrusted. Defer vector episode indexing.                                                                                                                                                                                                                                                                                                                                                       | No        | Not completed |
+| TASK-012 | Implement the approved two-tier soft/hard capacity accounting (not the original age-based policy) with boundary and concurrent-writer tests: soft-limit crossing marks 60+-day-old entries compaction-eligible without removing anything; hard-limit crossing performs oldest-eligible-first removal only after compaction has run. Expired/removed evidence is explicitly unavailable; surviving semantic knowledge is not reclassified as freshly verified. Neither admission nor retention requires a candidate.                                                                                                                                    | No        | Not completed |
+| TASK-013 | Define and test explicit forget preview/confirmation and derived-data scope before default enablement. Distinguish episode expiry from forgetting related candidates/memories/embeddings/catalog entries. Keep content out of tombstones/audit; document backup expiry and restore suppression.                                                                                                                                                                                                                                                                                                                                                        | No        | Not completed |
+| TASK-059 | New 2026-09-16: deterministic bulk-artifact reduction applied before persistence -- detect tool-output-shaped payloads (stack traces, long logs) and reduce to key error/exception lines plus a bounded head/tail, never storing the raw form. An optional, explicitly-configured LLM summarizer may replace/augment the deterministic extraction for a given source; it is never required and never the only path. Test that ordinary short/structured payloads pass through unchanged.                                                                                                                                                               | No        | Not completed |
+| TASK-060 | New 2026-09-16: implement soft-limit (1 GiB default) compaction for 60+-day-old eligible entries: heavy reduction of bulk-artifact content, minimal reduction of reasoning/narrative text. Define an explicit, ordered compaction-aggressiveness level; the system may escalate it only in response to sustained soft-to-hard gap closure, never silently -- the current level must be visible via `doctor`/`status`. Add a user-triggered forced full compaction that ignores the 60-day gate. Test conservative-then-escalating behavior and the forced-compaction path.                                                                             | No        | Not completed |
+| TASK-061 | New 2026-09-16: entity/relationship-informed supersession-candidate review. Generate a candidate list deterministically from decision 4's entity/relationship links (e.g. multiple episodic entries linked to one entity, where a newer entry records a decision) -- not a free-roaming AI scan of all history. An optional AI-assisted step may summarize why a pre-narrowed candidate looks superseded. Every suggestion requires explicit human confirmation before removal via TASK-013's forget path; implement no automatic deletion. Test candidate generation, the confirmation gate, and that rejection leaves the source evidence untouched. | No        | Not completed |
+| TASK-062 | New 2026-09-16: session-start hard-limit capacity warning. When a provider/project is at or near the hard limit (2 GiB default) at session start, inject one bounded, body-free notice (byte count/limit only, no content) into the existing attributed context-injection channel Session A/Session B recall already uses. Must not fire for the soft limit. Test firing exactly at/near the hard limit, non-firing below it, and that repeated sessions do not spam the notice beyond what the approved frequency allows -- resolve the exact per-session-vs-throttled cadence with the maintainer before shipping a default.                         | No        | Not completed |
 
-**Exit:** independently retrievable evidence, including zero-candidate turns, without secret or foreign-project leakage. Forget scope is review-gated: do not let a smaller model decide whether to delete independently supported semantic knowledge. Until approved, implement no destructive forget operation or evidence-default rollout.
+**Exit:** independently retrievable evidence, including zero-candidate turns, without secret or foreign-project leakage. Forget scope is review-gated: do not let a smaller model decide whether to delete independently supported semantic knowledge -- TASK-061's AI-assisted suggestions are proposals only, never an execution path, until a human confirms via TASK-013. Until TASK-013 is approved/implemented, implement no destructive forget operation or evidence-default rollout.
 
 ### Implementation Phase 4
 
