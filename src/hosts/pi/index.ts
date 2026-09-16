@@ -36,6 +36,17 @@ interface PiSessionState {
   capture?: CaptureCoordinator | undefined
   primaryPostgres?: PostgresMemoryProvider | undefined
   lastReembedAttempt?: number | undefined
+  /**
+   * TASK-062: `before_agent_start` carries no turn-count signal analogous
+   * to the OpenCode v2 adapter's `currentTurnId` (derived from a full
+   * message array Pi's hook shape does not expose here) -- without
+   * tracking this, `turnId` would always be `undefined` and the
+   * session-start hard-limit warning (gated on `turnId === "1"` in
+   * `RememOrchestrator.processPrompt`) would silently never fire on this
+   * host. `state` is rebuilt fresh on every `session_start` (see below),
+   * so this counter is naturally scoped to one session's lifetime.
+   */
+  dispatchCount: number
 }
 
 /**
@@ -253,6 +264,7 @@ async function buildSessionState(
       providers: created.providers,
       capture,
       primaryPostgres,
+      dispatchCount: 0,
     }
   } catch (error) {
     safeLoggerCall(logger, "error", "extension.initialization_failed", {
@@ -396,10 +408,12 @@ export default function remem(pi: ExtensionAPI): void {
   pi.on("before_agent_start", async (event, ctx) => {
     if (!state) return
     try {
+      state.dispatchCount++
       const injection = await recallForDispatch(
         state.orchestrator,
         event.prompt,
         contextFor(state, ctx),
+        String(state.dispatchCount),
       )
       if (!injection.text) return
       return {

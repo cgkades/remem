@@ -99,7 +99,7 @@ integration("PostgreSQL managed provider", () => {
       )
 
       const upgraded = await runMigrations(pool)
-      expect(upgraded).toMatchObject({ applied: [2, 3, 4, 5, 6, 7, 8, 9], currentVersion: 9 })
+      expect(upgraded).toMatchObject({ applied: [2, 3, 4, 5, 6, 7, 8, 9, 10], currentVersion: 10 })
       expect(
         (
           await pool.query<{ count: string }>(
@@ -117,7 +117,7 @@ integration("PostgreSQL managed provider", () => {
       ).toBeNull()
 
       const repeated = await runMigrations(pool)
-      expect(repeated).toMatchObject({ applied: [], currentVersion: 9 })
+      expect(repeated).toMatchObject({ applied: [], currentVersion: 10 })
 
       await copyFile(
         path.join(process.cwd(), "migrations/0002_consolidation_observation.sql"),
@@ -3815,6 +3815,147 @@ integration("PostgreSQL managed provider", () => {
           memory.id,
         ])
         expect(after.rows[0]).toEqual(before.rows[0])
+      } finally {
+        await provider.dispose()
+      }
+    })
+  })
+
+  describe("session-start hard-limit capacity warning (TASK-062)", () => {
+    const warningProviderConfig = {
+      type: "postgres" as const,
+      id: "warning-provider",
+      connectionString: databaseUrl ?? "",
+      primary: true,
+      maxConnections: 2,
+      catalogLimit: 100,
+    }
+
+    it("does not fire when well under the hard limit", async () => {
+      const provider = new PostgresMemoryProvider(warningProviderConfig)
+      try {
+        const warning = await provider.checkHardLimitWarning(
+          "warning-provider",
+          "warning-under-project",
+          { limits: { softLimitBytes: 10, hardLimitBytes: 1_000_000 } },
+        )
+        expect(warning).toBeUndefined()
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("fires the first time a project is found over the hard limit", async () => {
+      const provider = new PostgresMemoryProvider(warningProviderConfig)
+      try {
+        const projectId = "warning-first-fire-project"
+        await pool.query(
+          `INSERT INTO remem.session_events
+             (id, session_id, project_id, kind, occurred_at, payload,
+              provider_id, host, role, origin, turn_id, message_id, safe_text,
+              evidence_refs, evidence_id, content_hash, schema_version)
+           VALUES ($1,$2,$3,'turn-completed',now(),'{}'::jsonb,
+                   'warning-provider','opencode-v2','user','direct-user','t1','t1-message',$4,
+                   '[]'::jsonb,$5,$5,1)`,
+          [
+            randomUUID(),
+            "warning-first-fire-session",
+            projectId,
+            "x".repeat(2000),
+            createHash("sha256").update(`${projectId}:warning-first-fire`).digest("hex"),
+          ],
+        )
+
+        const warning = await provider.checkHardLimitWarning("warning-provider", projectId, {
+          limits: { softLimitBytes: 10, hardLimitBytes: 500 },
+        })
+        expect(warning).toBeDefined()
+        expect(warning?.hardLimitBytes).toBe(500)
+        expect(warning?.totalBytes).toBeGreaterThan(500)
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("does not fire again within the throttle window, but fires again once it has elapsed", async () => {
+      const provider = new PostgresMemoryProvider(warningProviderConfig)
+      try {
+        const projectId = "warning-throttle-project"
+        await pool.query(
+          `INSERT INTO remem.session_events
+             (id, session_id, project_id, kind, occurred_at, payload,
+              provider_id, host, role, origin, turn_id, message_id, safe_text,
+              evidence_refs, evidence_id, content_hash, schema_version)
+           VALUES ($1,$2,$3,'turn-completed',now(),'{}'::jsonb,
+                   'warning-provider','opencode-v2','user','direct-user','t1','t1-message',$4,
+                   '[]'::jsonb,$5,$5,1)`,
+          [
+            randomUUID(),
+            "warning-throttle-session",
+            projectId,
+            "x".repeat(2000),
+            createHash("sha256").update(`${projectId}:warning-throttle`).digest("hex"),
+          ],
+        )
+        const limits = { softLimitBytes: 10, hardLimitBytes: 500 }
+
+        const first = await provider.checkHardLimitWarning("warning-provider", projectId, {
+          limits,
+          throttleMs: 60_000,
+        })
+        expect(first).toBeDefined()
+
+        const secondImmediately = await provider.checkHardLimitWarning(
+          "warning-provider",
+          projectId,
+          { limits, throttleMs: 60_000 },
+        )
+        expect(secondImmediately).toBeUndefined()
+
+        // Simulate the throttle window having fully elapsed by directly
+        // backdating the persisted last-warned timestamp -- equivalent to
+        // waiting out a real throttle interval without an actual sleep.
+        await pool.query(
+          `UPDATE remem.capacity_state SET last_hard_limit_warning_at = now() - interval '2 minutes'
+           WHERE provider_id = 'warning-provider' AND project_id = $1`,
+          [projectId],
+        )
+        const thirdAfterElapsed = await provider.checkHardLimitWarning(
+          "warning-provider",
+          projectId,
+          { limits, throttleMs: 60_000 },
+        )
+        expect(thirdAfterElapsed).toBeDefined()
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("never fires for soft-limit-only pressure, even far over soft but comfortably under hard", async () => {
+      const provider = new PostgresMemoryProvider(warningProviderConfig)
+      try {
+        const projectId = "warning-soft-only-project"
+        await pool.query(
+          `INSERT INTO remem.session_events
+             (id, session_id, project_id, kind, occurred_at, payload,
+              provider_id, host, role, origin, turn_id, message_id, safe_text,
+              evidence_refs, evidence_id, content_hash, schema_version)
+           VALUES ($1,$2,$3,'turn-completed',now(),'{}'::jsonb,
+                   'warning-provider','opencode-v2','user','direct-user','t1','t1-message',$4,
+                   '[]'::jsonb,$5,$5,1)`,
+          [
+            randomUUID(),
+            "warning-soft-only-session",
+            projectId,
+            "x".repeat(2000),
+            createHash("sha256").update(`${projectId}:warning-soft-only`).digest("hex"),
+          ],
+        )
+
+        const warning = await provider.checkHardLimitWarning("warning-provider", projectId, {
+          limits: { softLimitBytes: 10, hardLimitBytes: 1_000_000 },
+        })
+        expect(warning).toBeUndefined()
       } finally {
         await provider.dispose()
       }

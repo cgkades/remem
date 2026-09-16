@@ -33,8 +33,14 @@ export async function injectV1PromptMemory(
   orchestrator: RememOrchestrator,
   output: V1PromptMessageOutput,
   context: MemoryContext,
+  turnId?: string,
 ): Promise<void> {
-  const injection = await recallForDispatch(orchestrator, textFromParts(output.parts), context)
+  const injection = await recallForDispatch(
+    orchestrator,
+    textFromParts(output.parts),
+    context,
+    turnId,
+  )
   output.message.system = [output.message.system, injection.text].filter(Boolean).join("\n\n")
 }
 
@@ -45,6 +51,18 @@ export function createOpenCodeV1Hooks(
   logger: RememLogger,
   capture?: CaptureCoordinator,
 ): Hooks {
+  // TASK-062: the v1 plugin API's `chat.message` hook carries no turn-count
+  // signal analogous to v2's `currentTurnId` (derived from the full
+  // message array, which this hook shape does not expose) -- without this,
+  // `turnId` would always be `undefined` here and the session-start
+  // hard-limit warning (gated on `turnId === "1"` in
+  // `RememOrchestrator.processPrompt`) would silently never fire for this
+  // host. Tracked per `sessionID` instead: a small in-memory counter,
+  // scoped to this plugin instance's lifetime, incremented on every
+  // dispatch for that session -- "1" on the first dispatch, matching v2's
+  // semantics closely enough for this purpose without needing v1's hook
+  // shape to change.
+  const dispatchCountBySession = new Map<string, number>()
   const hooks: Hooks = {
     "chat.message": async ({ sessionID }, output) => {
       try {
@@ -60,10 +78,13 @@ export function createOpenCodeV1Hooks(
         })
       }
       try {
+        const dispatchCount = (dispatchCountBySession.get(sessionID) ?? 0) + 1
+        dispatchCountBySession.set(sessionID, dispatchCount)
         await injectV1PromptMemory(
           orchestrator,
           output,
           memoryContext(locationFor(input), sessionID),
+          String(dispatchCount),
         )
       } catch (error) {
         safeLoggerCall(logger, "warn", "prompt.injection_failed", {

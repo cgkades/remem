@@ -202,3 +202,62 @@ export function decideEscalation(
   }
   return { level: state.level, consecutiveNoImprovement, escalated: false }
 }
+
+/**
+ * TASK-062: session-start hard-limit capacity warning.
+ *
+ * ** PROVISIONAL DEFAULT -- not yet maintainer-confirmed. ** The plan's own
+ * task description explicitly says: "resolve the exact per-session-vs-
+ * throttled cadence with the maintainer before shipping a default." This
+ * value (and the "session-start gate AND a throttle interval, combined"
+ * design in `shouldFireHardLimitWarning` below) is a conservative,
+ * disclosed placeholder chosen so the feature is implementable and
+ * testable now, not a final maintainer-approved decision. Revisit before
+ * this ships as a real default; see `PROGRESS`/PR notes for this task.
+ */
+export const DEFAULT_HARD_LIMIT_WARNING_THROTTLE_MS = 24 * 60 * 60 * 1000
+
+export interface HardLimitWarning {
+  totalBytes: number
+  hardLimitBytes: number
+}
+
+/**
+ * Pure decision: given the current total, the hard limit, and when this
+ * scope was last warned (`undefined` if never), decides whether to fire
+ * the warning now. Never fires for the soft limit -- callers only ever
+ * invoke this after already establishing `overHard`, and this function
+ * itself only ever compares `totalBytes` against `hardLimitBytes` (never
+ * the soft limit), so there is no code path here that could fire on soft-
+ * limit pressure alone.
+ *
+ * This is the reference specification for the decision, exhaustively unit
+ * tested in isolation -- it is *not* what `PostgresMemoryProvider.
+ * checkHardLimitWarning` actually calls for the throttle-elapsed portion
+ * of this decision. That implementation instead evaluates the elapsed-
+ * time comparison inside a single SQL statement using Postgres's own
+ * `now()` throughout, specifically to avoid mixing a Node process clock
+ * (what calling this function with `new Date()` would do) with a
+ * Postgres-server-stored timestamp, which would make the throttle
+ * boundary sensitive to clock skew between the two. A future non-
+ * PostgreSQL `CapacityStore` implementation without an equivalent atomic-
+ * SQL option may reasonably call this function directly instead.
+ */
+export function shouldFireHardLimitWarning(
+  totalBytes: number,
+  hardLimitBytes: number,
+  lastWarnedAt: Date | undefined,
+  now: Date,
+  throttleMs: number = DEFAULT_HARD_LIMIT_WARNING_THROTTLE_MS,
+): boolean {
+  // Strictly greater than, not "at or over" despite the plan's own plain-
+  // English task description saying "at or near the hard limit" -- this
+  // matches the established meaning of "over the hard limit" already used
+  // by `capacityStatus`'s `overHard`/`enforceHardLimit`/`enforceCapacity`
+  // throughout this codebase (all use the identical strict `>`), so a
+  // project sitting exactly at its configured limit is treated the same
+  // way by every capacity-related decision, not specially by this one.
+  if (totalBytes <= hardLimitBytes) return false
+  if (lastWarnedAt === undefined) return true
+  return now.getTime() - lastWarnedAt.getTime() >= throttleMs
+}

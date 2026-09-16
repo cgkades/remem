@@ -1,4 +1,9 @@
-import type { CapacityLimits, CapacityStatus, CompactionLevel } from "./capacity.js"
+import type {
+  CapacityLimits,
+  CapacityStatus,
+  CompactionLevel,
+  HardLimitWarning,
+} from "./capacity.js"
 import type { EvidenceEnvelope } from "./observation-admission.js"
 import type { MemoryContext, MemoryWrite } from "./types.js"
 
@@ -284,6 +289,21 @@ export interface CapacityStore {
     projectId: string,
     options?: EnforceCapacityOptions,
   ): Promise<EnforceCapacityReport>
+
+  /**
+   * TASK-062: session-start hard-limit capacity warning. Returns a
+   * `HardLimitWarning` only when the scope is genuinely over the *hard*
+   * limit (never the soft limit) and the per-scope throttle allows firing
+   * again; returns `undefined` otherwise (under the hard limit, or
+   * throttled). See `capacity.ts`'s `shouldFireHardLimitWarning` doc
+   * comment: the throttle interval/cadence design here is a disclosed
+   * provisional default, not yet a maintainer-confirmed one.
+   */
+  checkHardLimitWarning(
+    providerId: string,
+    projectId: string,
+    options?: { limits?: CapacityLimits; throttleMs?: number },
+  ): Promise<HardLimitWarning | undefined>
 }
 
 export function isCapacityStore(value: unknown): value is CapacityStore {
@@ -297,6 +317,8 @@ export function isCapacityStore(value: unknown): value is CapacityStore {
     "enforceHardLimit" in value &&
     typeof (value as { enforceHardLimit: unknown }).enforceHardLimit === "function" &&
     "enforceCapacity" in value &&
-    typeof (value as { enforceCapacity: unknown }).enforceCapacity === "function"
+    typeof (value as { enforceCapacity: unknown }).enforceCapacity === "function" &&
+    "checkHardLimitWarning" in value &&
+    typeof (value as { checkHardLimitWarning: unknown }).checkHardLimitWarning === "function"
   )
 }
