@@ -109,13 +109,26 @@ interface EpisodicEventRow extends QueryResultRow {
  * authoritative.
  */
 function episodicRowToEnvelope(row: EpisodicEventRow): EvidenceEnvelope {
-  // schema_version has no DB CHECK constraint (unlike role/origin/kind) --
-  // its entire purpose is to let a future incompatible envelope shape be
+  // schema_version has no DB CHECK constraint (unlike role/origin) -- its
+  // entire purpose is to let a future incompatible envelope shape be
   // detected rather than silently mis-cast as today's shape. Reject rather
   // than blindly narrow an unexpected value into the current literal type.
   if (row.schema_version !== EVIDENCE_SCHEMA_VERSION) {
     throw new Error(
       `episodic evidence row has unsupported schemaVersion ${row.schema_version} (expected ${EVIDENCE_SCHEMA_VERSION})`,
+    )
+  }
+  // role/origin are pinned to their exact literal sets by DB CHECKs, but
+  // kind is NOT: session_events_evidence_kind_check allows the full 11-value
+  // superset shared with legacy SessionEventKind rows, whereas an evidence
+  // envelope's kind is the 3-value EvidenceEventKind. appendEvidence enforces
+  // that narrower set on write, so any row this SELECT reaches should already
+  // conform -- but the row type is an unchecked pg cast, so re-validate here
+  // (mirroring the schema_version guard) rather than narrow an out-of-set
+  // legacy kind into EvidenceEventKind.
+  if (!EVIDENCE_KINDS.includes(row.kind)) {
+    throw new Error(
+      `episodic evidence row has unsupported kind ${row.kind} (expected one of ${EVIDENCE_KINDS.join(", ")})`,
     )
   }
   return {
