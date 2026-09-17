@@ -72,30 +72,35 @@ async function checkPermissions(file: string, name: string): Promise<DoctorCheck
  * not a substitute for a caller checking its own configured limits.
  */
 export async function capacityChecks(pool: Pool): Promise<DoctorCheck[]> {
-  const scopes = await pool.query<{ provider_id: string; project_id: string }>(
-    `SELECT DISTINCT provider_id, project_id
-     FROM remem.session_events
-     WHERE evidence_id IS NOT NULL
-     ORDER BY provider_id, project_id`,
+  // Single aggregate query rather than one DISTINCT scan plus two queries per
+  // scope (a prior N+1): group the byte totals by scope and LEFT JOIN the
+  // per-scope capacity_state so a scope with no state row still appears (its
+  // compaction_level comes back null -> level defaults to 0/"conservative").
+  const rows = await pool.query<{
+    provider_id: string
+    project_id: string
+    total: string | null
+    compaction_level: number | null
+  }>(
+    `SELECT se.provider_id,
+            se.project_id,
+            SUM(
+              COALESCE(octet_length(se.safe_text), 0) +
+              COALESCE(octet_length(se.payload::text), 0) +
+              COALESCE(octet_length(se.evidence_refs::text), 0)
+            )::bigint AS total,
+            cs.compaction_level
+     FROM remem.session_events se
+     LEFT JOIN remem.capacity_state cs
+       ON cs.provider_id = se.provider_id AND cs.project_id = se.project_id
+     WHERE se.evidence_id IS NOT NULL
+     GROUP BY se.provider_id, se.project_id, cs.compaction_level
+     ORDER BY se.provider_id, se.project_id`,
   )
   const checks: DoctorCheck[] = []
-  for (const scope of scopes.rows) {
-    const totals = await pool.query<{ total: string | null }>(
-      `SELECT SUM(
-         COALESCE(octet_length(safe_text), 0) +
-         COALESCE(octet_length(payload::text), 0) +
-         COALESCE(octet_length(evidence_refs::text), 0)
-       )::bigint AS total
-       FROM remem.session_events
-       WHERE provider_id = $1 AND project_id = $2 AND evidence_id IS NOT NULL`,
-      [scope.provider_id, scope.project_id],
-    )
-    const state = await pool.query<{ compaction_level: number }>(
-      `SELECT compaction_level FROM remem.capacity_state WHERE provider_id = $1 AND project_id = $2`,
-      [scope.provider_id, scope.project_id],
-    )
-    const totalBytes = Number(totals.rows[0]?.total ?? 0)
-    const level = compactionLevelAtIndex(state.rows[0]?.compaction_level ?? 0)
+  for (const scope of rows.rows) {
+    const totalBytes = Number(scope.total ?? 0)
+    const level = compactionLevelAtIndex(scope.compaction_level ?? 0)
     const status = computeCapacityStatus(totalBytes, level, DEFAULT_CAPACITY_LIMITS)
     checks.push({
       name: `capacity ${scope.provider_id}/${scope.project_id}`,

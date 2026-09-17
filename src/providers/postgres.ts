@@ -1357,15 +1357,52 @@ export class PostgresMemoryProvider
     // correctness one -- this lock exists purely to order operations, not
     // to authorize them.
     const lockKey = `${providerId}\u0001${projectId}`
+    // Release the pooled connection at most once. If the unlock query itself
+    // fails, the session may still hold the advisory lock, so the connection
+    // must be *discarded* from the pool (`release(err)`) rather than handed to
+    // the next caller -- otherwise that caller inherits a still-held lock on
+    // the same key and blocks forever. The common failure (a dead connection)
+    // already auto-releases the session lock server-side; this guards the
+    // rarer case where unlock fails on a connection the pool would still reuse.
+    let released = false
+    const releaseOnce = (err?: Error) => {
+      if (released) return
+      released = true
+      client.release(err)
+    }
     try {
       await client.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [lockKey])
+      // Run the critical section and capture its outcome rather than
+      // returning directly, so the unlock is attempted next in normal control
+      // flow (not inside a `finally`, where a rethrow would silently override
+      // fn's own result/throw -- eslint no-unsafe-finally).
+      let result: T
       try {
-        return await fn(client)
-      } finally {
-        await client.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [lockKey])
+        result = await fn(client)
+      } catch (fnError) {
+        // fn failed: still attempt to release the advisory lock before
+        // propagating. If unlock also fails the connection is poisoned, so
+        // discard it and surface the unlock failure (the lock leak is the more
+        // operationally severe signal); otherwise re-throw fn's original error.
+        try {
+          await client.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [lockKey])
+        } catch (unlockError) {
+          releaseOnce(unlockError instanceof Error ? unlockError : new Error(String(unlockError)))
+          throw unlockError
+        }
+        throw fnError
       }
+      // fn succeeded: unlock, discarding the connection if unlock fails so a
+      // still-lock-holding connection is never handed to the next caller.
+      try {
+        await client.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [lockKey])
+      } catch (unlockError) {
+        releaseOnce(unlockError instanceof Error ? unlockError : new Error(String(unlockError)))
+        throw unlockError
+      }
+      return result
     } finally {
-      client.release()
+      releaseOnce()
     }
   }
 
@@ -1426,8 +1463,15 @@ export class PostgresMemoryProvider
       [providerId, projectId],
     )
     // INSERT ... ON CONFLICT DO UPDATE ... RETURNING always yields exactly
-    // one row (the upserted capacity_state row), so this is never undefined.
-    const row = result.rows[0]!
+    // one row (the upserted capacity_state row). Assert it explicitly rather
+    // than with a non-null assertion so a broken invariant surfaces as a
+    // descriptive error instead of an opaque property access on undefined.
+    const row = result.rows[0]
+    if (row === undefined) {
+      throw new Error(
+        `capacity_state upsert returned no row for provider=${providerId} project=${projectId}`,
+      )
+    }
     return {
       level: compactionLevelAtIndex(row.compaction_level),
       previousTotalBytes:
@@ -1563,6 +1607,15 @@ export class PostgresMemoryProvider
         // round trips per call would otherwise be a real, avoidable
         // latency cost for what is meant to be a backlog-draining
         // maintenance operation.
+        //
+        // content_hash is intentionally NOT recomputed here. It reflects the
+        // admission-time content and remains the dedup key: admission compares
+        // an incoming envelope's hash against the stored content_hash (see the
+        // SELECT/compare at ~postgres.ts:1112/1132) and never re-derives a hash
+        // from safe_text. Compaction rewrites safe_text in place, so after this
+        // UPDATE the stored content_hash no longer matches the current
+        // safe_text -- that divergence is by design, not a bug: dedup must key
+        // on what was originally admitted, not on the post-compaction text.
         await client.query(
           `UPDATE remem.session_events AS se
            SET safe_text = v.safe_text, compacted_at = now(), compacted_at_level = $3
@@ -1668,10 +1721,14 @@ export class PostgresMemoryProvider
       let bytesReclaimed = 0
       for (const row of candidates.rows) {
         if (totalBytes <= limits.hardLimitBytes) break
-        idsToRemove.push(row.id)
-        // Validated coercion: a NaN here would defeat the `<=` break above
-        // and push the whole batch into the DELETE set (see toFiniteByteCount).
+        // Validate before enqueueing for deletion: a NaN here would defeat the
+        // `<=` break above and push the whole batch into the DELETE set (see
+        // toFiniteByteCount, which throws on a non-finite value). Coercing
+        // first keeps the invariant self-evident -- a row only enters
+        // idsToRemove after its byte count is known good, so a throw aborts
+        // before any id is queued rather than leaving a partially-built set.
         const rowBytes = toFiniteByteCount(row.bytes)
+        idsToRemove.push(row.id)
         totalBytes -= rowBytes
         bytesReclaimed += rowBytes
       }

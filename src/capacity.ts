@@ -110,7 +110,14 @@ export function compactionLevelIndex(level: CompactionLevel): number {
 
 export function compactionLevelAtIndex(index: number): CompactionLevel {
   const clamped = Math.max(0, Math.min(index, COMPACTION_LEVELS.length - 1))
-  return COMPACTION_LEVELS[clamped]!
+  const level = COMPACTION_LEVELS[clamped]
+  if (level === undefined) {
+    // Unreachable: `clamped` is bounded to [0, length-1] and COMPACTION_LEVELS
+    // is a non-empty constant. Assert explicitly rather than with `!` so a
+    // future edit that empties the array fails loudly instead of silently.
+    throw new Error(`no compaction level at clamped index ${clamped}`)
+  }
+  return level
 }
 
 /**
