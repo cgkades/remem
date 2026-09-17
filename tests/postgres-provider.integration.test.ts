@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { appendFile, copyFile, mkdir, mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -99,7 +99,7 @@ integration("PostgreSQL managed provider", () => {
       )
 
       const upgraded = await runMigrations(pool)
-      expect(upgraded).toMatchObject({ applied: [2, 3, 4, 5, 6, 7, 8], currentVersion: 8 })
+      expect(upgraded).toMatchObject({ applied: [2, 3, 4, 5, 6, 7, 8, 9], currentVersion: 9 })
       expect(
         (
           await pool.query<{ count: string }>(
@@ -117,7 +117,7 @@ integration("PostgreSQL managed provider", () => {
       ).toBeNull()
 
       const repeated = await runMigrations(pool)
-      expect(repeated).toMatchObject({ applied: [], currentVersion: 8 })
+      expect(repeated).toMatchObject({ applied: [], currentVersion: 9 })
 
       await copyFile(
         path.join(process.cwd(), "migrations/0002_consolidation_observation.sql"),
@@ -1850,6 +1850,72 @@ integration("PostgreSQL managed provider", () => {
     }
   })
 
+  it("surfaces capacity/compaction-level status via doctor for every provider/project with evidence (TASK-012/TASK-060)", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "remem-doctor-capacity-"))
+    const paths = rememPaths({
+      REMEM_CONFIG_DIR: path.join(root, "config"),
+      REMEM_DATA_DIR: path.join(root, "data"),
+    })
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: databaseUrl ?? "" },
+      providers: [],
+      embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
+    }
+    const projectId = "doctor-capacity-project"
+    const provider = new PostgresMemoryProvider({
+      type: "postgres",
+      id: "doctor-capacity-provider",
+      connectionString: databaseUrl ?? "",
+      primary: true,
+      maxConnections: 2,
+      catalogLimit: 100,
+    })
+    try {
+      await mkdir(paths.dataDir, { recursive: true, mode: 0o700 })
+      await writeAppConfig(config, paths)
+
+      const admitted = admitEvidence(
+        {
+          providerId: "doctor-capacity-provider",
+          host: "opencode-v2",
+          context: {
+            directory: "/workspace/doctor-capacity",
+            worktree: "/workspace/doctor-capacity",
+            projectId,
+            sessionId: "doctor-capacity-session",
+          },
+          turnId: "d1",
+          messageId: "d1-message",
+          role: "user",
+          origin: "direct-user",
+          kind: "turn-completed",
+          occurredAt: "2026-09-16T00:00:00.000Z",
+          payload: {
+            text: "We decided something worth remembering for the doctor capacity check.",
+          },
+        },
+        { providerId: "doctor-capacity-provider", host: "opencode-v2", projectId },
+        { ...DEFAULT_EVIDENCE_ADMISSION_CONFIG, enabled: true },
+      )
+      if (admitted.outcome !== "admitted") throw new Error("seed admission failed")
+      await provider.appendEvidence(admitted.envelope)
+
+      const report = await runDoctor(config, paths, {
+        run: () => Promise.resolve({ stdout: "", stderr: "" }),
+      })
+      const check = report.checks.find(
+        (c) => c.name === `capacity doctor-capacity-provider/${projectId}`,
+      )
+      expect(check).toBeDefined()
+      expect(check?.status).toBe("ok")
+      expect(check?.detail).toMatch(/compaction level: conservative/)
+    } finally {
+      await provider.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it("does not report a backlog when neural embedding falls back to hash", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "remem-doctor-fallback-"))
     const paths = rememPaths({
@@ -3086,6 +3152,669 @@ integration("PostgreSQL managed provider", () => {
           contextFor(sessionId, projectId),
         )
         expect(result).toEqual({ matches: [], budgetExhausted: false })
+      } finally {
+        await provider.dispose()
+      }
+    })
+  })
+
+  describe("capacity accounting and compaction (TASK-012/TASK-060)", () => {
+    const capacityProviderConfig = {
+      type: "postgres" as const,
+      id: "capacity-provider",
+      connectionString: databaseUrl ?? "",
+      primary: true,
+      maxConnections: 2,
+      catalogLimit: 100,
+    }
+    const enabledConfig = { ...DEFAULT_EVIDENCE_ADMISSION_CONFIG, enabled: true }
+    const oldTimestamp = "2020-01-01T00:00:00.000Z" // far more than 60 days before any test run
+    const freshTimestamp = new Date().toISOString() // well within the last 60 days
+
+    function contextFor(sessionId: string, projectId: string): MemoryContext {
+      return {
+        directory: "/workspace/capacity",
+        worktree: "/workspace/capacity",
+        projectId,
+        sessionId,
+      }
+    }
+
+    async function seedEvidence(
+      provider: PostgresMemoryProvider,
+      projectId: string,
+      sessionId: string,
+      turnId: string,
+      text: string,
+      occurredAt: string,
+    ) {
+      const authority: AdmissionAuthority = {
+        providerId: "capacity-provider",
+        host: "opencode-v2",
+        projectId,
+      }
+      const admitted = admitEvidence(
+        {
+          providerId: "capacity-provider",
+          host: "opencode-v2",
+          context: contextFor(sessionId, projectId),
+          turnId,
+          messageId: `${turnId}-message`,
+          role: "user",
+          origin: "direct-user",
+          kind: "turn-completed",
+          occurredAt,
+          payload: { text },
+        },
+        authority,
+        enabledConfig,
+      )
+      if (admitted.outcome !== "admitted") {
+        throw new Error(`seed admission failed: ${admitted.outcome}`)
+      }
+      const result = await provider.appendEvidence(admitted.envelope)
+      if (result.outcome !== "appended") throw new Error(`seed append failed: ${result.outcome}`)
+      return admitted.envelope
+    }
+
+    function pythonTraceback(lineCount: number): string {
+      const frames = Array.from(
+        { length: lineCount },
+        (_, index) =>
+          `  File "/app/service/module_${index}.py", line ${100 + index}, in handler_${index}`,
+      ).join("\n")
+      return `Traceback (most recent call last):\n${frames}\nValueError: deep failure`
+    }
+
+    /**
+     * Inserts a session_events row directly via SQL, bypassing
+     * admitEvidence entirely -- TASK-059's admission-time bulk-artifact
+     * reduction is aggressive enough that most large stack traces are
+     * already shrunk to a few hundred bytes before compaction would ever
+     * see them, which would make it impossible to test TASK-060's
+     * compaction behavior in isolation through the normal admission path.
+     * This helper writes a row with `safe_text` exactly as given, as if it
+     * had arrived through some other (or a future) admission path that
+     * did not reduce it, so compaction has genuine work to do.
+     */
+    async function seedRawEvidenceRow(
+      projectId: string,
+      sessionId: string,
+      turnId: string,
+      text: string,
+      occurredAt: string,
+    ) {
+      const evidenceId = createHash("sha256")
+        .update(`${projectId}:${sessionId}:${turnId}`)
+        .digest("hex")
+      await pool.query(
+        `INSERT INTO remem.session_events
+           (id, session_id, project_id, kind, occurred_at, payload,
+            provider_id, host, role, origin, turn_id, message_id, safe_text,
+            evidence_refs, evidence_id, content_hash, schema_version)
+         VALUES ($1,$2,$3,'turn-completed',$4,'{}'::jsonb,
+                 'capacity-provider','opencode-v2','user','direct-user',$5,$6,$7,
+                 '[]'::jsonb,$8,$9,1)`,
+        [
+          randomUUID(),
+          sessionId,
+          projectId,
+          occurredAt,
+          turnId,
+          `${turnId}-message`,
+          text,
+          evidenceId,
+          evidenceId,
+        ],
+      )
+    }
+
+    it("getCapacityStatus reports neither over-soft nor over-hard for an empty/small project, and correctly crosses each boundary as data grows", async () => {
+      const provider = new PostgresMemoryProvider(capacityProviderConfig)
+      try {
+        const projectId = "capacity-boundary-project"
+        const limits = { softLimitBytes: 500, hardLimitBytes: 1000 }
+
+        const empty = await provider.getCapacityStatus("capacity-provider", projectId, limits)
+        expect(empty).toMatchObject({
+          overSoft: false,
+          overHard: false,
+          compactionLevel: "conservative",
+        })
+
+        await seedEvidence(
+          provider,
+          projectId,
+          "capacity-boundary-session",
+          "b1",
+          "x".repeat(600),
+          freshTimestamp,
+        )
+        const overSoftOnly = await provider.getCapacityStatus(
+          "capacity-provider",
+          projectId,
+          limits,
+        )
+        expect(overSoftOnly.overSoft).toBe(true)
+        expect(overSoftOnly.overHard).toBe(false)
+
+        await seedEvidence(
+          provider,
+          projectId,
+          "capacity-boundary-session",
+          "b2",
+          "y".repeat(600),
+          freshTimestamp,
+        )
+        const overHard = await provider.getCapacityStatus("capacity-provider", projectId, limits)
+        expect(overHard.overHard).toBe(true)
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("runCompaction does nothing when under the soft limit and not forced", async () => {
+      const provider = new PostgresMemoryProvider(capacityProviderConfig)
+      try {
+        const projectId = "capacity-under-soft-project"
+        await seedEvidence(
+          provider,
+          projectId,
+          "capacity-under-soft-session",
+          "u1",
+          pythonTraceback(5),
+          oldTimestamp,
+        )
+
+        const report = await provider.runCompaction("capacity-provider", projectId, {
+          limits: { softLimitBytes: 1_000_000, hardLimitBytes: 2_000_000 },
+        })
+        expect(report).toMatchObject({ rowsProcessed: 0, rowsReduced: 0, level: "conservative" })
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("runCompaction shrinks a large bulk-artifact-shaped old entry, but never touches a fresh (<60 day) entry", async () => {
+      const provider = new PostgresMemoryProvider(capacityProviderConfig)
+      try {
+        const projectId = "capacity-shrink-project"
+        const sessionId = "capacity-shrink-session"
+        const largeTrace = pythonTraceback(300)
+        await seedRawEvidenceRow(projectId, sessionId, "s1-old", largeTrace, oldTimestamp)
+        await seedRawEvidenceRow(projectId, sessionId, "s2-fresh", largeTrace, freshTimestamp)
+
+        const smallLimits = { softLimitBytes: 10, hardLimitBytes: 1_000_000 }
+        const report = await provider.runCompaction("capacity-provider", projectId, {
+          limits: smallLimits,
+        })
+
+        expect(report.rowsProcessed).toBe(1) // only the old entry is eligible
+        expect(report.rowsReduced).toBe(1)
+        expect(report.bytesReclaimed).toBeGreaterThan(0)
+
+        const rows = await pool.query<{ turn_id: string; safe_text: string }>(
+          "SELECT turn_id, safe_text FROM remem.session_events WHERE project_id = $1 ORDER BY turn_id",
+          [projectId],
+        )
+        const oldRow = rows.rows.find((row) => row.turn_id === "s1-old")
+        const freshRow = rows.rows.find((row) => row.turn_id === "s2-fresh")
+        expect(oldRow?.safe_text.length).toBeLessThan(largeTrace.length)
+        expect(freshRow?.safe_text).toBe(largeTrace) // completely untouched
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("does not reduce narrative (non-bulk-artifact) text at the conservative level", async () => {
+      const provider = new PostgresMemoryProvider(capacityProviderConfig)
+      try {
+        const projectId = "capacity-narrative-project"
+        const narrative = "We decided to migrate to logical replication because ".repeat(60)
+        await seedEvidence(
+          provider,
+          projectId,
+          "capacity-narrative-session",
+          "n1",
+          narrative,
+          oldTimestamp,
+        )
+
+        const report = await provider.runCompaction("capacity-provider", projectId, {
+          limits: { softLimitBytes: 10, hardLimitBytes: 1_000_000 },
+        })
+        expect(report.rowsProcessed).toBe(1)
+        expect(report.rowsReduced).toBe(0) // stamped as processed, but left unchanged
+
+        const row = await pool.query<{ safe_text: string }>(
+          "SELECT safe_text FROM remem.session_events WHERE project_id = $1 AND turn_id = 'n1'",
+          [projectId],
+        )
+        expect(row.rows[0]?.safe_text).toBe(narrative)
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("a forced compaction ignores both the 60-day age gate and the soft-limit gate", async () => {
+      const provider = new PostgresMemoryProvider(capacityProviderConfig)
+      try {
+        const projectId = "capacity-forced-project"
+        const largeTrace = pythonTraceback(300)
+        await seedRawEvidenceRow(
+          projectId,
+          "capacity-forced-session",
+          "f1-fresh",
+          largeTrace,
+          freshTimestamp,
+        )
+
+        // Well under any realistic soft limit -- without force, nothing
+        // would be touched (age gate) or considered (soft-limit gate).
+        const report = await provider.runCompaction("capacity-provider", projectId, {
+          force: true,
+          limits: { softLimitBytes: 1_000_000_000, hardLimitBytes: 2_000_000_000 },
+        })
+        expect(report.rowsProcessed).toBe(1)
+        expect(report.rowsReduced).toBe(1)
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("does not reprocess a row already compacted at the current level -- a second identical-level run finds nothing new to do", async () => {
+      const provider = new PostgresMemoryProvider(capacityProviderConfig)
+      try {
+        const projectId = "capacity-idempotent-project"
+        await seedEvidence(
+          provider,
+          projectId,
+          "capacity-idempotent-session",
+          "i1",
+          pythonTraceback(300),
+          oldTimestamp,
+        )
+        const limits = { softLimitBytes: 10, hardLimitBytes: 1_000_000 }
+
+        const first = await provider.runCompaction("capacity-provider", projectId, { limits })
+        expect(first.rowsProcessed).toBe(1)
+
+        const second = await provider.runCompaction("capacity-provider", projectId, { limits })
+        expect(second.rowsProcessed).toBe(0)
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("escalates to a more aggressive level after sustained non-improving compaction runs, and never de-escalates", async () => {
+      const provider = new PostgresMemoryProvider(capacityProviderConfig)
+      try {
+        const projectId = "capacity-escalation-project"
+        const limits = { softLimitBytes: 10, hardLimitBytes: 1_000_000 }
+
+        // Prime capacity_state as if two consecutive prior runs already
+        // failed to improve, at a known total -- the pure escalation
+        // decision logic itself is exhaustively unit-tested in
+        // tests/capacity.test.ts; this integration test only needs to
+        // prove the storage layer correctly persists/reads that state and
+        // applies the decision, not re-derive every case here.
+        await pool.query(
+          `INSERT INTO remem.capacity_state
+             (provider_id, project_id, compaction_level, last_total_bytes, consecutive_no_improvement, last_checked_at)
+           VALUES ($1, $2, 0, 0, 2, now())`,
+          ["capacity-provider", projectId],
+        )
+
+        // Primed previous total is 0 -- no amount of content can ever be
+        // "less than 0", so this run's post-compaction total is
+        // guaranteed to count as non-improving regardless of its actual
+        // size, deterministically triggering the third consecutive
+        // non-improving run.
+        await seedRawEvidenceRow(
+          projectId,
+          "capacity-escalation-session",
+          "e1",
+          pythonTraceback(5),
+          oldTimestamp,
+        )
+
+        const report = await provider.runCompaction("capacity-provider", projectId, { limits })
+        expect(report.escalated).toBe(true)
+        expect(report.level).toBe("moderate")
+
+        const state = await pool.query<{ compaction_level: number }>(
+          "SELECT compaction_level FROM remem.capacity_state WHERE provider_id = $1 AND project_id = $2",
+          ["capacity-provider", projectId],
+        )
+        expect(state.rows[0]?.compaction_level).toBe(1) // moderate
+
+        const status = await provider.getCapacityStatus("capacity-provider", projectId, limits)
+        expect(status.compactionLevel).toBe("moderate")
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("enforceHardLimit does nothing under the hard limit, and removes oldest-eligible-first over it, never touching a fresh entry", async () => {
+      const provider = new PostgresMemoryProvider(capacityProviderConfig)
+      try {
+        const projectId = "capacity-hardlimit-project"
+        const sessionId = "capacity-hardlimit-session"
+        await seedEvidence(
+          provider,
+          projectId,
+          sessionId,
+          "h1-oldest",
+          "a".repeat(300),
+          "2020-01-01T00:00:00.000Z",
+        )
+        await seedEvidence(
+          provider,
+          projectId,
+          sessionId,
+          "h2-older",
+          "b".repeat(300),
+          "2020-06-01T00:00:00.000Z",
+        )
+        await seedEvidence(
+          provider,
+          projectId,
+          sessionId,
+          "h3-fresh",
+          "c".repeat(300),
+          freshTimestamp,
+        )
+
+        const limits = { softLimitBytes: 100, hardLimitBytes: 500 }
+
+        const noop = await provider.enforceHardLimit("capacity-provider", projectId, {
+          softLimitBytes: 100,
+          hardLimitBytes: 10_000,
+        })
+        expect(noop).toMatchObject({ rowsRemoved: 0 })
+
+        const evicted = await provider.enforceHardLimit("capacity-provider", projectId, limits)
+        expect(evicted.rowsRemoved).toBeGreaterThan(0)
+
+        const remaining = await pool.query<{ turn_id: string }>(
+          "SELECT turn_id FROM remem.session_events WHERE project_id = $1 ORDER BY turn_id",
+          [projectId],
+        )
+        const remainingTurnIds = remaining.rows.map((row) => row.turn_id)
+        // The oldest eligible entry must be removed before a younger one.
+        expect(remainingTurnIds).not.toContain("h1-oldest")
+        // The fresh (<60 day) entry must never be removed, regardless of
+        // how far over the hard limit the project is.
+        expect(remainingTurnIds).toContain("h3-fresh")
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("enforceHardLimit reports exhaustedEligibleRows when still over the hard limit after removing every eligible row", async () => {
+      const provider = new PostgresMemoryProvider(capacityProviderConfig)
+      try {
+        const projectId = "capacity-exhausted-project"
+        // Only a fresh (<60 day) entry exists -- never eligible for
+        // removal, so the project can never be brought under the hard
+        // limit by this mechanism alone.
+        await seedEvidence(
+          provider,
+          projectId,
+          "capacity-exhausted-session",
+          "x1-fresh",
+          "z".repeat(1000),
+          freshTimestamp,
+        )
+
+        const report = await provider.enforceHardLimit("capacity-provider", projectId, {
+          softLimitBytes: 10,
+          hardLimitBytes: 100,
+        })
+        expect(report.rowsRemoved).toBe(0)
+        expect(report.exhaustedEligibleRows).toBe(true)
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("enforceCapacity orchestrates compaction before eviction, running eviction only if still over the hard limit afterward", async () => {
+      const provider = new PostgresMemoryProvider(capacityProviderConfig)
+      try {
+        const projectId = "capacity-orchestration-project"
+        const sessionId = "capacity-orchestration-session"
+        // Small enough that compaction alone brings it comfortably under
+        // both limits -- eviction must not run at all.
+        await seedEvidence(provider, projectId, sessionId, "o1", pythonTraceback(300), oldTimestamp)
+
+        const report = await provider.enforceCapacity("capacity-provider", projectId, {
+          limits: { softLimitBytes: 10, hardLimitBytes: 1_000_000 },
+        })
+        expect(report.compaction).toBeDefined()
+        expect(report.hardLimitEviction).toBeUndefined()
+        expect(report.status.overHard).toBe(false)
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("enforceCapacity runs eviction when compaction alone is not enough to clear the hard limit", async () => {
+      const provider = new PostgresMemoryProvider(capacityProviderConfig)
+      try {
+        const projectId = "capacity-orchestration-evict-project"
+        const sessionId = "capacity-orchestration-evict-session"
+        await seedEvidence(
+          provider,
+          projectId,
+          sessionId,
+          "oe1-oldest",
+          pythonTraceback(300),
+          "2020-01-01T00:00:00.000Z",
+        )
+        await seedEvidence(
+          provider,
+          projectId,
+          sessionId,
+          "oe2-newer",
+          pythonTraceback(300),
+          "2020-06-01T00:00:00.000Z",
+        )
+
+        // A hard limit so small that even fully compacted (conservative
+        // level shrinks bulk artifacts to ~1500 bytes each) content still
+        // exceeds it, forcing eviction to actually run.
+        const report = await provider.enforceCapacity("capacity-provider", projectId, {
+          limits: { softLimitBytes: 10, hardLimitBytes: 1_000 },
+        })
+        expect(report.compaction).toBeDefined()
+        expect(report.hardLimitEviction).toBeDefined()
+        expect(report.hardLimitEviction?.rowsRemoved).toBeGreaterThan(0)
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("concurrent-writer safety: a fresh append during enforceCapacity survives untouched and is never evicted or reduced", async () => {
+      const provider = new PostgresMemoryProvider(capacityProviderConfig)
+      try {
+        const projectId = "capacity-concurrent-project"
+        const sessionId = "capacity-concurrent-session"
+        await seedEvidence(
+          provider,
+          projectId,
+          sessionId,
+          "c1-old-bulk",
+          pythonTraceback(300),
+          oldTimestamp,
+        )
+
+        const [, freshEnvelope] = await Promise.all([
+          provider.enforceCapacity("capacity-provider", projectId, {
+            limits: { softLimitBytes: 10, hardLimitBytes: 50 },
+          }),
+          seedEvidence(
+            provider,
+            projectId,
+            sessionId,
+            "c2-fresh-concurrent",
+            "concurrent fresh narrative text",
+            freshTimestamp,
+          ),
+        ])
+
+        const freshRow = await pool.query<{ safe_text: string }>(
+          "SELECT safe_text FROM remem.session_events WHERE project_id = $1 AND turn_id = 'c2-fresh-concurrent'",
+          [projectId],
+        )
+        expect(freshRow.rows[0]?.safe_text).toBe(freshEnvelope.payload.text)
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("concurrent-writer safety: two concurrent enforceHardLimit calls for the same scope never jointly remove more than the minimum necessary", async () => {
+      const provider = new PostgresMemoryProvider(capacityProviderConfig)
+      try {
+        const projectId = "capacity-concurrent-hardlimit-project"
+        const sessionId = "capacity-concurrent-hardlimit-session"
+        // Five equally-sized old rows -- each contributes the same known
+        // byte cost, so the minimum number that must be removed to clear
+        // a given hard limit is exactly computable and this test can
+        // assert on it precisely, not just "some rows were removed."
+        for (let index = 0; index < 5; index++) {
+          await seedRawEvidenceRow(
+            projectId,
+            sessionId,
+            `ch${index}`,
+            "x".repeat(300),
+            `2020-01-0${index + 1}T00:00:00.000Z`,
+          )
+        }
+
+        const limits = { softLimitBytes: 10, hardLimitBytes: 700 }
+        // Without serialization, two concurrent calls could both read the
+        // same pre-deletion total and (depending on timing/new writes)
+        // jointly remove more than the single minimum-necessary set --
+        // the advisory lock in withCapacityLock (postgres.ts) exists
+        // specifically to prevent that.
+        await Promise.all([
+          provider.enforceHardLimit("capacity-provider", projectId, limits),
+          provider.enforceHardLimit("capacity-provider", projectId, limits),
+        ])
+
+        const remaining = await pool.query<{ count: string }>(
+          "SELECT count(*)::text AS count FROM remem.session_events WHERE project_id = $1",
+          [projectId],
+        )
+        // 304 bytes/row (300 safe_text + '{}' + '[]' overhead); removing
+        // the 3 oldest brings the total to 2*304=608 <= 700. Exactly 2
+        // rows must remain -- more remaining would mean over-removal
+        // never occurred (fine), fewer would mean the two concurrent
+        // calls jointly removed more than the minimum necessary.
+        expect(Number(remaining.rows[0]?.count)).toBe(2)
+
+        const status = await provider.getCapacityStatus("capacity-provider", projectId, limits)
+        expect(status.overHard).toBe(false)
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("escalates naturally across repeated real runCompaction calls, without manually priming capacity_state", async () => {
+      const provider = new PostgresMemoryProvider(capacityProviderConfig)
+      try {
+        const projectId = "capacity-natural-escalation-project"
+        const sessionId = "capacity-natural-escalation-session"
+        const limits = { softLimitBytes: 10, hardLimitBytes: 1_000_000 }
+
+        // Each call adds one more old, already-below-classification-floor
+        // row (so nothing is ever actually shrunk -- rowsReduced stays 0
+        // every time) before compacting -- the total can therefore only
+        // grow or stay flat across successive calls, which is a genuine,
+        // naturally-produced non-improving streak: no manual
+        // capacity_state priming anywhere in this test.
+        let lastLevel: string = "conservative"
+        for (let round = 0; round < 4; round++) {
+          await seedRawEvidenceRow(
+            projectId,
+            sessionId,
+            `ne${round}`,
+            "y".repeat(50), // well under BULK_ARTIFACT_MIN_BYTES -- never reduced
+            "2020-01-01T00:00:00.000Z",
+          )
+          const report = await provider.runCompaction("capacity-provider", projectId, { limits })
+          lastLevel = report.level
+        }
+
+        expect(lastLevel).toBe("moderate")
+        const status = await provider.getCapacityStatus("capacity-provider", projectId, limits)
+        expect(status.compactionLevel).toBe("moderate")
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("removing evidence via enforceHardLimit never touches the derived memory's confidence/freshness/status -- surviving semantic knowledge is not reclassified as freshly verified", async () => {
+      const provider = new PostgresMemoryProvider(capacityProviderConfig)
+      try {
+        const projectId = "capacity-memory-isolation-project"
+        const memory = await provider.write(
+          {
+            type: "decision",
+            title: "Capacity isolation test decision",
+            content: "We decided that evidence eviction must never touch derived memory records.",
+            summary: "Evidence eviction is isolated from memory records.",
+            scope: { kind: "project", id: projectId },
+            importance: 0.5,
+            aliases: [],
+            tags: [],
+            provenance: [
+              {
+                source: { kind: "session", uri: `session://${projectId}/decision` },
+                capturedAt: "2026-08-31T12:00:00.000Z",
+                original: true,
+              },
+            ],
+          },
+          {
+            context: contextFor("capacity-memory-isolation-session", projectId),
+            actor: "integration-test",
+            reason: "capacity isolation test",
+          },
+        )
+        const before = await pool.query<{
+          confidence: number | null
+          freshness: string
+          updated_at: Date
+        }>("SELECT confidence, freshness, updated_at FROM remem.memories WHERE id = $1", [
+          memory.id,
+        ])
+
+        // Enough old, over-hard-limit evidence (unrelated to the memory
+        // above) to force enforceHardLimit to actually remove rows.
+        for (let index = 0; index < 5; index++) {
+          await seedRawEvidenceRow(
+            projectId,
+            "capacity-memory-isolation-evidence-session",
+            `mi${index}`,
+            "z".repeat(300),
+            `2020-01-0${index + 1}T00:00:00.000Z`,
+          )
+        }
+        const eviction = await provider.enforceHardLimit("capacity-provider", projectId, {
+          softLimitBytes: 10,
+          hardLimitBytes: 100,
+        })
+        expect(eviction.rowsRemoved).toBeGreaterThan(0)
+
+        const after = await pool.query<{
+          confidence: number | null
+          freshness: string
+          updated_at: Date
+        }>("SELECT confidence, freshness, updated_at FROM remem.memories WHERE id = $1", [
+          memory.id,
+        ])
+        expect(after.rows[0]).toEqual(before.rows[0])
       } finally {
         await provider.dispose()
       }
