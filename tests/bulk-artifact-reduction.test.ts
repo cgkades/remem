@@ -101,7 +101,7 @@ describe("reduceBulkArtifact", () => {
   it("reduces a large Python traceback and shrinks it substantially", () => {
     const raw = pythonTraceback(200)
     const result = reduceBulkArtifact(raw)
-    expect(result.reduced).toBe(true)
+    if (!result.reduced) throw new Error("expected the traceback to be reduced")
     expect(result.reason).toBe("stack-trace")
     expect(result.text.length).toBeLessThan(raw.length)
     expect(Buffer.byteLength(result.text, "utf8")).toBeLessThanOrEqual(
@@ -193,7 +193,7 @@ describe("reduceBulkArtifact", () => {
   it("reduces a dense long log and bounds the output size", () => {
     const raw = longLog(500)
     const result = reduceBulkArtifact(raw)
-    expect(result.reduced).toBe(true)
+    if (!result.reduced) throw new Error("expected the long log to be reduced")
     expect(result.reason).toBe("long-log")
     expect(Buffer.byteLength(result.text, "utf8")).toBeLessThanOrEqual(
       BULK_ARTIFACT_MAX_OUTPUT_BYTES,
@@ -231,5 +231,43 @@ describe("reduceBulkArtifact", () => {
     )
     // No replacement character from a split multi-byte sequence.
     expect(result.text).not.toContain("\uFFFD")
+  })
+
+  it("is deterministic: repeated reduction of the same input is byte-for-byte identical", () => {
+    // A pathological input mixing many repeated key lines, head/tail
+    // overlap, and multi-byte characters -- the shape most likely to expose
+    // any order-dependence in the dedup/extraction logic.
+    const repeated = "Error: repeated failure signature"
+    const text = [
+      "Traceback (most recent call last):",
+      repeated,
+      ...Array.from({ length: 60 }, (_, i) => `    at frame${i % 7} (/app/m${i % 7}.js:${i}:1)`),
+      ...Array.from({ length: 40 }, () => repeated),
+      "ValueError: \uD83C\uDF89 boom",
+      repeated,
+    ].join("\n")
+    const first = reduceBulkArtifact(text)
+    const second = reduceBulkArtifact(text)
+    expect(first).toEqual(second)
+    expect(first.text).toBe(second.text)
+  })
+
+  it("does not emit a key line twice when its exact text also appears in the head/tail band", () => {
+    // "Error: boot failure" appears both in the head band (line 1) and again
+    // in the middle; it must not be duplicated across the head and key
+    // sections.
+    const shared = "Error: boot failure"
+    const text = [
+      "Traceback (most recent call last):",
+      shared,
+      ...Array.from({ length: 30 }, (_, i) => `    at pad${i} (/app/pad${i}.js:1:1)`),
+      shared,
+      ...Array.from({ length: 30 }, (_, i) => `    at post${i} (/app/post${i}.js:1:1)`),
+      "final line",
+    ].join("\n")
+    const result = reduceBulkArtifact(text)
+    if (!result.reduced) throw new Error("expected the traceback to be reduced")
+    const occurrences = result.text.split(shared).length - 1
+    expect(occurrences).toBe(1)
   })
 })

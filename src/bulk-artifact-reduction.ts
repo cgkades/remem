@@ -41,18 +41,29 @@ export const BULK_ARTIFACT_MAX_OUTPUT_BYTES = 2000
  * these patterns are specific enough (multi-word literal markers, not
  * generic punctuation) that a false positive on ordinary narrative text is
  * very unlikely.
+ *
+ * Every intra-line wildcard uses a negated character class (`[^()]*`,
+ * `[^)]*`, `[^']*`) rather than a greedy `.*`, and no pattern contains two
+ * unbounded quantifiers separated by a required literal. This keeps each
+ * match linear in the line length with no backtracking blow-up, so a
+ * crafted worst-case line (up to `RAW_TEXT_MAX_BYTES_BEFORE_REDUCTION`
+ * before this classifier ever runs) cannot turn classification into a CPU
+ * denial-of-service. Bounding the wildcards this tightly can miss an exotic
+ * frame (e.g. a path literally containing parentheses); that is harmless
+ * here because a single matching frame classifies the whole payload, and a
+ * real stack trace has many frames.
  */
-const STACK_TRACE_PATTERNS: RegExp[] = [
+const STACK_TRACE_PATTERNS: readonly RegExp[] = [
   /^Traceback \(most recent call last\):/m, // Python
-  /^\s*at\s+\S+\s*\(.*:\d+:\d+\)\s*$/m, // Node/V8 / JS
-  /^\s*at\s+[\w$.<>]+\(.*\.java(?::\d+)?\)\s*$/m, // Java
+  /^\s*at\s+\S+\s*\([^()]*:\d+:\d+\)\s*$/m, // Node/V8 / JS
+  /^\s*at\s+[\w$.<>]+\([^)]*\.java(?::\d+)?\)\s*$/m, // Java
   /^Caused by:\s/m, // Java chained cause
   /^\s*File "[^"]+", line \d+/m, // Python (alternate frame form)
   /^panic:\s/m, // Go panic
   /^goroutine \d+ \[[^\]]+\]:/m, // Go goroutine dump
   /^\s*#\d+\s+0x[0-9a-f]+/m, // native/C backtrace frame
-  /^\s*at\s+\S+\(.*\)\s+in\s+.+:line\s+\d+\s*$/m, // .NET/C#
-  /^thread '.*' panicked at /m, // Rust
+  /^\s*at\s+\S+\([^)]*\)\s+in\s+.+:line\s+\d+\s*$/m, // .NET/C# (path may hold a drive colon, so :line stays a bounded suffix)
+  /^thread '[^']*' panicked at /m, // Rust
   /^\s*\d+:\s+0x[0-9a-f]+\s+-\s+/m, // Rust backtrace frame (e.g. "  1: 0x... - rust_begin_unwind")
 ]
 
@@ -96,13 +107,14 @@ function truncateUtf8(text: string, maxBytes: number): string {
   return buffer.subarray(0, end).toString("utf8")
 }
 
-export interface BulkArtifactReductionResult {
-  text: string
-  /** False means the input was returned completely unchanged (not classified as a bulk artifact, or already within bounds). */
-  reduced: boolean
-  /** Present only when `reduced` is true -- which detector classified the input. */
-  reason?: "stack-trace" | "long-log"
-}
+/**
+ * Discriminated on `reduced` so `reason` is only reachable (and is
+ * non-optional) on a result that actually reduced the input; an
+ * unreduced result carries the original text verbatim and no reason.
+ */
+export type BulkArtifactReductionResult =
+  | { readonly text: string; readonly reduced: false }
+  | { readonly text: string; readonly reduced: true; readonly reason: "stack-trace" | "long-log" }
 
 /**
  * Content-shape classifier, independent of the caller's declared `kind`/
@@ -143,13 +155,17 @@ export function reduceBulkArtifact(text: string): BulkArtifactReductionResult {
   // tail) so the same line is never duplicated between sections; dedup by
   // exact line content, in first-seen order, capped so this section itself
   // stays bounded regardless of how many "error" lines a pathological
-  // input contains.
+  // input contains. A middle line whose exact text also appears in the
+  // head/tail band is skipped too (`headTailSet.has`), so it is never
+  // emitted twice across sections and the `omittedLineCount` below stays
+  // accurate.
   const middleStart = BULK_ARTIFACT_HEAD_LINES
   const middleEnd = Math.max(middleStart, lines.length - BULK_ARTIFACT_TAIL_LINES)
   const seenKeyLines = new Set<string>()
   const keyLines: string[] = []
   for (const line of lines.slice(middleStart, middleEnd)) {
     if (!KEY_LINE_PATTERN.test(line)) continue
+    if (headTailSet.has(line)) continue
     if (seenKeyLines.has(line)) continue
     seenKeyLines.add(line)
     keyLines.push(line)

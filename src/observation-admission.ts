@@ -174,9 +174,10 @@ export interface EvidenceAdmissionConfig {
    * contract); a caller wanting an LLM-backed summarizer must have already
    * resolved it to a plain string before this call, e.g. via a cache
    * populated by an earlier async step -- this boundary does not perform
-   * I/O itself.
+   * I/O itself. Returning `null` or `undefined` (or throwing) all mean the
+   * same thing: defer to the deterministic reduction.
    */
-  bulkArtifactSummarizer?: (text: string) => string | undefined
+  bulkArtifactSummarizer?: (text: string) => string | null | undefined
 }
 
 export const DEFAULT_EVIDENCE_ADMISSION_CONFIG: EvidenceAdmissionConfig = {
@@ -204,6 +205,11 @@ export const RAW_TEXT_MAX_BYTES_BEFORE_REDUCTION = 2 * 1024 * 1024
 const PAYLOAD_MAX_SCAN_DEPTH = 6
 const PAYLOAD_MAX_SCAN_VALUES = 500
 
+// Reason codes are not 1:1 with guard sites: `payload-too-large` covers both
+// the pre-reduction raw-size guard and the post-reduction `maxPayloadBytes`
+// check, and `unscreenable-content` covers the raw-text, identity-field,
+// evidence-ref, and reduced-payload credential screens. Callers that need to
+// distinguish those operationally must not assume one guard per reason.
 export type AdmissionRejectionReason =
   | "disabled"
   | "malformed-envelope"
