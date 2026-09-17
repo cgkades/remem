@@ -32,17 +32,20 @@ import type {
   EpisodicSearchOptions,
   EpisodicSearchResult,
   EpisodicSearchStore,
+  EpisodicSupersessionStore,
   ForgetConfirmation,
   ForgetPreview,
   ForgetStore,
   HardLimitEvictionReport,
   SessionObservation,
+  SupersessionCandidate,
 } from "../observation.js"
 import {
   EPISODIC_SEARCH_MAX_NEIGHBORS_PER_SIDE,
   EPISODIC_SEARCH_MAX_OUTPUT_TOKENS,
   EPISODIC_SEARCH_MAX_RESULTS,
   FORGET_PREVIEW_TTL_MS,
+  SUPERSESSION_CANDIDATE_MAX_RESULTS,
 } from "../observation.js"
 import {
   EVIDENCE_KINDS,
@@ -134,6 +137,14 @@ interface ForgetPreviewRow extends QueryResultRow {
   created_at: Date
   expires_at: Date
   confirmed_at: Date | null
+}
+
+interface SupersessionCandidateRow extends QueryResultRow {
+  evidence_id: string
+  newer_decision_evidence_id: string
+  shared_entity_id: string
+  occurred_at: Date
+  newer_decision_occurred_at: Date
 }
 
 function forgetPreviewFromRow(row: ForgetPreviewRow): ForgetPreview {
@@ -438,7 +449,13 @@ const BASE_SELECT = `
 `
 
 export class PostgresMemoryProvider
-  implements MemoryProvider, CandidateReviewStore, EpisodicSearchStore, CapacityStore, ForgetStore
+  implements
+    MemoryProvider,
+    CandidateReviewStore,
+    EpisodicSearchStore,
+    CapacityStore,
+    ForgetStore,
+    EpisodicSupersessionStore
 {
   readonly id: string
   private readonly pool: Pool
@@ -1312,6 +1329,108 @@ export class PostgresMemoryProvider
         },
       )
     })
+  }
+
+  /**
+   * TASK-061: accepts only a previously created project-scoped entity; it
+   * does not parse, classify, or otherwise derive an entity from episode
+   * content. The same identity lock used by forgetting/replay makes a link
+   * impossible to add to an episode after that episode is forgotten.
+   */
+  async linkEvidenceEntity(
+    providerId: string,
+    evidenceId: string,
+    entityId: string,
+    projectId: string,
+  ): Promise<boolean> {
+    if (
+      providerId !== this.id ||
+      !EVIDENCE_ID_PATTERN.test(evidenceId) ||
+      !UUID_PATTERN.test(entityId)
+    ) {
+      return false
+    }
+    return this.withEvidenceIdentityLock(providerId, projectId, evidenceId, async (client) => {
+      const linked = await client.query(
+        `INSERT INTO remem.evidence_entities (session_event_id, entity_id)
+         SELECT event.id, entity.id
+         FROM remem.session_events event
+         JOIN remem.entities entity
+           ON entity.id = $4
+          AND entity.provider_id = $1
+          AND entity.scope_kind = 'project'
+          AND entity.scope_id = $2
+         WHERE event.provider_id = $1 AND event.project_id = $2 AND event.evidence_id = $3
+         ON CONFLICT DO NOTHING
+         RETURNING session_event_id`,
+        [providerId, projectId, evidenceId, entityId],
+      )
+      if (linked.rows[0]) return true
+      // Idempotent link success must remain distinguishable from a foreign or
+      // unknown target without disclosing which identity was not found.
+      const existing = await client.query(
+        `SELECT 1
+         FROM remem.evidence_entities link
+         JOIN remem.session_events event ON event.id = link.session_event_id
+         JOIN remem.entities entity ON entity.id = link.entity_id
+         WHERE event.provider_id = $1 AND event.project_id = $2 AND event.evidence_id = $3
+           AND entity.id = $4 AND entity.provider_id = $1
+           AND entity.scope_kind = 'project' AND entity.scope_id = $2`,
+        [providerId, projectId, evidenceId, entityId],
+      )
+      return Boolean(existing.rows[0])
+    })
+  }
+
+  /**
+   * TASK-061: deterministic, bounded, project/provider-local proposal list.
+   * It emits no text from either episode and deliberately does not attempt to
+   * decide whether the newer approved/promoted decision candidate actually
+   * supersedes older evidence. A single lexically-smallest shared entity id
+   * identifies why each row is present without allowing a high-degree entity
+   * graph to inflate one response row. Evidence event kinds are deliberately
+   * raw transport categories; treating one as a decision here would bypass
+   * the Phase 6 classifier.
+   */
+  async listSupersessionCandidates(
+    providerId: string,
+    projectId: string,
+    options: { limit?: number } = {},
+  ): Promise<SupersessionCandidate[]> {
+    if (providerId !== this.id) return []
+    const requestedLimit = options.limit
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.max(1, Math.min(SUPERSESSION_CANDIDATE_MAX_RESULTS, Math.floor(requestedLimit!)))
+      : SUPERSESSION_CANDIDATE_MAX_RESULTS
+    const result = await this.pool.query<SupersessionCandidateRow>(
+      `SELECT older.evidence_id, newer.evidence_id AS newer_decision_evidence_id,
+              min(older_link.entity_id::text) AS shared_entity_id,
+              older.occurred_at, newer.occurred_at AS newer_decision_occurred_at
+       FROM remem.session_events older
+       JOIN remem.evidence_entities older_link ON older_link.session_event_id = older.id
+       JOIN remem.evidence_entities newer_link ON newer_link.entity_id = older_link.entity_id
+       JOIN remem.session_events newer ON newer.id = newer_link.session_event_id
+       JOIN remem.candidate_memories decision_candidate
+         ON decision_candidate.session_event_id = newer.id
+        AND decision_candidate.type = 'decision'
+        AND decision_candidate.status IN ('approved', 'promoted')
+        AND decision_candidate.metadata->>'providerId' = $1
+       WHERE older.provider_id = $1 AND older.project_id = $2 AND older.evidence_id IS NOT NULL
+         AND newer.provider_id = $1 AND newer.project_id = $2 AND newer.evidence_id IS NOT NULL
+         AND newer.occurred_at > older.occurred_at
+       GROUP BY older.evidence_id, newer.evidence_id, older.occurred_at, newer.occurred_at
+       ORDER BY newer.occurred_at DESC, older.occurred_at DESC, older.evidence_id, newer.evidence_id
+       LIMIT $3`,
+      [providerId, projectId, limit],
+    )
+    return result.rows.map((row) => ({
+      evidenceId: row.evidence_id,
+      newerDecisionEvidenceId: row.newer_decision_evidence_id,
+      sharedEntityId: row.shared_entity_id,
+      occurredAt: row.occurred_at.toISOString(),
+      newerDecisionOccurredAt: row.newer_decision_occurred_at.toISOString(),
+      reason: "newer-decision-shares-entity",
+    }))
   }
 
   /**

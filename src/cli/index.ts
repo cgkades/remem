@@ -672,6 +672,7 @@ Commands:
     [--reason TEXT] [--actor NAME] [--memory-id ID (with --recover-applied)]
   consolidate [--batch-size NUMBER]
   reembed [--batch-size NUMBER]
+  supersession-candidates --project PROJECT_ID [--limit NUMBER]
   forget <EVIDENCE_ID> --project PROJECT_ID
   forget <PREVIEW_ID> --confirm
   backup [--output FILE]
@@ -741,6 +742,7 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
         "correction-review",
         "consolidate",
         "reembed",
+        "supersession-candidates",
         "forget",
       ]).has(parsed.command)
     ) {
@@ -774,6 +776,7 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
       parsed.command === "review" ||
       parsed.command === "consolidate" ||
       parsed.command === "reembed" ||
+      parsed.command === "supersession-candidates" ||
       parsed.command === "forget"
     ) {
       const provider =
@@ -796,6 +799,29 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
             throw new Error("review requires exactly one of --approve or --reject")
           await provider.reviewCandidate(id, approve ? "approved" : "rejected")
           output(`Candidate ${id} ${approve ? "approved" : "rejected"}.`)
+          return 0
+        }
+        if (parsed.command === "supersession-candidates") {
+          const projectId = boundedFlag(parsed, "project", 256)
+          if (!projectId || projectId.includes("\u0000")) {
+            throw new Error("supersession-candidates requires a non-empty, NUL-free --project")
+          }
+          const rawLimit = stringFlag(parsed, "limit")
+          const limit = rawLimit === undefined ? undefined : Number(rawLimit)
+          if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 100)) {
+            throw new Error("--limit must be an integer from 1 to 100")
+          }
+          output(
+            JSON.stringify(
+              await provider.listSupersessionCandidates(
+                provider.id,
+                projectId,
+                limit === undefined ? {} : { limit },
+              ),
+              null,
+              2,
+            ),
+          )
           return 0
         }
         if (parsed.command === "forget") {
