@@ -62,7 +62,25 @@ export function createOpenCodeV1Hooks(
   // dispatch for that session -- "1" on the first dispatch, matching v2's
   // semantics closely enough for this purpose without needing v1's hook
   // shape to change.
+  // Bounded to avoid unbounded growth over a long-lived plugin instance
+  // that sees many distinct sessions: only the first-dispatch detection
+  // (count === 1, gating the session-start warning) matters, so evicting
+  // the oldest tracked session merely risks re-firing the warning for a
+  // very old session on its next dispatch -- itself throttled downstream
+  // by `checkHardLimitWarning` -- never a correctness problem. Map
+  // iteration order is insertion order, so the first key is the oldest.
+  const MAX_TRACKED_SESSIONS = 1024
   const dispatchCountBySession = new Map<string, number>()
+  const recordDispatch = (sessionID: string): number => {
+    const dispatchCount = (dispatchCountBySession.get(sessionID) ?? 0) + 1
+    dispatchCountBySession.set(sessionID, dispatchCount)
+    while (dispatchCountBySession.size > MAX_TRACKED_SESSIONS) {
+      const oldest = dispatchCountBySession.keys().next().value
+      if (oldest === undefined) break
+      dispatchCountBySession.delete(oldest)
+    }
+    return dispatchCount
+  }
   const hooks: Hooks = {
     "chat.message": async ({ sessionID }, output) => {
       try {
@@ -78,8 +96,7 @@ export function createOpenCodeV1Hooks(
         })
       }
       try {
-        const dispatchCount = (dispatchCountBySession.get(sessionID) ?? 0) + 1
-        dispatchCountBySession.set(sessionID, dispatchCount)
+        const dispatchCount = recordDispatch(sessionID)
         await injectV1PromptMemory(
           orchestrator,
           output,

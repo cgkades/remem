@@ -635,11 +635,18 @@ export class RememOrchestrator {
             )
             if (!warning) return undefined
             return (
-              `Provider "${provider.id}" is at or over its configured hard capacity limit ` +
+              `Provider "${provider.id}" is over its configured hard capacity limit ` +
               `(${warning.totalBytes} of ${warning.hardLimitBytes} bytes). Older evidence may be ` +
               `automatically compacted or removed to free space.`
             )
-          } catch {
+          } catch (error) {
+            // Fail open: a capacity-warning failure (timeout, query error)
+            // must never break recall. Log at debug so the swallowed cause
+            // is still observable when diagnosing a missing warning.
+            safeLog(this.logger, "debug", "capacity.warning_check_failed", {
+              provider: provider.id,
+              error: error instanceof Error ? error.name : "unknown error",
+            })
             return undefined
           }
         }),
