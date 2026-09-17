@@ -151,6 +151,13 @@ export function isEpisodicStore(value: unknown): value is EpisodicStore {
 export const EPISODIC_SEARCH_MAX_RESULTS = 10
 export const EPISODIC_SEARCH_MAX_NEIGHBORS_PER_SIDE = 1
 export const EPISODIC_SEARCH_MAX_OUTPUT_TOKENS = 2000
+/**
+ * Upper bound on the raw search string length. A misbehaving or compromised
+ * caller cannot force the database to parse an arbitrarily large
+ * `plainto_tsquery` input -- the query is clamped to this length before it
+ * reaches SQL, in the same spirit as the result/token ceilings above.
+ */
+export const EPISODIC_SEARCH_MAX_QUERY_LENGTH = 10_000
 
 export interface EpisodicSearchOptions {
   /** Clamped to at most `EPISODIC_SEARCH_MAX_RESULTS`. */

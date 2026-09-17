@@ -17,6 +17,7 @@ import type {
 import {
   EPISODIC_SEARCH_MAX_NEIGHBORS_PER_SIDE,
   EPISODIC_SEARCH_MAX_OUTPUT_TOKENS,
+  EPISODIC_SEARCH_MAX_QUERY_LENGTH,
   EPISODIC_SEARCH_MAX_RESULTS,
 } from "../observation.js"
 import {
@@ -171,19 +172,34 @@ function episodicRowToEnvelope(row: EpisodicEventRow): EvidenceEnvelope {
  * function never returns an envelope known to exceed the caller's stated
  * budget, so `EPISODIC_SEARCH_MAX_OUTPUT_TOKENS` remains a real ceiling
  * rather than one a large-metadata, no-text event can silently blow past.
+ *
+ * `tokensUsed` (present only on the `fits: true` result) is an estimate: for
+ * a truncated envelope it is recomputed over the fitted JSON, whose string
+ * escaping can push the serialized size a few bytes past `remainingTokens`.
+ * Callers must treat the running budget as approximate and tolerate it going
+ * slightly negative (searchEpisodes stops on `remainingTokens <= 0`), rather
+ * than relying on `tokensUsed <= remainingTokens` holding exactly.
+ *
+ * The result is a discriminated union on `fits` so a caller physically
+ * cannot read the (deliberately over-budget) envelope from a `fits: false`
+ * result without narrowing first.
  */
+type FitEnvelopeResult =
+  | { fits: true; envelope: EvidenceEnvelope; truncated: boolean; tokensUsed: number }
+  | { fits: false }
+
 function fitEnvelopeToBudget(
   envelope: EvidenceEnvelope,
   remainingTokens: number,
-): { envelope: EvidenceEnvelope; truncated: boolean; tokensUsed: number; fits: boolean } {
+): FitEnvelopeResult {
   const wholeCost = estimateTokens(JSON.stringify(envelope))
   if (wholeCost <= remainingTokens) {
-    return { envelope, truncated: false, tokensUsed: wholeCost, fits: true }
+    return { fits: true, envelope, truncated: false, tokensUsed: wholeCost }
   }
   if (envelope.payload.text === undefined) {
     // No free text to shrink -- a metadata-only envelope that alone
     // exceeds the budget cannot be fit by this function at all.
-    return { envelope, truncated: false, tokensUsed: wholeCost, fits: false }
+    return { fits: false }
   }
   const fixedCost = estimateTokens(
     JSON.stringify({ ...envelope, payload: { ...envelope.payload, text: "" } }),
@@ -191,16 +207,16 @@ function fitEnvelopeToBudget(
   if (fixedCost > remainingTokens) {
     // Even fully truncating text to "" wouldn't fit -- the envelope's
     // non-text fields alone (metadata, refs, identity) exceed the budget.
-    return { envelope, truncated: false, tokensUsed: fixedCost, fits: false }
+    return { fits: false }
   }
   const textBudget = Math.max(0, remainingTokens - fixedCost)
   const { text, truncated } = truncateToTokens(envelope.payload.text, textBudget)
   const fitted: EvidenceEnvelope = { ...envelope, payload: { ...envelope.payload, text } }
   return {
+    fits: true,
     envelope: fitted,
     truncated,
     tokensUsed: estimateTokens(JSON.stringify(fitted)),
-    fits: true,
   }
 }
 
@@ -1126,11 +1142,18 @@ export class PostgresMemoryProvider
     // the existing `clamp` helper used elsewhere in this file for the same
     // class of untrusted numeric input.
     const requestedLimit = options.limit
-    const limit = Math.max(
-      0,
-      Math.min(
-        Number.isFinite(requestedLimit) ? (requestedLimit as number) : EPISODIC_SEARCH_MAX_RESULTS,
-        EPISODIC_SEARCH_MAX_RESULTS,
+    // `Math.trunc` keeps the SQL `LIMIT` an integer: a fractional caller
+    // request (e.g. `2.7`) survives the clamp unchanged and Postgres rejects
+    // a non-integer `LIMIT` bound at execution time.
+    const limit = Math.trunc(
+      Math.max(
+        0,
+        Math.min(
+          Number.isFinite(requestedLimit)
+            ? (requestedLimit as number)
+            : EPISODIC_SEARCH_MAX_RESULTS,
+          EPISODIC_SEARCH_MAX_RESULTS,
+        ),
       ),
     )
     const requestedMaxOutputTokens = options.maxOutputTokens
@@ -1146,6 +1169,12 @@ export class PostgresMemoryProvider
     if (limit === 0 || maxOutputTokens === 0 || query.trim().length === 0) {
       return { matches: [], budgetExhausted: false }
     }
+    // Bound the raw input handed to plainto_tsquery so an oversized query
+    // cannot exhaust database resources (see EPISODIC_SEARCH_MAX_QUERY_LENGTH).
+    const boundedQuery =
+      query.length > EPISODIC_SEARCH_MAX_QUERY_LENGTH
+        ? query.slice(0, EPISODIC_SEARCH_MAX_QUERY_LENGTH)
+        : query
 
     interface MatchRow extends EpisodicEventRow {
       preceding_id: string | null
@@ -1169,16 +1198,16 @@ export class PostgresMemoryProvider
               scope.preceding_id, scope.following_id
        FROM scope, query
        WHERE scope.search_vector @@ query.terms
-       ORDER BY ts_rank_cd(scope.search_vector, query.terms) DESC, scope.occurred_at DESC
+       ORDER BY ts_rank_cd(scope.search_vector, query.terms) DESC, scope.occurred_at DESC, scope.id
        LIMIT $4`,
-      [providerId, context.projectId, query, limit],
+      [providerId, context.projectId, boundedQuery, limit],
     )
     if (matched.rows.length === 0) return { matches: [], budgetExhausted: false }
 
     const neighborIds = [
       ...new Set(
         matched.rows.flatMap((row) =>
-          [row.preceding_id, row.following_id].filter((id) => id !== null),
+          [row.preceding_id, row.following_id].filter((id): id is string => id !== null),
         ),
       ),
     ]
