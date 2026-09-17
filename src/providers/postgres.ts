@@ -4,6 +4,7 @@ import type { PostgresProviderConfig } from "../config.js"
 import {
   COMPACTION_ELIGIBILITY_DAYS,
   DEFAULT_CAPACITY_LIMITS,
+  DEFAULT_HARD_LIMIT_WARNING_THROTTLE_MS,
   bulkArtifactTargetBytes,
   capacityStatus,
   compactionLevelAtIndex,
@@ -13,6 +14,7 @@ import {
   type CapacityLimits,
   type CapacityStatus,
   type CompactionLevel,
+  type HardLimitWarning,
 } from "../capacity.js"
 import { looksLikeToolOutput, reduceBulkArtifact } from "../bulk-artifact-reduction.js"
 import type {
@@ -1861,6 +1863,61 @@ export class PostgresMemoryProvider
       ...(compaction !== undefined ? { compaction } : {}),
       ...(hardLimitEviction !== undefined ? { hardLimitEviction } : {}),
     }
+  }
+
+  /**
+   * TASK-062: session-start hard-limit capacity warning. No advisory lock
+   * is needed to enforce the throttle: firing is a single conditional
+   * `UPDATE ... WHERE (last_hard_limit_warning_at IS NULL OR ... elapsed)`
+   * that both tests and stamps `last_hard_limit_warning_at` atomically.
+   * Under READ COMMITTED, two concurrent session-start checks racing the
+   * same throttle window serialize on the row: the first UPDATE stamps
+   * `now()` and reports one affected row; the second blocks on the row
+   * lock, then re-evaluates its `WHERE` against the freshly committed
+   * timestamp, fails the throttle predicate, and reports zero affected
+   * rows -- so exactly one fires. The preceding read (`computeTotalBytes`)
+   * only feeds the informational byte counts in the returned warning; it
+   * has no bearing on the throttle decision, so it needs no serialization
+   * with the UPDATE.
+   *
+   * The throttle-elapsed decision is evaluated inside that single SQL
+   * `UPDATE ... WHERE ...` using Postgres's own `now()` throughout, rather
+   * than reading `last_hard_limit_warning_at` back into Node and comparing
+   * it against a Node-side `new Date()` (`capacity.ts`'s
+   * `shouldFireHardLimitWarning` is the pure reference spec for this
+   * decision, useful for unit testing the intended behavior in isolation,
+   * but is deliberately not called with a cross-clock timestamp here) --
+   * mixing a Node process clock with a Postgres-server-stored timestamp
+   * would make the throttle boundary sensitive to clock skew between the
+   * two, which is avoidable by keeping the whole comparison on one clock.
+   */
+  async checkHardLimitWarning(
+    providerId: string,
+    projectId: string,
+    options: { limits?: CapacityLimits; throttleMs?: number } = {},
+  ): Promise<HardLimitWarning | undefined> {
+    const limits = options.limits ?? DEFAULT_CAPACITY_LIMITS
+    const throttleMs = options.throttleMs ?? DEFAULT_HARD_LIMIT_WARNING_THROTTLE_MS
+    const totalBytes = await this.computeTotalBytes(providerId, projectId, this.pool)
+    if (totalBytes <= limits.hardLimitBytes) return undefined
+
+    await this.pool.query(
+      `INSERT INTO remem.capacity_state (provider_id, project_id)
+       VALUES ($1, $2)
+       ON CONFLICT (provider_id, project_id) DO NOTHING`,
+      [providerId, projectId],
+    )
+
+    const fired = await this.pool.query(
+      `UPDATE remem.capacity_state
+       SET last_hard_limit_warning_at = now(), updated_at = now()
+       WHERE provider_id = $1 AND project_id = $2
+         AND (last_hard_limit_warning_at IS NULL
+              OR last_hard_limit_warning_at <= now() - ($3 || ' milliseconds')::interval)`,
+      [providerId, projectId, throttleMs],
+    )
+    if (!fired.rowCount) return undefined
+    return { totalBytes, hardLimitBytes: limits.hardLimitBytes }
   }
 
   async listCandidates(status?: CandidateMemory["status"]): Promise<CandidateReviewItem[]> {

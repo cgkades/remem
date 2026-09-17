@@ -8,7 +8,7 @@ import type {
 } from "./correction.js"
 import { MemoryDiagnostics } from "./diagnostics.js"
 import { institutionalApplies, institutionalReviewStatus } from "./institutional.js"
-import { isObservationStore } from "./observation.js"
+import { isCapacityStore, isObservationStore } from "./observation.js"
 import { DeterministicRetrievalPlanner } from "./planner.js"
 import { SemanticCatalogRecognizer, type SemanticRecognitionResult } from "./planning/semantic.js"
 import { RecallEngine } from "./recall.js"
@@ -27,6 +27,17 @@ import type {
 } from "./types.js"
 
 const NOOP_LOGGER: RememLogger = { log: () => undefined }
+
+/**
+ * TASK-062: a deliberately small, fixed timeout for the session-start
+ * hard-limit capacity check -- distinct from `config.providerTimeoutMs`
+ * (the general per-provider budget catalog/recall/health checks reuse).
+ * This check is purely advisory (a missed/slow check just means the
+ * warning silently doesn't fire this time, never a functional regression),
+ * so it must fail fast rather than hold up every session-start response by
+ * up to the full general provider timeout whenever a provider is slow.
+ */
+const CAPACITY_WARNING_TIMEOUT_MS = 300
 
 function emptyPlan(): RetrievalPlan {
   return {
@@ -325,8 +336,10 @@ export class RememOrchestrator {
       }
       this.diagnostics.record(trace, "dispatch", turnId)
       this.logTrace(trace)
+      const capacityNotice = turnId === "1" ? await this.hardLimitWarningNotice(context) : ""
+      const bodyText = synthesis.text ? `${catalog.text}\n\n${synthesis.text}` : catalog.text
       return {
-        text: synthesis.text ? `${catalog.text}\n\n${synthesis.text}` : catalog.text,
+        text: capacityNotice ? `${bodyText}\n\n${capacityNotice}` : bodyText,
         catalogText: catalog.text,
         memoryText: synthesis.text,
         plan,
@@ -589,6 +602,59 @@ export class RememOrchestrator {
       )
       return this.fallbackSynthesizer.synthesize(topics, memories)
     }
+  }
+
+  /**
+   * TASK-062: session-start hard-limit capacity warning. Called only at
+   * session start (`processPrompt`'s `turnId === "1"`) -- see that call
+   * site. Checks every provider that implements `CapacityStore` for
+   * `context.projectId`; a provider with no capacity data, one that isn't
+   * a `CapacityStore`, or one whose check fails/times out is silently
+   * skipped (a capacity-warning failure must never break the recall
+   * pipeline). Returns a bounded, body-free notice per over-hard-limit
+   * provider -- byte counts only, never any evidence content -- or an
+   * empty string if nothing fired (either nothing is over the hard limit,
+   * or the per-scope throttle suppressed a repeat). Never checked for or
+   * fires on soft-limit pressure alone; `CapacityStore.checkHardLimitWarning`
+   * itself only ever compares against the hard limit.
+   *
+   * The exact cadence (session-start gated by a throttle interval, and
+   * that interval's value) is a disclosed, provisional default -- see
+   * `capacity.ts`'s `DEFAULT_HARD_LIMIT_WARNING_THROTTLE_MS` doc comment.
+   * The plan's own task description calls this out as needing maintainer
+   * confirmation before shipping as a real default.
+   */
+  private async hardLimitWarningNotice(context: MemoryContext): Promise<string> {
+    const notices = (
+      await Promise.all(
+        this.providers.map(async (provider) => {
+          if (!isCapacityStore(provider)) return undefined
+          try {
+            const warning = await withTimeout(CAPACITY_WARNING_TIMEOUT_MS, () =>
+              provider.checkHardLimitWarning(provider.id, context.projectId),
+            )
+            if (!warning) return undefined
+            return (
+              `Provider "${provider.id}" is over its configured hard capacity limit ` +
+              `(${warning.totalBytes} of ${warning.hardLimitBytes} bytes). Older evidence may be ` +
+              `automatically compacted or removed to free space.`
+            )
+          } catch (error) {
+            // Fail open: a capacity-warning failure (timeout, query error)
+            // must never break recall. Log at debug so the swallowed cause
+            // is still observable when diagnosing a missing warning.
+            safeLog(this.logger, "debug", "capacity.warning_check_failed", {
+              provider: provider.id,
+              error: error instanceof Error ? error.name : "unknown error",
+            })
+            return undefined
+          }
+        }),
+      )
+    ).filter((notice): notice is string => notice !== undefined)
+
+    if (notices.length === 0) return ""
+    return ["<memory-capacity-notice>", ...notices, "</memory-capacity-notice>"].join("\n")
   }
 
   private logTrace(trace: MemoryTrace): void {

@@ -10,6 +10,7 @@ import {
   compactionLevelIndex,
   decideEscalation,
   narrativeTargetBytes,
+  shouldFireHardLimitWarning,
   type CapacityLimits,
   type EscalationState,
 } from "../src/capacity.js"
@@ -152,5 +153,40 @@ describe("decideEscalation", () => {
   it("a worsening (growing) total also counts as non-improvement, not just a flat total", () => {
     const decision = decideEscalation(state({ previousTotalBytes: 1000 }), 1_500)
     expect(decision.consecutiveNoImprovement).toBe(1)
+  })
+})
+
+describe("shouldFireHardLimitWarning", () => {
+  const now = new Date("2026-09-16T12:00:00.000Z")
+  const hardLimitBytes = 1000
+
+  it("never fires when at or under the hard limit, regardless of throttle state", () => {
+    expect(shouldFireHardLimitWarning(1000, hardLimitBytes, undefined, now)).toBe(false)
+    expect(shouldFireHardLimitWarning(500, hardLimitBytes, undefined, now)).toBe(false)
+  })
+
+  it("fires the first time a scope crosses the hard limit (never warned before)", () => {
+    expect(shouldFireHardLimitWarning(1001, hardLimitBytes, undefined, now)).toBe(true)
+  })
+
+  it("does not fire again within the throttle window after a recent warning", () => {
+    const lastWarnedAt = new Date(now.getTime() - 60 * 60 * 1000) // 1 hour ago
+    expect(
+      shouldFireHardLimitWarning(1001, hardLimitBytes, lastWarnedAt, now, 24 * 60 * 60 * 1000),
+    ).toBe(false)
+  })
+
+  it("fires again once the throttle window has fully elapsed", () => {
+    const lastWarnedAt = new Date(now.getTime() - 25 * 60 * 60 * 1000) // 25 hours ago
+    expect(
+      shouldFireHardLimitWarning(1001, hardLimitBytes, lastWarnedAt, now, 24 * 60 * 60 * 1000),
+    ).toBe(true)
+  })
+
+  it("is a boundary, not an off-by-one -- exactly at the throttle interval fires", () => {
+    const lastWarnedAt = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+    expect(
+      shouldFireHardLimitWarning(1001, hardLimitBytes, lastWarnedAt, now, 24 * 60 * 60 * 1000),
+    ).toBe(true)
   })
 })
