@@ -32,6 +32,9 @@ import type {
   EpisodicSearchOptions,
   EpisodicSearchResult,
   EpisodicSearchStore,
+  ForgetConfirmation,
+  ForgetPreview,
+  ForgetStore,
   HardLimitEvictionReport,
   SessionObservation,
 } from "../observation.js"
@@ -39,6 +42,7 @@ import {
   EPISODIC_SEARCH_MAX_NEIGHBORS_PER_SIDE,
   EPISODIC_SEARCH_MAX_OUTPUT_TOKENS,
   EPISODIC_SEARCH_MAX_RESULTS,
+  FORGET_PREVIEW_TTL_MS,
 } from "../observation.js"
 import {
   EVIDENCE_KINDS,
@@ -58,6 +62,7 @@ import {
   validateInstitutionalMemory,
 } from "../institutional.js"
 import { PostgresReembedRunner } from "../reembedding.js"
+import { FORGET_RESTORE_ADVISORY_LOCK } from "../forget.js"
 import { LocalHashEmbeddingModel, vectorLiteral } from "../storage/embedding.js"
 import { EMBEDDING_DIMENSIONS } from "../storage/embedding-model-ids.js"
 import { estimateTokens, truncateToTokens } from "../token-budget.js"
@@ -90,6 +95,7 @@ import type {
  */
 const COMPACTION_BATCH_SIZE = 500
 const HARD_LIMIT_BATCH_SIZE = 1000
+const EVIDENCE_ID_PATTERN = /^[a-f0-9]{64}$/u
 
 interface MemoryRow extends QueryResultRow {
   id: string
@@ -116,6 +122,32 @@ interface MemoryRow extends QueryResultRow {
   provenance?: MemoryProvenance[]
   entities?: MemoryEntity[]
   relationships?: MemoryRelationship[]
+}
+
+interface ForgetPreviewRow extends QueryResultRow {
+  id: string
+  provider_id: string
+  project_id: string
+  evidence_id: string
+  session_event_id: string
+  candidate_ids: string[]
+  created_at: Date
+  expires_at: Date
+  confirmed_at: Date | null
+}
+
+function forgetPreviewFromRow(row: ForgetPreviewRow): ForgetPreview {
+  return {
+    id: row.id,
+    providerId: row.provider_id,
+    projectId: row.project_id,
+    evidenceId: row.evidence_id,
+    episodeCount: 1,
+    candidateCount: row.candidate_ids.length,
+    semanticMemoryCount: 0,
+    createdAt: row.created_at.toISOString(),
+    expiresAt: row.expires_at.toISOString(),
+  }
 }
 
 /** Phase 3 (TASK-010): the columns `appendEvidence`/`readEvidence` (and TASK-011's search) read back from `remem.session_events` for the evidence-admission path. Only rows with `evidence_id IS NOT NULL` are ever selected into this shape. */
@@ -406,7 +438,7 @@ const BASE_SELECT = `
 `
 
 export class PostgresMemoryProvider
-  implements MemoryProvider, CandidateReviewStore, EpisodicSearchStore, CapacityStore
+  implements MemoryProvider, CandidateReviewStore, EpisodicSearchStore, CapacityStore, ForgetStore
 {
   readonly id: string
   private readonly pool: Pool
@@ -1033,44 +1065,60 @@ export class PostgresMemoryProvider
       throw new TypeError(`invalid evidence kind: ${envelope.kind}`)
     }
 
-    const client = await this.pool.connect()
-    try {
-      if (options.timeoutMs) {
-        await client.query("SELECT set_config('statement_timeout', $1, true)", [
-          String(options.timeoutMs),
-        ])
-      }
-      options.signal?.throwIfAborted()
+    return this.withEvidenceIdentityLock(
+      envelope.providerId,
+      envelope.context.projectId,
+      envelope.id,
+      async (client) => {
+        if (options.timeoutMs) {
+          await client.query("SELECT set_config('statement_timeout', $1, true)", [
+            String(options.timeoutMs),
+          ])
+        }
+        options.signal?.throwIfAborted()
 
-      const insertParams = [
-        sessionId,
-        envelope.context.projectId,
-        envelope.kind,
-        envelope.occurredAt,
-        JSON.stringify(envelope.payload.metadata ?? {}),
-        envelope.providerId,
-        envelope.host,
-        envelope.role,
-        envelope.origin,
-        envelope.turnId ?? null,
-        envelope.messageId ?? null,
-        envelope.payload.text ?? null,
-        JSON.stringify(envelope.evidenceRefs),
-        envelope.id,
-        envelope.contentHash,
-        envelope.schemaVersion,
-      ]
+        // A privacy tombstone wins over every append path, including a host
+        // replay arriving after the original event was forgotten. The same
+        // identity-scoped advisory lock used by `confirmForget` closes the
+        // read-then-insert race with that confirmation transaction.
+        const tombstone = await client.query(
+          `SELECT 1
+         FROM remem.forget_tombstones
+         WHERE provider_id = $1 AND project_id = $2
+           AND target_kind = 'evidence' AND target_id = $3`,
+          [envelope.providerId, envelope.context.projectId, envelope.id],
+        )
+        if (tombstone.rows[0]) return { outcome: "forgotten", id: envelope.id }
 
-      // At most one retry: TASK-012's enforceHardLimit can now genuinely
-      // DELETE a session_events row (this table previously had no
-      // DELETE/UPDATE path at all when this logic was first written). If
-      // a conflicting row is concurrently evicted between this INSERT's
-      // conflict detection and the follow-up SELECT below, the identity
-      // slot is now free -- a second INSERT attempt should simply
-      // succeed as a fresh append, not be misreported as an anomaly.
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const inserted = await client.query<{ id: string }>(
-          `INSERT INTO remem.session_events
+        const insertParams = [
+          sessionId,
+          envelope.context.projectId,
+          envelope.kind,
+          envelope.occurredAt,
+          JSON.stringify(envelope.payload.metadata ?? {}),
+          envelope.providerId,
+          envelope.host,
+          envelope.role,
+          envelope.origin,
+          envelope.turnId ?? null,
+          envelope.messageId ?? null,
+          envelope.payload.text ?? null,
+          JSON.stringify(envelope.evidenceRefs),
+          envelope.id,
+          envelope.contentHash,
+          envelope.schemaVersion,
+        ]
+
+        // At most one retry: TASK-012's enforceHardLimit can now genuinely
+        // DELETE a session_events row (this table previously had no
+        // DELETE/UPDATE path at all when this logic was first written). If
+        // a conflicting row is concurrently evicted between this INSERT's
+        // conflict detection and the follow-up SELECT below, the identity
+        // slot is now free -- a second INSERT attempt should simply
+        // succeed as a fresh append, not be misreported as an anomaly.
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const inserted = await client.query<{ id: string }>(
+            `INSERT INTO remem.session_events
              (id, session_id, project_id, kind, occurred_at, payload,
               provider_id, host, role, origin, turn_id, message_id, safe_text,
               evidence_refs, evidence_id, content_hash, schema_version)
@@ -1079,43 +1127,191 @@ export class PostgresMemoryProvider
                    $14::jsonb,$15,$16,$17)
            ON CONFLICT (provider_id, project_id, evidence_id) WHERE evidence_id IS NOT NULL DO NOTHING
            RETURNING id`,
-          [randomUUID(), ...insertParams],
-        )
-        if (inserted.rows[0]) return { outcome: "appended", id: envelope.id }
-
-        // The unique (provider_id, project_id, evidence_id) index rejected the
-        // insert: this is either an exact replay (duplicate, a no-op) or a
-        // genuine collision (same identity, different evidence) --
-        // distinguished by comparing content_hash, never by re-deriving or
-        // trusting the new envelope's own claim.
-        const existing = await client.query<{ content_hash: string | null }>(
-          `SELECT content_hash FROM remem.session_events
-           WHERE provider_id = $1 AND project_id = $2 AND evidence_id = $3`,
-          [envelope.providerId, envelope.context.projectId, envelope.id],
-        )
-        const existingRow = existing.rows[0]
-        if (!existingRow) {
-          if (attempt === 0) continue // retry once -- see comment above
-          // Still missing after a retry: this is no longer explainable by
-          // the single-DELETE race the retry exists for (a second
-          // eviction landing in the exact same narrow window, on the very
-          // row this call itself just tried to (re)insert, would be an
-          // extraordinary coincidence) -- surface it distinctly rather
-          // than silently mislabeling a genuine data-integrity anomaly as
-          // ordinary identity contention.
-          throw new Error(
-            `episodic evidence conflict reported for ${envelope.providerId}/${envelope.id}, but no conflicting row could be read back after a retry`,
+            [randomUUID(), ...insertParams],
           )
+          if (inserted.rows[0]) return { outcome: "appended", id: envelope.id }
+
+          // The unique (provider_id, project_id, evidence_id) index rejected the
+          // insert: this is either an exact replay (duplicate, a no-op) or a
+          // genuine collision (same identity, different evidence) --
+          // distinguished by comparing content_hash, never by re-deriving or
+          // trusting the new envelope's own claim.
+          const existing = await client.query<{ content_hash: string | null }>(
+            `SELECT content_hash FROM remem.session_events
+           WHERE provider_id = $1 AND project_id = $2 AND evidence_id = $3`,
+            [envelope.providerId, envelope.context.projectId, envelope.id],
+          )
+          const existingRow = existing.rows[0]
+          if (!existingRow) {
+            if (attempt === 0) continue // retry once -- see comment above
+            // Still missing after a retry: this is no longer explainable by
+            // the single-DELETE race the retry exists for (a second
+            // eviction landing in the exact same narrow window, on the very
+            // row this call itself just tried to (re)insert, would be an
+            // extraordinary coincidence) -- surface it distinctly rather
+            // than silently mislabeling a genuine data-integrity anomaly as
+            // ordinary identity contention.
+            throw new Error(
+              `episodic evidence conflict reported for ${envelope.providerId}/${envelope.id}, but no conflicting row could be read back after a retry`,
+            )
+          }
+          const outcome =
+            existingRow.content_hash === envelope.contentHash ? "duplicate" : "collision"
+          return { outcome, id: envelope.id }
         }
-        const outcome =
-          existingRow.content_hash === envelope.contentHash ? "duplicate" : "collision"
-        return { outcome, id: envelope.id }
+        /* istanbul ignore next -- the loop above always returns or throws within its two iterations. */
+        throw new Error("unreachable: appendEvidence retry loop exited without returning")
+      },
+    )
+  }
+
+  /**
+   * TASK-013's non-destructive half. This stores a short-lived, body-free
+   * preview of exactly one scoped episode and the candidates directly linked
+   * to it. Semantic memories, embeddings, and catalog entries are explicitly
+   * excluded: before Phase 4's durable association ledger, this provider
+   * cannot prove any semantic record has no independent supporting evidence.
+   */
+  async previewForget(
+    providerId: string,
+    evidenceId: string,
+    projectId: string,
+  ): Promise<ForgetPreview | undefined> {
+    if (providerId !== this.id || !EVIDENCE_ID_PATTERN.test(evidenceId)) return undefined
+    return this.withEvidenceIdentityLock(providerId, projectId, evidenceId, async (client) => {
+      await client.query("DELETE FROM remem.forget_previews WHERE expires_at <= now()")
+      const event = await client.query<{ id: string }>(
+        `SELECT id
+         FROM remem.session_events
+         WHERE provider_id = $1 AND project_id = $2 AND evidence_id = $3
+         FOR SHARE`,
+        [providerId, projectId, evidenceId],
+      )
+      const sessionEventId = event.rows[0]?.id
+      if (!sessionEventId) return undefined
+      const candidates = await client.query<{ id: string }>(
+        `SELECT id
+         FROM remem.candidate_memories
+         WHERE session_event_id = $1
+         ORDER BY id`,
+        [sessionEventId],
+      )
+      const preview = await client.query<ForgetPreviewRow>(
+        `INSERT INTO remem.forget_previews
+           (id, provider_id, project_id, evidence_id, session_event_id, candidate_ids, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6::uuid[], now() + ($7::bigint * interval '1 millisecond'))
+         RETURNING id, provider_id, project_id, evidence_id, session_event_id, candidate_ids,
+                   created_at, expires_at, confirmed_at`,
+        [
+          randomUUID(),
+          providerId,
+          projectId,
+          evidenceId,
+          sessionEventId,
+          candidates.rows.map((candidate) => candidate.id),
+          FORGET_PREVIEW_TTL_MS,
+        ],
+      )
+      return forgetPreviewFromRow(preview.rows[0]!)
+    })
+  }
+
+  /**
+   * TASK-013's destructive half. The opaque preview id is locked and consumed
+   * in one transaction. A changed direct-candidate set invalidates the
+   * preview rather than extending human confirmation to data that was not
+   * shown in it. Every tombstone remains body-free and blocks host replay.
+   */
+  async confirmForget(previewId: string): Promise<ForgetConfirmation> {
+    if (!UUID_PATTERN.test(previewId)) throw new TypeError("forget preview id must be a UUID")
+    return this.withForgetRestoreLock(async (client) => {
+      const lookup = await client.query<
+        Pick<ForgetPreviewRow, "provider_id" | "project_id" | "evidence_id">
+      >(
+        `SELECT provider_id, project_id, evidence_id
+         FROM remem.forget_previews
+         WHERE id = $1 AND confirmed_at IS NULL AND expires_at > now()`,
+        [previewId],
+      )
+      const scope = lookup.rows[0]
+      if (!scope || scope.provider_id !== this.id) {
+        throw new Error("forget preview is unavailable or expired")
       }
-      /* istanbul ignore next -- the loop above always returns or throws within its two iterations. */
-      throw new Error("unreachable: appendEvidence retry loop exited without returning")
-    } finally {
-      client.release()
-    }
+      return this.withEvidenceIdentityLockOnClient(
+        client,
+        scope.provider_id,
+        scope.project_id,
+        scope.evidence_id,
+        async () => {
+          await client.query("BEGIN")
+          try {
+            const preview = await client.query<ForgetPreviewRow>(
+              `SELECT id, provider_id, project_id, evidence_id, session_event_id, candidate_ids,
+                    created_at, expires_at, confirmed_at
+             FROM remem.forget_previews
+             WHERE id = $1 AND confirmed_at IS NULL AND expires_at > now()
+             FOR UPDATE`,
+              [previewId],
+            )
+            const row = preview.rows[0]
+            if (!row || row.provider_id !== this.id) {
+              throw new Error("forget preview is unavailable or expired")
+            }
+            const additionalCandidates = await client.query<{ id: string }>(
+              `SELECT id
+             FROM remem.candidate_memories
+             WHERE session_event_id = $1 AND NOT (id = ANY($2::uuid[]))
+             LIMIT 1`,
+              [row.session_event_id, row.candidate_ids],
+            )
+            if (additionalCandidates.rows[0]) {
+              throw new Error("forget preview changed; request a new preview before confirming")
+            }
+            const deletedCandidates = await client.query<{ id: string }>(
+              `DELETE FROM remem.candidate_memories
+             WHERE id = ANY($1::uuid[])
+             RETURNING id`,
+              [row.candidate_ids],
+            )
+            const deletedEvent = await client.query<{ id: string }>(
+              `DELETE FROM remem.session_events
+             WHERE id = $1 AND provider_id = $2 AND project_id = $3 AND evidence_id = $4
+             RETURNING id`,
+              [row.session_event_id, row.provider_id, row.project_id, row.evidence_id],
+            )
+            await client.query(
+              `INSERT INTO remem.forget_tombstones
+               (provider_id, project_id, target_kind, target_id, preview_id)
+             VALUES ($1, $2, 'evidence', $3, $4)
+             ON CONFLICT (provider_id, project_id, target_kind, target_id) DO NOTHING`,
+              [row.provider_id, row.project_id, row.evidence_id, row.id],
+            )
+            for (const candidateId of row.candidate_ids) {
+              await client.query(
+                `INSERT INTO remem.forget_tombstones
+                 (provider_id, project_id, target_kind, target_id, preview_id)
+               VALUES ($1, $2, 'candidate', $3, $4)
+               ON CONFLICT (provider_id, project_id, target_kind, target_id) DO NOTHING`,
+                [row.provider_id, row.project_id, candidateId, row.id],
+              )
+            }
+            await client.query(
+              "UPDATE remem.forget_previews SET confirmed_at = now() WHERE id = $1",
+              [row.id],
+            )
+            await client.query("COMMIT")
+            return {
+              previewId: row.id,
+              evidenceDeleted: Boolean(deletedEvent.rows[0]),
+              candidatesDeleted: deletedCandidates.rowCount ?? 0,
+            }
+          } catch (error) {
+            await client.query("ROLLBACK")
+            throw error
+          }
+        },
+      )
+    })
   }
 
   /**
@@ -1305,6 +1501,64 @@ export class PostgresMemoryProvider
     if (matches.length < matched.rows.length) budgetExhausted = true
 
     return { matches, budgetExhausted }
+  }
+
+  /**
+   * TASK-013: serializes one evidence identity across preview, confirmation,
+   * and replay append. This is intentionally narrower than the capacity lock:
+   * ordinary appends for different evidence ids remain independent while an
+   * append for a forgotten id cannot race past the tombstone check.
+   */
+  private async withEvidenceIdentityLock<T>(
+    providerId: string,
+    projectId: string,
+    evidenceId: string,
+    fn: (client: PoolClient) => Promise<T>,
+  ): Promise<T> {
+    const client = await this.pool.connect()
+    try {
+      return await this.withEvidenceIdentityLockOnClient(
+        client,
+        providerId,
+        projectId,
+        evidenceId,
+        () => fn(client),
+      )
+    } finally {
+      client.release()
+    }
+  }
+
+  private async withEvidenceIdentityLockOnClient<T>(
+    client: PoolClient,
+    providerId: string,
+    projectId: string,
+    evidenceId: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const lockKey = `${providerId}\u0001${projectId}\u0001${evidenceId}`
+    await client.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [lockKey])
+    try {
+      return await fn()
+    } finally {
+      await client.query("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [lockKey])
+    }
+  }
+
+  /** Keeps a confirmation from landing between restore's tombstone snapshot
+   * and post-restore reapplication, which would otherwise resurrect data. */
+  private async withForgetRestoreLock<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect()
+    try {
+      await client.query("SELECT pg_advisory_lock($1)", [FORGET_RESTORE_ADVISORY_LOCK])
+      try {
+        return await fn(client)
+      } finally {
+        await client.query("SELECT pg_advisory_unlock($1)", [FORGET_RESTORE_ADVISORY_LOCK])
+      }
+    } finally {
+      client.release()
+    }
   }
 
   /**
