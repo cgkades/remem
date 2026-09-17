@@ -189,6 +189,60 @@ export function isForgetStore(value: unknown): value is ForgetStore {
   )
 }
 
+/** TASK-061's hard ceiling: callers may lower it, never enumerate an
+ * unbounded project history. Suggestions are identifiers and timestamps only,
+ * not an authorization or an instruction to remove anything. */
+export const SUPERSESSION_CANDIDATE_MAX_RESULTS = 100
+
+export interface SupersessionCandidate {
+  /** Older episode that a human may separately pass to TASK-013's forget preview. */
+  evidenceId: string
+  /** A newer same-project episode with a deterministic `decision` candidate. */
+  newerDecisionEvidenceId: string
+  /** One deterministic, scoped entity UUID explicitly linked to both events. */
+  sharedEntityId: string
+  occurredAt: string
+  newerDecisionOccurredAt: string
+  /** Fixed, deterministic reason code; no model-produced conclusion. */
+  reason: "newer-decision-shares-entity"
+}
+
+export interface EpisodicSupersessionStore extends EpisodicStore {
+  /**
+   * Associates admitted evidence with an existing project-scoped entity.
+   * This method never derives an entity from the evidence's text and returns
+   * false for unknown/foreign inputs without disclosing which was absent.
+   */
+  linkEvidenceEntity(
+    providerId: string,
+    evidenceId: string,
+    entityId: string,
+    projectId: string,
+  ): Promise<boolean>
+  /**
+   * Lists potential supersession only: older evidence sharing an explicit
+   * entity link with a newer event that has an approved/promoted `decision`
+   * candidate. A caller must still create
+   * and explicitly confirm a TASK-013 forget preview to remove anything.
+   */
+  listSupersessionCandidates(
+    providerId: string,
+    projectId: string,
+    options?: { limit?: number },
+  ): Promise<SupersessionCandidate[]>
+}
+
+export function isEpisodicSupersessionStore(value: unknown): value is EpisodicSupersessionStore {
+  return (
+    isEpisodicStore(value) &&
+    "linkEvidenceEntity" in value &&
+    typeof (value as { linkEvidenceEntity: unknown }).linkEvidenceEntity === "function" &&
+    "listSupersessionCandidates" in value &&
+    typeof (value as { listSupersessionCandidates: unknown }).listSupersessionCandidates ===
+      "function"
+  )
+}
+
 export function isEpisodicStore(value: unknown): value is EpisodicStore {
   return (
     typeof value === "object" &&

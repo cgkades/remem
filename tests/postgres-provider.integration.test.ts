@@ -101,8 +101,8 @@ integration("PostgreSQL managed provider", () => {
 
       const upgraded = await runMigrations(pool)
       expect(upgraded).toMatchObject({
-        applied: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-        currentVersion: 11,
+        applied: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        currentVersion: 12,
       })
       expect(
         (
@@ -121,7 +121,7 @@ integration("PostgreSQL managed provider", () => {
       ).toBeNull()
 
       const repeated = await runMigrations(pool)
-      expect(repeated).toMatchObject({ applied: [], currentVersion: 11 })
+      expect(repeated).toMatchObject({ applied: [], currentVersion: 12 })
 
       await copyFile(
         path.join(process.cwd(), "migrations/0002_consolidation_observation.sql"),
@@ -3983,7 +3983,13 @@ integration("PostgreSQL managed provider", () => {
       sessionId: "forget-session",
     }
 
-    async function appendForgetEvidence(provider: PostgresMemoryProvider, suffix: string) {
+    async function appendForgetEvidence(
+      provider: PostgresMemoryProvider,
+      suffix: string,
+      options: {
+        occurredAt?: string
+      } = {},
+    ) {
       const admitted = admitEvidence(
         {
           providerId: "forget-provider",
@@ -3994,7 +4000,7 @@ integration("PostgreSQL managed provider", () => {
           role: "user",
           origin: "direct-user",
           kind: "turn-completed",
-          occurredAt: "2026-09-17T00:00:00.000Z",
+          occurredAt: options.occurredAt ?? "2026-09-17T00:00:00.000Z",
           payload: { text: "private episode content that must not appear in a tombstone" },
         },
         { providerId: "forget-provider", host: "opencode-v2", projectId },
@@ -4143,6 +4149,152 @@ integration("PostgreSQL managed provider", () => {
           .query("SELECT pg_advisory_unlock($1)", [FORGET_RESTORE_ADVISORY_LOCK])
           .catch(() => undefined)
         lockClient.release()
+        await provider.dispose()
+      }
+    })
+
+    it("lists only deterministic same-entity proposals and leaves source evidence untouched until TASK-013 confirmation", async () => {
+      const provider = new PostgresMemoryProvider(forgetProviderConfig)
+      try {
+        const older = await appendForgetEvidence(provider, "supersession-older", {
+          occurredAt: "2026-09-10T00:00:00.000Z",
+        })
+        const newerDecision = await appendForgetEvidence(provider, "supersession-decision", {
+          occurredAt: "2026-09-11T00:00:00.000Z",
+        })
+        const newerNonDecision = await appendForgetEvidence(provider, "supersession-non-decision", {
+          occurredAt: "2026-09-12T00:00:00.000Z",
+        })
+        const entityId = randomUUID()
+        await pool.query(
+          `INSERT INTO remem.entities
+             (id, provider_id, scope_kind, scope_id, name, type)
+           VALUES ($1, 'forget-provider', 'project', $2, 'Remem migration', 'feature')`,
+          [entityId, projectId],
+        )
+        const newerDecisionEvent = await pool.query<{ id: string }>(
+          `SELECT id FROM remem.session_events
+           WHERE provider_id = 'forget-provider' AND project_id = $1 AND evidence_id = $2`,
+          [projectId, newerDecision.id],
+        )
+        await pool.query(
+          `INSERT INTO remem.candidate_memories
+             (id, session_event_id, type, title, content, scope_kind, scope_id, metadata)
+           VALUES ($1, $2, 'decision', 'Newer decision candidate', 'A candidate records a decision.',
+                   'project', $3, '{"providerId":"forget-provider"}'::jsonb)`,
+          [randomUUID(), newerDecisionEvent.rows[0]!.id, projectId],
+        )
+        await pool.query(
+          `UPDATE remem.candidate_memories
+           SET status = 'approved'
+           WHERE session_event_id = $1 AND type = 'decision'`,
+          [newerDecisionEvent.rows[0]!.id],
+        )
+        const lexicallyFirstEntityId = "00000000-0000-4000-8000-000000000001"
+        await pool.query(
+          `INSERT INTO remem.entities
+             (id, provider_id, scope_kind, scope_id, name, type)
+           VALUES ($1, 'forget-provider', 'project', $2, 'Earliest entity', 'feature')`,
+          [lexicallyFirstEntityId, projectId],
+        )
+        expect(
+          await provider.linkEvidenceEntity(
+            "forget-provider",
+            older.id,
+            lexicallyFirstEntityId,
+            projectId,
+          ),
+        ).toBe(true)
+        expect(
+          await provider.linkEvidenceEntity(
+            "forget-provider",
+            newerDecision.id,
+            lexicallyFirstEntityId,
+            projectId,
+          ),
+        ).toBe(true)
+        const rejectedDecisionEvent = await pool.query<{ id: string }>(
+          `SELECT id FROM remem.session_events
+           WHERE provider_id = 'forget-provider' AND project_id = $1 AND evidence_id = $2`,
+          [projectId, newerNonDecision.id],
+        )
+        await pool.query(
+          `INSERT INTO remem.candidate_memories
+             (id, session_event_id, type, title, content, scope_kind, scope_id, status, metadata)
+           VALUES ($1, $2, 'decision', 'Rejected decision candidate', 'Not a reviewed decision.',
+                   'project', $3, 'rejected', '{"providerId":"forget-provider"}'::jsonb)`,
+          [randomUUID(), rejectedDecisionEvent.rows[0]!.id, projectId],
+        )
+        expect(
+          await provider.linkEvidenceEntity("forget-provider", older.id, entityId, projectId),
+        ).toBe(true)
+        expect(
+          await provider.linkEvidenceEntity(
+            "forget-provider",
+            newerDecision.id,
+            entityId,
+            projectId,
+          ),
+        ).toBe(true)
+        expect(
+          await provider.linkEvidenceEntity(
+            "forget-provider",
+            newerNonDecision.id,
+            entityId,
+            projectId,
+          ),
+        ).toBe(true)
+        // Entity scope is checked in the SQL join; a project-scoped entity
+        // cannot link an episode from another project.
+        expect(
+          await provider.linkEvidenceEntity(
+            "forget-provider",
+            older.id,
+            entityId,
+            "foreign-project",
+          ),
+        ).toBe(false)
+
+        const candidates = await provider.listSupersessionCandidates("forget-provider", projectId)
+        expect(candidates).toEqual([
+          {
+            evidenceId: older.id,
+            newerDecisionEvidenceId: newerDecision.id,
+            sharedEntityId: lexicallyFirstEntityId,
+            occurredAt: "2026-09-10T00:00:00.000Z",
+            newerDecisionOccurredAt: "2026-09-11T00:00:00.000Z",
+            reason: "newer-decision-shares-entity",
+          },
+        ])
+        // Promoted retains its reviewed decision signal; pending does not.
+        await pool.query(
+          `UPDATE remem.candidate_memories
+           SET status = 'promoted'
+           WHERE session_event_id = $1 AND type = 'decision'`,
+          [newerDecisionEvent.rows[0]!.id],
+        )
+        await pool.query(
+          `UPDATE remem.candidate_memories
+           SET status = 'pending'
+           WHERE session_event_id = $1 AND type = 'decision'`,
+          [rejectedDecisionEvent.rows[0]!.id],
+        )
+        expect(await provider.listSupersessionCandidates("forget-provider", projectId)).toEqual(
+          candidates,
+        )
+        expect(
+          await provider.listSupersessionCandidates("forget-provider", "foreign-project"),
+        ).toEqual([])
+        expect(
+          await provider.readEvidence("forget-provider", older.id, forgetContext),
+        ).toBeDefined()
+        // A TASK-061 suggestion still requires a separate TASK-013 preview
+        // and confirmation. Creating that preview changes no source evidence.
+        expect(await provider.previewForget("forget-provider", older.id, projectId)).toBeDefined()
+        expect(
+          await provider.readEvidence("forget-provider", older.id, forgetContext),
+        ).toBeDefined()
+      } finally {
         await provider.dispose()
       }
     })

@@ -261,6 +261,37 @@ describe("CLI provisioning", () => {
     expect(errors.join("\n")).not.toContain("secret")
   })
 
+  it("requires an explicit project before listing supersession candidates", async () => {
+    const paths = await temporaryPaths()
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: "postgres://user:secret@localhost/remem" },
+      providers: [
+        {
+          type: "postgres",
+          id: "primary",
+          connectionString: "postgres://user:secret@localhost/remem",
+          primary: true,
+          maxConnections: 1,
+          catalogLimit: 10,
+        },
+      ],
+      embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
+    }
+    await writeAppConfig(config, paths)
+    const errors: string[] = []
+
+    const code = await runCli(["supersession-candidates"], {
+      paths,
+      stdout: () => undefined,
+      stderr: (line) => errors.push(line),
+    })
+
+    expect(code).toBe(1)
+    expect(errors.join("\n")).toContain("requires a non-empty, NUL-free --project")
+    expect(errors.join("\n")).not.toContain("secret")
+  })
+
   it("rejects an invalid candidate status before connecting to PostgreSQL", async () => {
     const paths = await temporaryPaths()
     const config: RememAppConfig = {
