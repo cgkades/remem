@@ -1407,9 +1407,10 @@ export class PostgresMemoryProvider
   ): Promise<SupersessionCandidate[]> {
     if (providerId !== this.id) return []
     const requestedLimit = options.limit
-    const limit = Number.isFinite(requestedLimit)
-      ? Math.max(1, Math.min(SUPERSESSION_CANDIDATE_MAX_RESULTS, Math.floor(requestedLimit!)))
-      : SUPERSESSION_CANDIDATE_MAX_RESULTS
+    const limit =
+      requestedLimit !== undefined && Number.isFinite(requestedLimit)
+        ? Math.max(1, Math.min(SUPERSESSION_CANDIDATE_MAX_RESULTS, Math.floor(requestedLimit)))
+        : SUPERSESSION_CANDIDATE_MAX_RESULTS
     const result = await this.pool.query<SupersessionCandidateRow>(
       `SELECT older.evidence_id, newer.evidence_id AS newer_decision_evidence_id,
               min(older_link.entity_id::text) AS shared_entity_id,
