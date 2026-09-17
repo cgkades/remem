@@ -954,14 +954,42 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
 
     const client = await this.pool.connect()
     try {
+      // A local statement_timeout only survives inside an explicit
+      // transaction (set_config is_local => true is transaction-scoped); in
+      // autocommit each statement is its own transaction and the setting is
+      // discarded before it can take effect. Wrap the INSERT and the fallback
+      // SELECT in one BEGIN/COMMIT so the timeout is honored and the two
+      // statements observe a single, consistent snapshot -- mirroring
+      // persistCandidate.
+      await client.query("BEGIN")
       if (options.timeoutMs) {
         await client.query("SELECT set_config('statement_timeout', $1, true)", [
           String(options.timeoutMs),
         ])
       }
       options.signal?.throwIfAborted()
-      const inserted = await client.query<{ id: string }>(
-        `INSERT INTO remem.session_events
+      const result = await this.appendEvidenceInTransaction(client, envelope, sessionId)
+      await client.query("COMMIT")
+      return result
+    } catch (error) {
+      await client.query("ROLLBACK")
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
+  /**
+   * Body of {@link appendEvidence}, run inside the caller's open transaction.
+   * Returns the append outcome; the caller commits before returning it.
+   */
+  private async appendEvidenceInTransaction(
+    client: PoolClient,
+    envelope: EvidenceEnvelope,
+    sessionId: string,
+  ): Promise<EpisodicAppendResult> {
+    const inserted = await client.query<{ id: string }>(
+      `INSERT INTO remem.session_events
            (id, session_id, project_id, kind, occurred_at, payload,
             provider_id, host, role, origin, turn_id, message_id, safe_text,
             evidence_refs, evidence_id, content_hash, schema_version)
@@ -970,56 +998,53 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
                  $14::jsonb,$15,$16,$17)
          ON CONFLICT (provider_id, project_id, evidence_id) WHERE evidence_id IS NOT NULL DO NOTHING
          RETURNING id`,
-        [
-          randomUUID(),
-          sessionId,
-          envelope.context.projectId,
-          envelope.kind,
-          envelope.occurredAt,
-          JSON.stringify(envelope.payload.metadata ?? {}),
-          envelope.providerId,
-          envelope.host,
-          envelope.role,
-          envelope.origin,
-          envelope.turnId ?? null,
-          envelope.messageId ?? null,
-          envelope.payload.text ?? null,
-          JSON.stringify(envelope.evidenceRefs),
-          envelope.id,
-          envelope.contentHash,
-          envelope.schemaVersion,
-        ],
-      )
-      if (inserted.rows[0]) return { outcome: "appended", id: envelope.id }
+      [
+        randomUUID(),
+        sessionId,
+        envelope.context.projectId,
+        envelope.kind,
+        envelope.occurredAt,
+        JSON.stringify(envelope.payload.metadata ?? {}),
+        envelope.providerId,
+        envelope.host,
+        envelope.role,
+        envelope.origin,
+        envelope.turnId ?? null,
+        envelope.messageId ?? null,
+        envelope.payload.text ?? null,
+        JSON.stringify(envelope.evidenceRefs),
+        envelope.id,
+        envelope.contentHash,
+        envelope.schemaVersion,
+      ],
+    )
+    if (inserted.rows[0]) return { outcome: "appended", id: envelope.id }
 
-      // The unique (provider_id, project_id, evidence_id) index rejected the
-      // insert: this is either an exact replay (duplicate, a no-op) or a
-      // genuine collision (same identity, different evidence) --
-      // distinguished by comparing content_hash, never by re-deriving or
-      // trusting the new envelope's own claim.
-      const existing = await client.query<{ content_hash: string | null }>(
-        `SELECT content_hash FROM remem.session_events
+    // The unique (provider_id, project_id, evidence_id) index rejected the
+    // insert: this is either an exact replay (duplicate, a no-op) or a
+    // genuine collision (same identity, different evidence) --
+    // distinguished by comparing content_hash, never by re-deriving or
+    // trusting the new envelope's own claim.
+    const existing = await client.query<{ content_hash: string | null }>(
+      `SELECT content_hash FROM remem.session_events
          WHERE provider_id = $1 AND project_id = $2 AND evidence_id = $3`,
-        [envelope.providerId, envelope.context.projectId, envelope.id],
+      [envelope.providerId, envelope.context.projectId, envelope.id],
+    )
+    const existingRow = existing.rows[0]
+    if (!existingRow) {
+      // The INSERT reported a conflict, but the conflicting row is now
+      // missing under READ COMMITTED, at which point the conflicting
+      // row is guaranteed already committed and visible to this SELECT.
+      // remem.session_events has no DELETE/UPDATE code path today, so
+      // this branch should be unreachable; treating it as an unlabeled
+      // "collision" would silently misreport a data-integrity anomaly as
+      // ordinary identity contention. Surface it distinctly instead.
+      throw new Error(
+        `episodic evidence conflict reported for ${envelope.providerId}/${envelope.id}, but no conflicting row could be read back`,
       )
-      const existingRow = existing.rows[0]
-      if (!existingRow) {
-        // The INSERT reported a conflict, but the conflicting row is now
-        // missing under READ COMMITTED, at which point the conflicting
-        // row is guaranteed already committed and visible to this SELECT.
-        // remem.session_events has no DELETE/UPDATE code path today, so
-        // this branch should be unreachable; treating it as an unlabeled
-        // "collision" would silently misreport a data-integrity anomaly as
-        // ordinary identity contention. Surface it distinctly instead.
-        throw new Error(
-          `episodic evidence conflict reported for ${envelope.providerId}/${envelope.id}, but no conflicting row could be read back`,
-        )
-      }
-      const outcome = existingRow.content_hash === envelope.contentHash ? "duplicate" : "collision"
-      return { outcome, id: envelope.id }
-    } finally {
-      client.release()
     }
+    const outcome = existingRow.content_hash === envelope.contentHash ? "duplicate" : "collision"
+    return { outcome, id: envelope.id }
   }
 
   /**
