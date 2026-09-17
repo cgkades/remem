@@ -113,9 +113,17 @@ export function compactionLevelAtIndex(index: number): CompactionLevel {
   return COMPACTION_LEVELS[clamped]!
 }
 
+/**
+ * Caller-supplied limits. Invariants the policy assumes but does not itself
+ * enforce (caller responsibility): both values are positive and
+ * `softLimitBytes <= hardLimitBytes`. A configuration that inverts them
+ * (hard below soft) or uses a near-zero hard limit is not rejected here --
+ * it simply produces the literal behavior of those numbers (e.g. eviction
+ * triggering as soon as anything is stored).
+ */
 export interface CapacityLimits {
-  softLimitBytes: number
-  hardLimitBytes: number
+  readonly softLimitBytes: number
+  readonly hardLimitBytes: number
 }
 
 export const DEFAULT_CAPACITY_LIMITS: CapacityLimits = {
@@ -124,11 +132,11 @@ export const DEFAULT_CAPACITY_LIMITS: CapacityLimits = {
 }
 
 export interface CapacityStatus {
-  totalBytes: number
-  limits: CapacityLimits
-  overSoft: boolean
-  overHard: boolean
-  compactionLevel: CompactionLevel
+  readonly totalBytes: number
+  readonly limits: CapacityLimits
+  readonly overSoft: boolean
+  readonly overHard: boolean
+  readonly compactionLevel: CompactionLevel
 }
 
 export function capacityStatus(
@@ -156,16 +164,16 @@ export function capacityStatus(
 export const ESCALATION_THRESHOLD_CONSECUTIVE_CHECKS = 3
 
 export interface EscalationState {
-  level: CompactionLevel
+  readonly level: CompactionLevel
   /** Total bytes recorded the last time compaction ran at `level`, or `undefined` if this is the first run ever observed for this provider/project. */
-  previousTotalBytes: number | undefined
-  consecutiveNoImprovement: number
+  readonly previousTotalBytes: number | undefined
+  readonly consecutiveNoImprovement: number
 }
 
 export interface EscalationDecision {
-  level: CompactionLevel
-  consecutiveNoImprovement: number
-  escalated: boolean
+  readonly level: CompactionLevel
+  readonly consecutiveNoImprovement: number
+  readonly escalated: boolean
 }
 
 /**

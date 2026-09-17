@@ -267,6 +267,29 @@ function clamp(value: number | undefined, fallback: number): number {
   return value === undefined || !Number.isFinite(value) ? fallback : Math.max(0, Math.min(1, value))
 }
 
+/**
+ * Coerces a Postgres bigint/`octet_length` aggregate (returned by the driver
+ * as a decimal string, or null for an empty aggregate) into a finite,
+ * non-negative byte count. Byte counts here gate an irreversible eviction
+ * DELETE and the escalation decision, so a malformed value must fail loudly
+ * rather than silently become `NaN`: a `NaN` byte count would defeat the
+ * eviction loop's `totalBytes <= hardLimit` break (every `NaN` comparison is
+ * false), pushing the entire batch into the delete set. The safe-integer
+ * bound also flags the (currently unreachable at GiB-scale limits) case
+ * where a total exceeds JS's exact-integer range before it silently loses
+ * precision in a soft/hard comparison.
+ */
+function toFiniteByteCount(raw: string | number | null | undefined): number {
+  const value = raw === null || raw === undefined ? 0 : Number(raw)
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`capacity accounting read a non-finite byte count: ${String(raw)}`)
+  }
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`capacity accounting read a byte count beyond the safe-integer range: ${value}`)
+  }
+  return value
+}
+
 function uniqueStrings(values: string[] | undefined): string[] {
   return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))]
 }
@@ -1369,7 +1392,7 @@ export class PostgresMemoryProvider
        WHERE provider_id = $1 AND project_id = $2 AND evidence_id IS NOT NULL`,
       [providerId, projectId],
     )
-    return Number(result.rows[0]?.total ?? 0)
+    return toFiniteByteCount(result.rows[0]?.total)
   }
 
   /**
@@ -1402,10 +1425,13 @@ export class PostgresMemoryProvider
        RETURNING compaction_level, last_total_bytes, consecutive_no_improvement, last_checked_at`,
       [providerId, projectId],
     )
+    // INSERT ... ON CONFLICT DO UPDATE ... RETURNING always yields exactly
+    // one row (the upserted capacity_state row), so this is never undefined.
     const row = result.rows[0]!
     return {
       level: compactionLevelAtIndex(row.compaction_level),
-      previousTotalBytes: row.last_checked_at === null ? undefined : Number(row.last_total_bytes),
+      previousTotalBytes:
+        row.last_checked_at === null ? undefined : toFiniteByteCount(row.last_total_bytes),
       consecutiveNoImprovement: row.consecutive_no_improvement,
     }
   }
@@ -1513,6 +1539,11 @@ export class PostgresMemoryProvider
             narrativeTarget !== undefined &&
             Buffer.byteLength(originalText, "utf8") > narrativeTarget
           ) {
+            // narrativeTarget is a byte count; this passes it as
+            // truncateToTokens' "maxTokens" only because that helper's token
+            // weight is Buffer.byteLength (token-budget.ts) -- i.e. its
+            // "tokens" are bytes today. If that ever becomes a real token
+            // estimate, this call must switch to a byte-based truncation.
             newText = truncateToTokens(originalText, narrativeTarget).text
           }
         }
@@ -1638,7 +1669,9 @@ export class PostgresMemoryProvider
       for (const row of candidates.rows) {
         if (totalBytes <= limits.hardLimitBytes) break
         idsToRemove.push(row.id)
-        const rowBytes = Number(row.bytes)
+        // Validated coercion: a NaN here would defeat the `<=` break above
+        // and push the whole batch into the DELETE set (see toFiniteByteCount).
+        const rowBytes = toFiniteByteCount(row.bytes)
         totalBytes -= rowBytes
         bytesReclaimed += rowBytes
       }
@@ -1650,11 +1683,17 @@ export class PostgresMemoryProvider
       }
 
       const totalBytesAfter = await this.computeTotalBytes(providerId, projectId, client)
+      // "Eligible rows exhausted" means we are still over the hard limit AND
+      // there are no more eligible rows a subsequent call could remove. When
+      // this batch was capped at HARD_LIMIT_BATCH_SIZE, more eligible rows may
+      // remain, so this is not genuine exhaustion -- the caller can re-invoke
+      // to remove the next batch.
+      const batchWasCapped = candidates.rows.length >= HARD_LIMIT_BATCH_SIZE
       return {
         rowsRemoved: idsToRemove.length,
         bytesReclaimed,
         totalBytesAfter,
-        exhaustedEligibleRows: totalBytesAfter > limits.hardLimitBytes,
+        exhaustedEligibleRows: totalBytesAfter > limits.hardLimitBytes && !batchWasCapped,
       }
     })
   }
