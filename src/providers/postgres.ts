@@ -6,8 +6,18 @@ import type {
   CandidateReviewItem,
   CandidateReviewStore,
   CandidateStatusSummary,
+  EpisodicAppendResult,
+  EpisodicStore,
   SessionObservation,
 } from "../observation.js"
+import {
+  EVIDENCE_KINDS,
+  EVIDENCE_ORIGINS,
+  EVIDENCE_ROLES,
+  EVIDENCE_SCHEMA_VERSION,
+  type EvidenceEnvelope,
+  type EvidenceReference,
+} from "../observation-admission.js"
 import {
   DeterministicConsolidationPipeline,
   PostgresConsolidationRunner,
@@ -64,6 +74,87 @@ interface MemoryRow extends QueryResultRow {
   provenance?: MemoryProvenance[]
   entities?: MemoryEntity[]
   relationships?: MemoryRelationship[]
+}
+
+/** Phase 3 (TASK-010): the columns `appendEvidence`/`readEvidence` (and TASK-011's search) read back from `remem.session_events` for the evidence-admission path. Only rows with `evidence_id IS NOT NULL` are ever selected into this shape. */
+interface EpisodicEventRow extends QueryResultRow {
+  id: string
+  session_id: string
+  project_id: string
+  provider_id: string
+  kind: EvidenceEnvelope["kind"]
+  occurred_at: Date
+  host: string
+  role: EvidenceEnvelope["role"]
+  origin: EvidenceEnvelope["origin"]
+  turn_id: string | null
+  message_id: string | null
+  safe_text: string | null
+  /** The pre-existing `payload jsonb` column, holding `EvidencePayload.metadata` for evidence-admission rows (`{}` if the envelope had none). */
+  payload: Record<string, unknown>
+  evidence_refs: EvidenceReference[]
+  evidence_id: string
+  content_hash: string
+  schema_version: number
+}
+
+/**
+ * Reconstructs an `EvidenceEnvelope` from a stored row. `directory`/
+ * `worktree` are not persisted columns (the plan's Observation Field
+ * Checklist scopes episodic admission by project/session, not by a
+ * specific filesystem path) -- they are not meaningful to reconstruct from
+ * storage, so this returns an empty-string placeholder for both regardless
+ * of what the original admitting session's filesystem path was; callers
+ * must not treat a read-back envelope's `context.directory`/`worktree` as
+ * authoritative.
+ */
+function episodicRowToEnvelope(row: EpisodicEventRow): EvidenceEnvelope {
+  // schema_version has no DB CHECK constraint (unlike role/origin) -- its
+  // entire purpose is to let a future incompatible envelope shape be
+  // detected rather than silently mis-cast as today's shape. Reject rather
+  // than blindly narrow an unexpected value into the current literal type.
+  if (row.schema_version !== EVIDENCE_SCHEMA_VERSION) {
+    throw new Error(
+      `episodic evidence row has unsupported schemaVersion ${row.schema_version} (expected ${EVIDENCE_SCHEMA_VERSION})`,
+    )
+  }
+  // role/origin are pinned to their exact literal sets by DB CHECKs, but
+  // kind is NOT: session_events_evidence_kind_check allows the full 11-value
+  // superset shared with legacy SessionEventKind rows, whereas an evidence
+  // envelope's kind is the 3-value EvidenceEventKind. appendEvidence enforces
+  // that narrower set on write, so any row this SELECT reaches should already
+  // conform -- but the row type is an unchecked pg cast, so re-validate here
+  // (mirroring the schema_version guard) rather than narrow an out-of-set
+  // legacy kind into EvidenceEventKind.
+  if (!EVIDENCE_KINDS.includes(row.kind)) {
+    throw new Error(
+      `episodic evidence row has unsupported kind ${row.kind} (expected one of ${EVIDENCE_KINDS.join(", ")})`,
+    )
+  }
+  return {
+    schemaVersion: EVIDENCE_SCHEMA_VERSION,
+    id: row.evidence_id,
+    providerId: row.provider_id,
+    host: row.host,
+    context: {
+      directory: "",
+      worktree: "",
+      projectId: row.project_id,
+      sessionId: row.session_id,
+    },
+    ...(row.turn_id !== null ? { turnId: row.turn_id } : {}),
+    ...(row.message_id !== null ? { messageId: row.message_id } : {}),
+    role: row.role,
+    origin: row.origin,
+    kind: row.kind,
+    occurredAt: row.occurred_at.toISOString(),
+    payload: {
+      ...(row.safe_text !== null ? { text: row.safe_text } : {}),
+      ...(Object.keys(row.payload ?? {}).length > 0 ? { metadata: row.payload } : {}),
+    },
+    evidenceRefs: row.evidence_refs,
+    contentHash: row.content_hash,
+  }
 }
 
 interface CatalogRow extends QueryResultRow {
@@ -235,7 +326,7 @@ const BASE_SELECT = `
   LEFT JOIN remem.sources s ON s.id = m.source_id
 `
 
-export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewStore {
+export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewStore, EpisodicStore {
   readonly id: string
   private readonly pool: Pool
   private readonly embeddingModel: EmbeddingModel
@@ -827,6 +918,157 @@ export class PostgresMemoryProvider implements MemoryProvider, CandidateReviewSt
     }
     for (const row of result.rows) summary[row.status] = Number(row.count)
     return summary
+  }
+
+  /**
+   * Phase 3 (TASK-010): persists an admitted `EvidenceEnvelope` into
+   * `remem.session_events`, independently of semantic candidate extraction.
+   * "Episode" is initially the provider/host/project/session grouping (per
+   * the plan's storage decision), so a session id is required -- the same
+   * requirement `persistCandidate` above already enforces for the legacy
+   * capture path.
+   */
+  async appendEvidence(
+    envelope: EvidenceEnvelope,
+    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<EpisodicAppendResult> {
+    options.signal?.throwIfAborted()
+    const sessionId = envelope.context.sessionId
+    if (!sessionId) throw new TypeError("episodic evidence requires a session id")
+    // Defense-in-depth: `admitEvidence` (observation-admission.ts) already
+    // validates these against the same allowlists before an EvidenceEnvelope
+    // is ever constructed, but TypeScript's compile-time types are not
+    // enforced at runtime -- a caller that bypasses admission (a future code
+    // path, a test harness, or a manually-constructed object at a JS/TS
+    // boundary) must not reach an unhandled Postgres CHECK-violation
+    // exception; it gets a clear, typed error instead.
+    if (!EVIDENCE_ROLES.includes(envelope.role)) {
+      throw new TypeError(`invalid evidence role: ${envelope.role}`)
+    }
+    if (!EVIDENCE_ORIGINS.includes(envelope.origin)) {
+      throw new TypeError(`invalid evidence origin: ${envelope.origin}`)
+    }
+    if (!EVIDENCE_KINDS.includes(envelope.kind)) {
+      throw new TypeError(`invalid evidence kind: ${envelope.kind}`)
+    }
+
+    const client = await this.pool.connect()
+    try {
+      // A local statement_timeout only survives inside an explicit
+      // transaction (set_config is_local => true is transaction-scoped); in
+      // autocommit each statement is its own transaction and the setting is
+      // discarded before it can take effect. Wrap the INSERT and the fallback
+      // SELECT in one BEGIN/COMMIT so the timeout is honored and the two
+      // statements observe a single, consistent snapshot -- mirroring
+      // persistCandidate.
+      await client.query("BEGIN")
+      if (options.timeoutMs) {
+        await client.query("SELECT set_config('statement_timeout', $1, true)", [
+          String(options.timeoutMs),
+        ])
+      }
+      options.signal?.throwIfAborted()
+      const result = await this.appendEvidenceInTransaction(client, envelope, sessionId)
+      await client.query("COMMIT")
+      return result
+    } catch (error) {
+      await client.query("ROLLBACK")
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
+  /**
+   * Body of {@link appendEvidence}, run inside the caller's open transaction.
+   * Returns the append outcome; the caller commits before returning it.
+   */
+  private async appendEvidenceInTransaction(
+    client: PoolClient,
+    envelope: EvidenceEnvelope,
+    sessionId: string,
+  ): Promise<EpisodicAppendResult> {
+    const inserted = await client.query<{ id: string }>(
+      `INSERT INTO remem.session_events
+           (id, session_id, project_id, kind, occurred_at, payload,
+            provider_id, host, role, origin, turn_id, message_id, safe_text,
+            evidence_refs, evidence_id, content_hash, schema_version)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,
+                 $7,$8,$9,$10,$11,$12,$13,
+                 $14::jsonb,$15,$16,$17)
+         ON CONFLICT (provider_id, project_id, evidence_id) WHERE evidence_id IS NOT NULL DO NOTHING
+         RETURNING id`,
+      [
+        randomUUID(),
+        sessionId,
+        envelope.context.projectId,
+        envelope.kind,
+        envelope.occurredAt,
+        JSON.stringify(envelope.payload.metadata ?? {}),
+        envelope.providerId,
+        envelope.host,
+        envelope.role,
+        envelope.origin,
+        envelope.turnId ?? null,
+        envelope.messageId ?? null,
+        envelope.payload.text ?? null,
+        JSON.stringify(envelope.evidenceRefs),
+        envelope.id,
+        envelope.contentHash,
+        envelope.schemaVersion,
+      ],
+    )
+    if (inserted.rows[0]) return { outcome: "appended", id: envelope.id }
+
+    // The unique (provider_id, project_id, evidence_id) index rejected the
+    // insert: this is either an exact replay (duplicate, a no-op) or a
+    // genuine collision (same identity, different evidence) --
+    // distinguished by comparing content_hash, never by re-deriving or
+    // trusting the new envelope's own claim.
+    const existing = await client.query<{ content_hash: string | null }>(
+      `SELECT content_hash FROM remem.session_events
+         WHERE provider_id = $1 AND project_id = $2 AND evidence_id = $3`,
+      [envelope.providerId, envelope.context.projectId, envelope.id],
+    )
+    const existingRow = existing.rows[0]
+    if (!existingRow) {
+      // The INSERT reported a conflict, but the conflicting row is now
+      // missing under READ COMMITTED, at which point the conflicting
+      // row is guaranteed already committed and visible to this SELECT.
+      // remem.session_events has no DELETE/UPDATE code path today, so
+      // this branch should be unreachable; treating it as an unlabeled
+      // "collision" would silently misreport a data-integrity anomaly as
+      // ordinary identity contention. Surface it distinctly instead.
+      throw new Error(
+        `episodic evidence conflict reported for ${envelope.providerId}/${envelope.id}, but no conflicting row could be read back`,
+      )
+    }
+    const outcome = existingRow.content_hash === envelope.contentHash ? "duplicate" : "collision"
+    return { outcome, id: envelope.id }
+  }
+
+  /**
+   * A foreign (different project than `context`) or otherwise-unknown
+   * `(providerId, evidenceId)` returns `undefined` -- a non-disclosing
+   * not-found result, not evidence about another project's retention state.
+   */
+  async readEvidence(
+    providerId: string,
+    evidenceId: string,
+    context: MemoryContext,
+  ): Promise<EvidenceEnvelope | undefined> {
+    const result = await this.pool.query<EpisodicEventRow>(
+      `SELECT id, session_id, project_id, provider_id, kind, occurred_at, host, role, origin,
+              turn_id, message_id, safe_text, payload, evidence_refs, evidence_id,
+              content_hash, schema_version
+       FROM remem.session_events
+       WHERE provider_id = $1 AND evidence_id = $2 AND project_id = $3
+         AND evidence_id IS NOT NULL`,
+      [providerId, evidenceId, context.projectId],
+    )
+    const row = result.rows[0]
+    if (!row) return undefined
+    return episodicRowToEnvelope(row)
   }
 
   async listCandidates(status?: CandidateMemory["status"]): Promise<CandidateReviewItem[]> {

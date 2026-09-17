@@ -14,6 +14,12 @@ import { runCli } from "../src/cli/index.js"
 import { runDoctor } from "../src/cli/doctor.js"
 import { RememOrchestrator } from "../src/orchestrator.js"
 import type { CandidateMemory, SessionObservation } from "../src/observation.js"
+import {
+  admitEvidence,
+  DEFAULT_EVIDENCE_ADMISSION_CONFIG,
+  type AdmissionAuthority,
+  type RawEvidenceCandidate,
+} from "../src/observation-admission.js"
 import { LocalHashEmbeddingModel } from "../src/storage/embedding.js"
 import { writeAppConfig, type RememAppConfig } from "../src/storage/config-file.js"
 import { MigrationIntegrityError, runMigrations } from "../src/storage/migrations.js"
@@ -93,7 +99,7 @@ integration("PostgreSQL managed provider", () => {
       )
 
       const upgraded = await runMigrations(pool)
-      expect(upgraded).toMatchObject({ applied: [2, 3, 4, 5, 6, 7], currentVersion: 7 })
+      expect(upgraded).toMatchObject({ applied: [2, 3, 4, 5, 6, 7, 8], currentVersion: 8 })
       expect(
         (
           await pool.query<{ count: string }>(
@@ -111,7 +117,7 @@ integration("PostgreSQL managed provider", () => {
       ).toBeNull()
 
       const repeated = await runMigrations(pool)
-      expect(repeated).toMatchObject({ applied: [], currentVersion: 7 })
+      expect(repeated).toMatchObject({ applied: [], currentVersion: 8 })
 
       await copyFile(
         path.join(process.cwd(), "migrations/0002_consolidation_observation.sql"),
@@ -2049,5 +2055,501 @@ integration("PostgreSQL managed provider", () => {
       }
       await rm(root, { recursive: true, force: true })
     }
+  })
+
+  describe("episodic evidence: appendEvidence/readEvidence (TASK-010)", () => {
+    const episodicProviderConfig = {
+      type: "postgres" as const,
+      id: "episodic-provider-a",
+      connectionString: databaseUrl ?? "",
+      primary: true,
+      maxConnections: 2,
+      catalogLimit: 100,
+    }
+    const episodicContext: MemoryContext = {
+      directory: "/workspace/episodic",
+      worktree: "/workspace/episodic",
+      projectId: "episodic-project",
+      sessionId: "episodic-session-a",
+    }
+    const authority: AdmissionAuthority = {
+      providerId: "episodic-provider-a",
+      host: "opencode-v2",
+      projectId: "episodic-project",
+    }
+    const enabledConfig = { ...DEFAULT_EVIDENCE_ADMISSION_CONFIG, enabled: true }
+
+    function candidate(overrides: Partial<RawEvidenceCandidate> = {}): RawEvidenceCandidate {
+      return {
+        providerId: "episodic-provider-a",
+        host: "opencode-v2",
+        context: episodicContext,
+        turnId: "turn-episodic-1",
+        messageId: "message-episodic-1",
+        role: "user",
+        origin: "direct-user",
+        kind: "turn-completed",
+        occurredAt: "2026-09-16T00:00:00.000Z",
+        payload: { text: "We decided to use logical replication for Orion." },
+        ...overrides,
+      }
+    }
+
+    it("appends a fresh admitted envelope and reads it back unchanged", async () => {
+      const provider = new PostgresMemoryProvider(episodicProviderConfig)
+      try {
+        const admitted = admitEvidence(candidate(), authority, enabledConfig)
+        expect(admitted.outcome).toBe("admitted")
+        if (admitted.outcome !== "admitted") return
+
+        const result = await provider.appendEvidence(admitted.envelope)
+        expect(result).toEqual({ outcome: "appended", id: admitted.envelope.id })
+
+        const readBack = await provider.readEvidence(
+          "episodic-provider-a",
+          admitted.envelope.id,
+          episodicContext,
+        )
+        expect(readBack).toMatchObject({
+          id: admitted.envelope.id,
+          providerId: "episodic-provider-a",
+          host: "opencode-v2",
+          role: "user",
+          origin: "direct-user",
+          kind: "turn-completed",
+          payload: { text: "We decided to use logical replication for Orion." },
+          contentHash: admitted.envelope.contentHash,
+        })
+        expect(readBack?.context.projectId).toBe("episodic-project")
+        expect(readBack?.context.sessionId).toBe("episodic-session-a")
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("round-trips payload.metadata, not just payload.text", async () => {
+      const provider = new PostgresMemoryProvider(episodicProviderConfig)
+      try {
+        const admitted = admitEvidence(
+          candidate({
+            turnId: "turn-episodic-metadata",
+            role: "tool",
+            kind: "tool-result",
+            payload: { metadata: { exitCode: 0, files: ["src/foo.ts", "src/bar.ts"] } },
+          }),
+          authority,
+          enabledConfig,
+        )
+        expect(admitted.outcome).toBe("admitted")
+        if (admitted.outcome !== "admitted") return
+
+        await provider.appendEvidence(admitted.envelope)
+        const readBack = await provider.readEvidence(
+          "episodic-provider-a",
+          admitted.envelope.id,
+          episodicContext,
+        )
+        expect(readBack?.payload).toEqual({
+          metadata: { exitCode: 0, files: ["src/foo.ts", "src/bar.ts"] },
+        })
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("reads back an envelope with no metadata (text-only) without a stray empty metadata object", async () => {
+      const provider = new PostgresMemoryProvider(episodicProviderConfig)
+      try {
+        const admitted = admitEvidence(
+          candidate({ turnId: "turn-episodic-no-metadata" }),
+          authority,
+          enabledConfig,
+        )
+        expect(admitted.outcome).toBe("admitted")
+        if (admitted.outcome !== "admitted") return
+
+        await provider.appendEvidence(admitted.envelope)
+        const readBack = await provider.readEvidence(
+          "episodic-provider-a",
+          admitted.envelope.id,
+          episodicContext,
+        )
+        expect(readBack?.payload).toEqual({
+          text: "We decided to use logical replication for Orion.",
+        })
+        expect(readBack?.payload).not.toHaveProperty("metadata")
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("treats an exact repeated append as an idempotent no-op (duplicate)", async () => {
+      const provider = new PostgresMemoryProvider(episodicProviderConfig)
+      try {
+        const admitted = admitEvidence(
+          candidate({ turnId: "turn-episodic-dup" }),
+          authority,
+          enabledConfig,
+        )
+        expect(admitted.outcome).toBe("admitted")
+        if (admitted.outcome !== "admitted") return
+
+        const first = await provider.appendEvidence(admitted.envelope)
+        expect(first.outcome).toBe("appended")
+        const second = await provider.appendEvidence(admitted.envelope)
+        expect(second).toEqual({ outcome: "duplicate", id: admitted.envelope.id })
+
+        const count = await pool.query<{ count: string }>(
+          "SELECT count(*) FROM remem.session_events WHERE provider_id = $1 AND evidence_id = $2",
+          ["episodic-provider-a", admitted.envelope.id],
+        )
+        expect(count.rows[0]?.count).toBe("1")
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("rejects a same-identity/different-content append as a collision, without modifying the first record", async () => {
+      const provider = new PostgresMemoryProvider(episodicProviderConfig)
+      try {
+        const first = admitEvidence(
+          candidate({ turnId: "turn-episodic-collide" }),
+          authority,
+          enabledConfig,
+        )
+        expect(first.outcome).toBe("admitted")
+        if (first.outcome !== "admitted") return
+        await provider.appendEvidence(first.envelope)
+
+        // Same identity (same turnId -> same derived id), different content:
+        // construct a second envelope sharing the first's id/context but a
+        // different contentHash, simulating what would happen if two
+        // genuinely different pieces of evidence collided on identity.
+        const collidingEnvelope = {
+          ...first.envelope,
+          contentHash: `${first.envelope.contentHash.slice(0, -1)}${first.envelope.contentHash.endsWith("0") ? "1" : "0"}`,
+        }
+        const result = await provider.appendEvidence(collidingEnvelope)
+        expect(result).toEqual({ outcome: "collision", id: first.envelope.id })
+
+        // The first record must be unmodified: still the original content hash.
+        const stored = await pool.query<{ content_hash: string; safe_text: string }>(
+          "SELECT content_hash, safe_text FROM remem.session_events WHERE provider_id = $1 AND evidence_id = $2",
+          ["episodic-provider-a", first.envelope.id],
+        )
+        expect(stored.rows[0]?.content_hash).toBe(first.envelope.contentHash)
+        expect(stored.rows[0]?.safe_text).toBe(first.envelope.payload.text)
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("scopes identity by provider: the same evidence_id under a different provider is not a collision", async () => {
+      const providerA = new PostgresMemoryProvider(episodicProviderConfig)
+      const providerB = new PostgresMemoryProvider({
+        ...episodicProviderConfig,
+        id: "episodic-provider-b",
+      })
+      try {
+        const admitted = admitEvidence(
+          candidate({ turnId: "turn-episodic-cross-provider" }),
+          authority,
+          enabledConfig,
+        )
+        expect(admitted.outcome).toBe("admitted")
+        if (admitted.outcome !== "admitted") return
+
+        const resultA = await providerA.appendEvidence(admitted.envelope)
+        expect(resultA.outcome).toBe("appended")
+
+        // Same evidence_id, but under a different provider_id: must succeed
+        // independently, not be treated as a collision or duplicate of A's row.
+        const resultB = await providerB.appendEvidence({
+          ...admitted.envelope,
+          providerId: "episodic-provider-b",
+        })
+        expect(resultB.outcome).toBe("appended")
+
+        const count = await pool.query<{ count: string }>(
+          "SELECT count(*) FROM remem.session_events WHERE evidence_id = $1",
+          [admitted.envelope.id],
+        )
+        expect(count.rows[0]?.count).toBe("2")
+      } finally {
+        await providerA.dispose()
+        await providerB.dispose()
+      }
+    })
+
+    it("scopes identity by project too: the same provider/evidence_id under a different project succeeds independently, not a collision", async () => {
+      const provider = new PostgresMemoryProvider(episodicProviderConfig)
+      try {
+        const admitted = admitEvidence(
+          candidate({ turnId: "turn-episodic-cross-project" }),
+          authority,
+          enabledConfig,
+        )
+        expect(admitted.outcome).toBe("admitted")
+        if (admitted.outcome !== "admitted") return
+        await provider.appendEvidence(admitted.envelope)
+
+        // The unique index is (provider_id, project_id, evidence_id) --
+        // project_id is included as defense-in-depth (see
+        // migrations/0008_episodic_evidence.sql) so DB-level identity
+        // scoping does not depend entirely on deriveEvidenceId
+        // (observation-admission.ts) continuing to fold projectId into the
+        // hash. Same provider_id and (artificially) the same evidence_id,
+        // but a genuinely different project: this must succeed
+        // independently, exactly like the cross-provider case above, not
+        // be treated as identity contention across an unrelated project.
+        const otherProjectEnvelope = {
+          ...admitted.envelope,
+          context: { ...admitted.envelope.context, projectId: "other-episodic-project" },
+        }
+        const result = await provider.appendEvidence(otherProjectEnvelope)
+        expect(result.outcome).toBe("appended")
+
+        const count = await pool.query<{ count: string }>(
+          "SELECT count(*) FROM remem.session_events WHERE provider_id = $1 AND evidence_id = $2",
+          ["episodic-provider-a", admitted.envelope.id],
+        )
+        expect(count.rows[0]?.count).toBe("2")
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("readEvidence returns undefined (non-disclosing) for a foreign project, not evidence about it", async () => {
+      const provider = new PostgresMemoryProvider(episodicProviderConfig)
+      try {
+        const admitted = admitEvidence(
+          candidate({ turnId: "turn-episodic-foreign-read" }),
+          authority,
+          enabledConfig,
+        )
+        expect(admitted.outcome).toBe("admitted")
+        if (admitted.outcome !== "admitted") return
+        await provider.appendEvidence(admitted.envelope)
+
+        const readFromForeignProject = await provider.readEvidence(
+          "episodic-provider-a",
+          admitted.envelope.id,
+          { ...episodicContext, projectId: "other-episodic-project" },
+        )
+        expect(readFromForeignProject).toBeUndefined()
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("readEvidence returns undefined for an unknown evidence id", async () => {
+      const provider = new PostgresMemoryProvider(episodicProviderConfig)
+      try {
+        const readUnknown = await provider.readEvidence(
+          "episodic-provider-a",
+          "0".repeat(64),
+          episodicContext,
+        )
+        expect(readUnknown).toBeUndefined()
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("appendEvidence requires a session id, matching the legacy persistCandidate requirement", async () => {
+      const provider = new PostgresMemoryProvider(episodicProviderConfig)
+      try {
+        const admitted = admitEvidence(
+          candidate({ turnId: "turn-episodic-no-session" }),
+          authority,
+          enabledConfig,
+        )
+        expect(admitted.outcome).toBe("admitted")
+        if (admitted.outcome !== "admitted") return
+
+        const envelopeWithoutSession = {
+          ...admitted.envelope,
+          context: {
+            directory: admitted.envelope.context.directory,
+            worktree: admitted.envelope.context.worktree,
+            projectId: admitted.envelope.context.projectId,
+          },
+        }
+        await expect(provider.appendEvidence(envelopeWithoutSession)).rejects.toThrow(
+          "episodic evidence requires a session id",
+        )
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("rejects an invalid role/origin/kind defensively, rather than letting an unhandled Postgres CHECK-violation exception through", async () => {
+      // admitEvidence already validates these before a real EvidenceEnvelope
+      // is ever constructed; this test simulates a caller that bypasses
+      // admission entirely (a manually-constructed object at a JS/TS
+      // boundary, where compile-time types are erased at runtime) to prove
+      // appendEvidence's own defensive check runs before the query, not
+      // relying solely on the database's CHECK constraint to fail closed.
+      const provider = new PostgresMemoryProvider(episodicProviderConfig)
+      try {
+        const admitted = admitEvidence(
+          candidate({ turnId: "turn-episodic-invalid-role" }),
+          authority,
+          enabledConfig,
+        )
+        expect(admitted.outcome).toBe("admitted")
+        if (admitted.outcome !== "admitted") return
+
+        const invalidRole = {
+          ...admitted.envelope,
+          role: "narrator" as unknown as typeof admitted.envelope.role,
+        }
+        await expect(provider.appendEvidence(invalidRole)).rejects.toThrow("invalid evidence role")
+
+        const invalidOrigin = {
+          ...admitted.envelope,
+          origin: "made-up" as unknown as typeof admitted.envelope.origin,
+        }
+        await expect(provider.appendEvidence(invalidOrigin)).rejects.toThrow(
+          "invalid evidence origin",
+        )
+
+        const invalidKind = {
+          ...admitted.envelope,
+          kind: "semantic-fact" as unknown as typeof admitted.envelope.kind,
+        }
+        await expect(provider.appendEvidence(invalidKind)).rejects.toThrow("invalid evidence kind")
+
+        // None of the rejected attempts should have written a row.
+        const count = await pool.query<{ count: string }>(
+          "SELECT count(*) FROM remem.session_events WHERE provider_id = $1 AND evidence_id = $2",
+          ["episodic-provider-a", admitted.envelope.id],
+        )
+        expect(count.rows[0]?.count).toBe("0")
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("mixed table: a legacy row (no evidence_id) and a new evidence row coexist in the same project, and each path's queries correctly exclude the other's row", async () => {
+      const providerConfig = {
+        type: "postgres" as const,
+        id: "legacy-coexistence-provider",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 100,
+      }
+      const provider = new PostgresMemoryProvider(providerConfig)
+      const legacyContext: MemoryContext = {
+        directory: "/workspace/legacy-coexist",
+        worktree: "/workspace/legacy-coexist",
+        projectId: "legacy-coexistence-project",
+        sessionId: "legacy-coexistence-session",
+      }
+      const observation: SessionObservation = {
+        id: randomUUID(),
+        kind: "decision",
+        context: legacyContext,
+        occurredAt: "2026-09-16T00:00:00.000Z",
+        source:
+          "remem://opencode-v2/sessions/legacy-coexistence-session/messages/legacy-coexist-message",
+        payload: {
+          host: "opencode-v2",
+          messageId: "legacy-coexist-message",
+          text: "We decided that the legacy capture path still works as before.",
+        },
+      }
+      const legacyCandidate: CandidateMemory = {
+        id: randomUUID(),
+        observationIds: [observation.id],
+        memory: {
+          title: "Explicit decision: legacy capture path",
+          content: "We decided that the legacy capture path still works as before.",
+          type: "decision",
+          scope: { kind: "project", id: legacyContext.projectId },
+          provenance: [
+            {
+              source: {
+                kind: "user",
+                uri: observation.source,
+                externalId: "legacy-coexist-message",
+              },
+              capturedAt: observation.occurredAt,
+              original: true,
+            },
+          ],
+        },
+        confidence: 0.9,
+        status: "pending",
+        reasons: ["explicit decision"],
+      }
+      try {
+        // Exercises the same remem.session_events write path
+        // createCaptureCoordinator's legacy capture flow uses, directly --
+        // this is the exact pattern the pre-existing "persists a captured
+        // observation and pending candidate atomically" test above uses.
+        await provider.persistCandidate(observation, legacyCandidate)
+
+        // Now append a *new* evidence row into the same project (and same
+        // provider), so both row shapes genuinely coexist in one query
+        // scope, not just in two separately-tested scenarios.
+        const mixedAuthority: AdmissionAuthority = {
+          providerId: "legacy-coexistence-provider",
+          host: "opencode-v2",
+          projectId: legacyContext.projectId,
+        }
+        const admitted = admitEvidence(
+          {
+            providerId: "legacy-coexistence-provider",
+            host: "opencode-v2",
+            context: legacyContext,
+            turnId: "turn-legacy-coexist-evidence",
+            messageId: "legacy-coexist-evidence-message",
+            role: "user",
+            origin: "direct-user",
+            kind: "turn-completed",
+            occurredAt: "2026-09-16T00:00:00.000Z",
+            payload: { text: "A distinct evidence-admission statement in the same project." },
+          },
+          mixedAuthority,
+          enabledConfig,
+        )
+        expect(admitted.outcome).toBe("admitted")
+        if (admitted.outcome !== "admitted") return
+        const appendResult = await provider.appendEvidence(admitted.envelope)
+        expect(appendResult.outcome).toBe("appended")
+
+        // readEvidence's `evidence_id IS NOT NULL` guard must exclude the
+        // legacy row -- there is exactly one evidence row to find, and it
+        // must be the new one, not the legacy one.
+        const readBack = await provider.readEvidence(
+          "legacy-coexistence-provider",
+          admitted.envelope.id,
+          legacyContext,
+        )
+        expect(readBack?.id).toBe(admitted.envelope.id)
+
+        // candidateStatus's metadata->>'providerId' scoping must exclude
+        // the evidence row (which has no candidate_memories row at all) --
+        // the pending count must reflect only the legacy candidate.
+        const summary = await provider.candidateStatus(legacyContext)
+        expect(summary.pending).toBe(1)
+
+        // Directly confirm both row shapes exist, distinguished correctly.
+        const rows = await pool.query<{ evidence_id: string | null; provider_id: string | null }>(
+          "SELECT evidence_id, provider_id FROM remem.session_events WHERE project_id = $1 ORDER BY evidence_id NULLS FIRST",
+          [legacyContext.projectId],
+        )
+        expect(rows.rows).toHaveLength(2)
+        expect(rows.rows[0]).toMatchObject({ evidence_id: null, provider_id: null })
+        expect(rows.rows[1]).toMatchObject({
+          evidence_id: admitted.envelope.id,
+          provider_id: "legacy-coexistence-provider",
+        })
+      } finally {
+        await provider.dispose()
+      }
+    })
   })
 })
