@@ -1187,8 +1187,8 @@ export class PostgresMemoryProvider
       Math.max(
         0,
         Math.min(
-          Number.isFinite(requestedLimit)
-            ? (requestedLimit as number)
+          requestedLimit !== undefined && Number.isFinite(requestedLimit)
+            ? requestedLimit
             : EPISODIC_SEARCH_MAX_RESULTS,
           EPISODIC_SEARCH_MAX_RESULTS,
         ),
@@ -1198,8 +1198,8 @@ export class PostgresMemoryProvider
     const maxOutputTokens = Math.max(
       0,
       Math.min(
-        Number.isFinite(requestedMaxOutputTokens)
-          ? (requestedMaxOutputTokens as number)
+        requestedMaxOutputTokens !== undefined && Number.isFinite(requestedMaxOutputTokens)
+          ? requestedMaxOutputTokens
           : EPISODIC_SEARCH_MAX_OUTPUT_TOKENS,
         EPISODIC_SEARCH_MAX_OUTPUT_TOKENS,
       ),
@@ -1223,8 +1223,17 @@ export class PostgresMemoryProvider
          SELECT id, session_id, project_id, provider_id, kind, occurred_at, host, role, origin,
                 turn_id, message_id, safe_text, payload, evidence_refs, evidence_id,
                 content_hash, schema_version, search_vector,
-                LAG(id) OVER (PARTITION BY session_id ORDER BY occurred_at, id) AS preceding_id,
-                LEAD(id) OVER (PARTITION BY session_id ORDER BY occurred_at, id) AS following_id
+                -- Partition by the full (provider_id, project_id, session_id)
+                -- isolation boundary, not session_id alone. These columns are
+                -- constant across the CTE (pinned by the WHERE below), so this
+                -- does not change the computed neighbors today -- it encodes
+                -- the cross-project/provider isolation invariant explicitly so
+                -- a future edit that broadens the WHERE clause (or reuses this
+                -- window outside the scoped CTE) cannot silently leak a
+                -- neighbor across projects. session_events_evidence_scope_idx
+                -- covers this ordering.
+                LAG(id) OVER (PARTITION BY provider_id, project_id, session_id ORDER BY occurred_at, id) AS preceding_id,
+                LEAD(id) OVER (PARTITION BY provider_id, project_id, session_id ORDER BY occurred_at, id) AS following_id
          FROM remem.session_events
          WHERE provider_id = $1 AND project_id = $2 AND evidence_id IS NOT NULL
        ),
