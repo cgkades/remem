@@ -8,6 +8,7 @@ import {
   type EvidenceAdmissionConfig,
   type RawEvidenceCandidate,
 } from "../src/observation-admission.js"
+import { BULK_ARTIFACT_MIN_BYTES } from "../src/bulk-artifact-reduction.js"
 import type { MemoryContext } from "../src/types.js"
 
 const context: MemoryContext = {
@@ -944,9 +945,15 @@ describe("admitEvidence: TASK-059 bulk-artifact reduction", () => {
   })
 
   it("never reduces tool-output-shaped content living in payload.metadata -- TASK-059 only ever touches payload.text", () => {
-    // Small enough to fit within maxPayloadBytes on its own so this test
-    // isolates the metadata-scope question, not the size question.
-    const stackTraceShapedMetadataValue = pythonTraceback(20)
+    // Deliberately large enough that it WOULD be classified and reduced if it
+    // lived in payload.text (over BULK_ARTIFACT_MIN_BYTES), so this test proves
+    // reduction is scoped to text -- not that an undersized value merely fails
+    // classification. Kept well under maxPayloadBytes (8 KiB) so the envelope
+    // is still admitted with the metadata carried through verbatim.
+    const stackTraceShapedMetadataValue = pythonTraceback(45)
+    expect(Buffer.byteLength(stackTraceShapedMetadataValue, "utf8")).toBeGreaterThan(
+      BULK_ARTIFACT_MIN_BYTES,
+    )
     const result = admitEvidence(
       baseCandidate({
         payload: { metadata: { rawOutput: stackTraceShapedMetadataValue } },

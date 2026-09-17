@@ -43,8 +43,8 @@ export const BULK_ARTIFACT_MAX_OUTPUT_BYTES = 2000
  * very unlikely.
  *
  * Every intra-line wildcard uses a negated character class (`[^()]*`,
- * `[^)]*`, `[^']*`) rather than a greedy `.*`, and no pattern contains two
- * unbounded quantifiers separated by a required literal. This keeps each
+ * `[^)]*`, `[^']*`, `[^\r\n]+`) rather than a greedy `.*`/`.+`, and no pattern
+ * contains two unbounded quantifiers separated by a required literal. This keeps each
  * match linear in the line length with no backtracking blow-up, so a
  * crafted worst-case line (up to `RAW_TEXT_MAX_BYTES_BEFORE_REDUCTION`
  * before this classifier ever runs) cannot turn classification into a CPU
@@ -62,7 +62,7 @@ const STACK_TRACE_PATTERNS: readonly RegExp[] = [
   /^panic:\s/m, // Go panic
   /^goroutine \d+ \[[^\]]+\]:/m, // Go goroutine dump
   /^\s*#\d+\s+0x[0-9a-f]+/m, // native/C backtrace frame
-  /^\s*at\s+\S+\([^)]*\)\s+in\s+.+:line\s+\d+\s*$/m, // .NET/C# (path may hold a drive colon, so :line stays a bounded suffix)
+  /^\s*at\s+\S+\([^)]*\)\s+in\s+[^\r\n]+:line\s+\d+\s*$/m, // .NET/C# (path may hold a drive colon, so :line stays a bounded suffix; `[^\r\n]+` keeps the wildcard newline-bounded like the others)
   /^thread '[^']*' panicked at /m, // Rust
   /^\s*\d+:\s+0x[0-9a-f]+\s+-\s+/m, // Rust backtrace frame (e.g. "  1: 0x... - rust_begin_unwind")
 ]
@@ -103,7 +103,14 @@ function truncateUtf8(text: string, maxBytes: number): string {
   const buffer = Buffer.from(text, "utf8")
   if (buffer.length <= maxBytes) return text
   let end = maxBytes
-  while (end > 0 && (buffer[end]! & 0xc0) === 0x80) end--
+  // `noUncheckedIndexedAccess` types `buffer[end]` as `number | undefined`, so
+  // read it into a local and back off past continuation bytes with an explicit
+  // check rather than a non-null assertion (repo convention: no `!`/`as`).
+  while (end > 0) {
+    const byte = buffer[end]
+    if (byte === undefined || (byte & 0xc0) !== 0x80) break
+    end--
+  }
   return buffer.subarray(0, end).toString("utf8")
 }
 
