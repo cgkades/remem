@@ -10,6 +10,7 @@ import {
   PostgresConsolidationRunner,
 } from "../src/consolidation.js"
 import { PostgresMemoryProvider } from "../src/providers/postgres.js"
+import { FORGET_RESTORE_ADVISORY_LOCK } from "../src/forget.js"
 import { runCli } from "../src/cli/index.js"
 import { runDoctor } from "../src/cli/doctor.js"
 import { RememOrchestrator } from "../src/orchestrator.js"
@@ -99,7 +100,10 @@ integration("PostgreSQL managed provider", () => {
       )
 
       const upgraded = await runMigrations(pool)
-      expect(upgraded).toMatchObject({ applied: [2, 3, 4, 5, 6, 7, 8, 9, 10], currentVersion: 10 })
+      expect(upgraded).toMatchObject({
+        applied: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+        currentVersion: 11,
+      })
       expect(
         (
           await pool.query<{ count: string }>(
@@ -117,7 +121,7 @@ integration("PostgreSQL managed provider", () => {
       ).toBeNull()
 
       const repeated = await runMigrations(pool)
-      expect(repeated).toMatchObject({ applied: [], currentVersion: 10 })
+      expect(repeated).toMatchObject({ applied: [], currentVersion: 11 })
 
       await copyFile(
         path.join(process.cwd(), "migrations/0002_consolidation_observation.sql"),
@@ -3957,6 +3961,188 @@ integration("PostgreSQL managed provider", () => {
         })
         expect(warning).toBeUndefined()
       } finally {
+        await provider.dispose()
+      }
+    })
+  })
+
+  describe("explicit privacy forget (TASK-013)", () => {
+    const forgetProviderConfig = {
+      type: "postgres" as const,
+      id: "forget-provider",
+      connectionString: databaseUrl ?? "",
+      primary: true,
+      maxConnections: 2,
+      catalogLimit: 100,
+    }
+    const projectId = "forget-project"
+    const forgetContext: MemoryContext = {
+      directory: "/workspace/forget",
+      worktree: "/workspace/forget",
+      projectId,
+      sessionId: "forget-session",
+    }
+
+    async function appendForgetEvidence(provider: PostgresMemoryProvider, suffix: string) {
+      const admitted = admitEvidence(
+        {
+          providerId: "forget-provider",
+          host: "opencode-v2",
+          context: { ...forgetContext, sessionId: `forget-session-${suffix}` },
+          turnId: `forget-turn-${suffix}`,
+          messageId: `forget-message-${suffix}`,
+          role: "user",
+          origin: "direct-user",
+          kind: "turn-completed",
+          occurredAt: "2026-09-17T00:00:00.000Z",
+          payload: { text: "private episode content that must not appear in a tombstone" },
+        },
+        { providerId: "forget-provider", host: "opencode-v2", projectId },
+        { ...DEFAULT_EVIDENCE_ADMISSION_CONFIG, enabled: true },
+      )
+      if (admitted.outcome !== "admitted") throw new Error("forget evidence admission failed")
+      expect(await provider.appendEvidence(admitted.envelope)).toMatchObject({
+        outcome: "appended",
+      })
+      return admitted.envelope
+    }
+
+    it("requires a body-free preview, deletes only direct episode derivatives after confirmation, and suppresses replay", async () => {
+      const provider = new PostgresMemoryProvider(forgetProviderConfig)
+      try {
+        // This semantic memory has no proven direct derivation from the
+        // episode, so privacy forget must leave it and its derived indexes.
+        const independentMemory = await provider.write({
+          type: "semantic",
+          title: "Independent project decision",
+          content: "This semantic memory has separate support.",
+          scope: { kind: "project", id: projectId },
+        })
+        const envelope = await appendForgetEvidence(provider, "confirmed")
+        const event = await pool.query<{ id: string }>(
+          `SELECT id FROM remem.session_events
+           WHERE provider_id = 'forget-provider' AND project_id = $1 AND evidence_id = $2`,
+          [projectId, envelope.id],
+        )
+        const candidateId = randomUUID()
+        await pool.query(
+          `INSERT INTO remem.candidate_memories
+             (id, session_event_id, type, title, content, scope_kind, scope_id, metadata)
+           VALUES ($1, $2, 'decision', 'Derived candidate', 'derived private candidate',
+                   'project', $3, '{"providerId":"forget-provider"}'::jsonb)`,
+          [candidateId, event.rows[0]!.id, projectId],
+        )
+
+        const preview = await provider.previewForget("forget-provider", envelope.id, projectId)
+        if (!preview) throw new Error("forget preview was unexpectedly absent")
+        expect(preview).toMatchObject({
+          providerId: "forget-provider",
+          projectId,
+          evidenceId: envelope.id,
+          episodeCount: 1,
+          candidateCount: 1,
+          semanticMemoryCount: 0,
+        })
+        expect(JSON.stringify(preview)).not.toContain("private episode content")
+        expect(
+          await pool.query(
+            `SELECT id FROM remem.session_events
+             WHERE provider_id = 'forget-provider' AND project_id = $1 AND evidence_id = $2`,
+            [projectId, envelope.id],
+          ),
+        ).toMatchObject({ rowCount: 1 })
+
+        const confirmed = await provider.confirmForget(preview.id)
+        expect(confirmed).toEqual({
+          previewId: preview.id,
+          evidenceDeleted: true,
+          candidatesDeleted: 1,
+        })
+        expect(
+          await provider.readEvidence("forget-provider", envelope.id, forgetContext),
+        ).toBeUndefined()
+        expect(
+          await pool.query("SELECT id FROM remem.candidate_memories WHERE id = $1", [candidateId]),
+        ).toMatchObject({ rowCount: 0 })
+        expect(await provider.get(independentMemory.id, forgetContext)).toBeDefined()
+        expect(await provider.appendEvidence(envelope)).toEqual({
+          outcome: "forgotten",
+          id: envelope.id,
+        })
+
+        const tombstones = await pool.query<{ target_kind: string; target_id: string }>(
+          `SELECT target_kind, target_id
+           FROM remem.forget_tombstones
+           WHERE provider_id = 'forget-provider' AND project_id = $1
+           ORDER BY target_kind`,
+          [projectId],
+        )
+        expect(tombstones.rows).toEqual([
+          { target_kind: "candidate", target_id: candidateId },
+          { target_kind: "evidence", target_id: envelope.id },
+        ])
+        expect(JSON.stringify(tombstones.rows)).not.toContain("private episode content")
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("rejects an expired preview without deleting its episode", async () => {
+      const provider = new PostgresMemoryProvider(forgetProviderConfig)
+      try {
+        const envelope = await appendForgetEvidence(provider, "expired")
+        const preview = await provider.previewForget("forget-provider", envelope.id, projectId)
+        if (!preview) throw new Error("forget preview was unexpectedly absent")
+        await pool.query(
+          `UPDATE remem.forget_previews
+           SET created_at = now() - interval '16 minutes', expires_at = now() - interval '1 second'
+           WHERE id = $1`,
+          [preview.id],
+        )
+
+        await expect(provider.confirmForget(preview.id)).rejects.toThrow("unavailable or expired")
+        expect(
+          await provider.readEvidence("forget-provider", envelope.id, forgetContext),
+        ).toBeDefined()
+      } finally {
+        await provider.dispose()
+      }
+    })
+
+    it("serializes confirmation behind the restore tombstone lock", async () => {
+      // A one-connection provider catches a nested-pool-acquisition deadlock:
+      // confirmation must perform its lookup and delete transaction using the
+      // same connection that holds the global restore lock.
+      const provider = new PostgresMemoryProvider({ ...forgetProviderConfig, maxConnections: 1 })
+      const lockClient = await pool.connect()
+      try {
+        const envelope = await appendForgetEvidence(provider, "restore-lock")
+        const preview = await provider.previewForget("forget-provider", envelope.id, projectId)
+        if (!preview) throw new Error("forget preview was unexpectedly absent")
+        await lockClient.query("SELECT pg_advisory_lock($1)", [FORGET_RESTORE_ADVISORY_LOCK])
+
+        const confirmation = provider.confirmForget(preview.id)
+        await new Promise((resolve) => setTimeout(resolve, 25))
+        // The restore lock models the interval after restore snapshots current
+        // tombstones and before it reapplies them. Confirmation must not
+        // delete/create a tombstone in that gap. Use the independent fixture
+        // pool because the provider's sole connection is intentionally
+        // blocked on the shared lock.
+        expect(
+          await pool.query(
+            `SELECT id FROM remem.session_events
+             WHERE provider_id = 'forget-provider' AND project_id = $1 AND evidence_id = $2`,
+            [projectId, envelope.id],
+          ),
+        ).toMatchObject({ rowCount: 1 })
+
+        await lockClient.query("SELECT pg_advisory_unlock($1)", [FORGET_RESTORE_ADVISORY_LOCK])
+        await expect(confirmation).resolves.toMatchObject({ evidenceDeleted: true })
+      } finally {
+        await lockClient
+          .query("SELECT pg_advisory_unlock($1)", [FORGET_RESTORE_ADVISORY_LOCK])
+          .catch(() => undefined)
+        lockClient.release()
         await provider.dispose()
       }
     })

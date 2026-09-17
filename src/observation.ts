@@ -101,7 +101,7 @@ export interface ConsolidationPipeline {
  * it. `episodicHistory` capability alone does not establish method support
  * (see `isEpisodicStore`); a provider must actually implement these methods.
  */
-export type EpisodicAppendOutcome = "appended" | "duplicate" | "collision"
+export type EpisodicAppendOutcome = "appended" | "duplicate" | "collision" | "forgotten"
 
 export interface EpisodicAppendResult {
   outcome: EpisodicAppendOutcome
@@ -111,7 +111,8 @@ export interface EpisodicAppendResult {
 
 export interface EpisodicStore {
   /**
-   * Exact repeated append (same id, same contentHash) is a no-op
+   * A confirmed TASK-013 tombstone returns `"forgotten"` and never restores
+   * evidence. Otherwise, exact repeated append (same id, same contentHash) is a no-op
    * (`"duplicate"`). Same id with a different contentHash is a collision
    * (`"collision"`) and does not modify the first record -- this is a
    * persistence-layer enforcement of the same invariant
@@ -135,6 +136,57 @@ export interface EpisodicStore {
     evidenceId: string,
     context: MemoryContext,
   ): Promise<EvidenceEnvelope | undefined>
+}
+
+/** TASK-013: previews are short-lived so confirmation binds to a recent,
+ * body-free view of exactly one evidence record and its direct candidates. */
+export const FORGET_PREVIEW_TTL_MS = 15 * 60 * 1000
+
+export interface ForgetPreview {
+  id: string
+  providerId: string
+  projectId: string
+  evidenceId: string
+  /** The directly targeted canonical episode row; never rendered as content. */
+  episodeCount: 1
+  /** Candidate rows directly derived from that episode. */
+  candidateCount: number
+  /** Deliberately always zero in TASK-013: semantic memories can have independent support. */
+  semanticMemoryCount: 0
+  createdAt: string
+  expiresAt: string
+}
+
+export interface ForgetConfirmation {
+  previewId: string
+  evidenceDeleted: boolean
+  candidatesDeleted: number
+}
+
+/**
+ * TASK-013's review-gated privacy boundary. A preview is non-destructive;
+ * the caller must separately invoke `confirmForget` with its opaque preview
+ * id. TASK-013 intentionally does not remove semantic memories, embeddings,
+ * or catalog entries because no durable ledger can prove they are supported
+ * only by this episode (that association is Phase 4 work).
+ */
+export interface ForgetStore extends EpisodicStore {
+  previewForget(
+    providerId: string,
+    evidenceId: string,
+    projectId: string,
+  ): Promise<ForgetPreview | undefined>
+  confirmForget(previewId: string): Promise<ForgetConfirmation>
+}
+
+export function isForgetStore(value: unknown): value is ForgetStore {
+  return (
+    isEpisodicStore(value) &&
+    "previewForget" in value &&
+    typeof (value as { previewForget: unknown }).previewForget === "function" &&
+    "confirmForget" in value &&
+    typeof (value as { confirmForget: unknown }).confirmForget === "function"
+  )
 }
 
 export function isEpisodicStore(value: unknown): value is EpisodicStore {

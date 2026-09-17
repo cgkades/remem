@@ -198,6 +198,69 @@ describe("CLI provisioning", () => {
     expect(errors.join("\n")).not.toContain("secret")
   })
 
+  it("requires an explicit project before creating a privacy-forget preview", async () => {
+    const paths = await temporaryPaths()
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: "postgres://user:secret@localhost/remem" },
+      providers: [
+        {
+          type: "postgres",
+          id: "primary",
+          connectionString: "postgres://user:secret@localhost/remem",
+          primary: true,
+          maxConnections: 1,
+          catalogLimit: 10,
+        },
+      ],
+      embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
+    }
+    await writeAppConfig(config, paths)
+    const errors: string[] = []
+
+    const code = await runCli(["forget", "a".repeat(64)], {
+      paths,
+      stdout: () => undefined,
+      stderr: (line) => errors.push(line),
+    })
+
+    expect(code).toBe(1)
+    expect(errors.join("\n")).toContain("requires a non-empty, NUL-free --project")
+    expect(errors.join("\n")).not.toContain("secret")
+  })
+
+  it("requires human confirmation before executing a privacy forget", async () => {
+    const paths = await temporaryPaths()
+    const config: RememAppConfig = {
+      version: 1,
+      storage: { mode: "external", connectionString: "postgres://user:secret@localhost/remem" },
+      providers: [
+        {
+          type: "postgres",
+          id: "primary",
+          connectionString: "postgres://user:secret@localhost/remem",
+          primary: true,
+          maxConnections: 1,
+          catalogLimit: 10,
+        },
+      ],
+      embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
+    }
+    await writeAppConfig(config, paths)
+    const errors: string[] = []
+
+    const code = await runCli(["forget", "00000000-0000-4000-8000-000000000000", "--confirm"], {
+      paths,
+      confirmForget: () => Promise.resolve(false),
+      stdout: () => undefined,
+      stderr: (line) => errors.push(line),
+    })
+
+    expect(code).toBe(1)
+    expect(errors.join("\n")).toContain("confirmation was declined")
+    expect(errors.join("\n")).not.toContain("secret")
+  })
+
   it("rejects an invalid candidate status before connecting to PostgreSQL", async () => {
     const paths = await temporaryPaths()
     const config: RememAppConfig = {

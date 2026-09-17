@@ -1,10 +1,11 @@
 import { createHash, randomBytes } from "node:crypto"
+import { createInterface } from "node:readline/promises"
 import { constants } from "node:fs"
 import { access, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import net from "node:net"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { Pool } from "pg"
+import { Pool, type PoolClient } from "pg"
 import { parseConfig, type PostgresProviderConfig } from "../config.js"
 import {
   CANDIDATE_LIFECYCLE_STATES,
@@ -30,6 +31,7 @@ import {
 } from "../storage/paths.js"
 import { runDoctor } from "./doctor.js"
 import { PostgresMemoryProvider } from "../providers/postgres.js"
+import { FORGET_RESTORE_ADVISORY_LOCK } from "../forget.js"
 import { createEmbeddingModel } from "../storage/embedding-neural.js"
 import { withInstallLock } from "./lock.js"
 import { composeArguments, managedCommand, writeManagedFiles } from "./managed.js"
@@ -41,6 +43,8 @@ export interface CliDependencies {
   stdout?: (line: string) => void
   stderr?: (line: string) => void
   operationLockHeld?: boolean
+  /** Test-only substitute for the real interactive human-presence prompt. */
+  confirmForget?: (previewId: string) => Promise<boolean>
 }
 
 interface ParsedArguments {
@@ -58,6 +62,15 @@ export const RESTORE_FLAGS = [
   "--single-transaction",
   "--exit-on-error",
 ] as const
+
+interface ForgetTombstoneRow {
+  provider_id: string
+  project_id: string
+  target_kind: "evidence" | "candidate"
+  target_id: string
+  preview_id: string
+  deleted_at: Date
+}
 
 function parseArguments(args: string[]): ParsedArguments {
   if (args[0] === "--help" || args[0] === "-h")
@@ -530,7 +543,12 @@ async function restore(
   const pool = new Pool({ connectionString: config.storage.connectionString, max: 1 })
   const client = await pool.connect()
   try {
-    await client.query("SELECT pg_advisory_lock($1)", [7_263_663_296])
+    await client.query("SELECT pg_advisory_lock($1)", [FORGET_RESTORE_ADVISORY_LOCK])
+    // A backup can predate a confirmed privacy forget. Preserve the current
+    // database's body-free tombstones across `pg_restore --clean` and apply
+    // them after schema migration so restoring history never resurrects a
+    // forgotten episode or its directly derived candidate rows.
+    const tombstones = await snapshotForgetTombstones(client)
     if (config.storage.mode === "managed") {
       await runner.run(
         "docker",
@@ -556,10 +574,86 @@ async function restore(
       })
     }
     await migrate(config)
+    await reapplyForgetTombstones(client, tombstones)
   } finally {
-    await client.query("SELECT pg_advisory_unlock($1)", [7_263_663_296]).catch(() => undefined)
+    await client
+      .query("SELECT pg_advisory_unlock($1)", [FORGET_RESTORE_ADVISORY_LOCK])
+      .catch(() => undefined)
     client.release()
     await pool.end()
+  }
+}
+
+async function snapshotForgetTombstones(client: PoolClient): Promise<ForgetTombstoneRow[]> {
+  const exists = await client.query<{ table_name: string | null }>(
+    "SELECT to_regclass('remem.forget_tombstones') AS table_name",
+  )
+  if (!exists.rows[0]?.table_name) return []
+  const tombstones = await client.query<ForgetTombstoneRow>(
+    `SELECT provider_id, project_id, target_kind, target_id, preview_id, deleted_at
+     FROM remem.forget_tombstones`,
+  )
+  return tombstones.rows
+}
+
+async function reapplyForgetTombstones(
+  client: PoolClient,
+  preserved: ForgetTombstoneRow[],
+): Promise<void> {
+  for (const tombstone of preserved) {
+    await client.query(
+      `INSERT INTO remem.forget_tombstones
+         (provider_id, project_id, target_kind, target_id, preview_id, deleted_at)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (provider_id, project_id, target_kind, target_id) DO NOTHING`,
+      [
+        tombstone.provider_id,
+        tombstone.project_id,
+        tombstone.target_kind,
+        tombstone.target_id,
+        tombstone.preview_id,
+        tombstone.deleted_at,
+      ],
+    )
+  }
+  // Include tombstones that were already inside the restored backup as well
+  // as ones preserved above. Both are content-free and represent a prior
+  // explicit privacy decision that must outrank the backup payload.
+  await client.query(
+    `DELETE FROM remem.candidate_memories candidate
+     USING remem.forget_tombstones tombstone
+     WHERE tombstone.target_kind = 'candidate'
+       AND candidate.id::text = tombstone.target_id`,
+  )
+  await client.query(
+    `DELETE FROM remem.session_events event
+     USING remem.forget_tombstones tombstone
+     WHERE tombstone.target_kind = 'evidence'
+       AND event.provider_id = tombstone.provider_id
+       AND event.project_id = tombstone.project_id
+       AND event.evidence_id = tombstone.target_id`,
+  )
+}
+
+async function confirmForgetInteractively(
+  previewId: string,
+  confirm?: CliDependencies["confirmForget"],
+): Promise<void> {
+  if (confirm) {
+    if (!(await confirm(previewId))) throw new Error("forget confirmation was declined")
+    return
+  }
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error("forget confirmation requires an interactive terminal")
+  }
+  const terminal = createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    const response = await terminal.question(
+      `Type the preview id to permanently forget its scoped evidence (${previewId}): `,
+    )
+    if (response !== previewId) throw new Error("forget confirmation did not match the preview id")
+  } finally {
+    terminal.close()
   }
 }
 
@@ -578,6 +672,8 @@ Commands:
     [--reason TEXT] [--actor NAME] [--memory-id ID (with --recover-applied)]
   consolidate [--batch-size NUMBER]
   reembed [--batch-size NUMBER]
+  forget <EVIDENCE_ID> --project PROJECT_ID
+  forget <PREVIEW_ID> --confirm
   backup [--output FILE]
   restore <FILE> --confirm
   reset --confirm`
@@ -645,6 +741,7 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
         "correction-review",
         "consolidate",
         "reembed",
+        "forget",
       ]).has(parsed.command)
     ) {
       return await withInstallLock(paths, () =>
@@ -655,6 +752,7 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
           stdout: output,
           stderr: errorOutput,
           operationLockHeld: true,
+          ...(dependencies.confirmForget ? { confirmForget: dependencies.confirmForget } : {}),
         }),
       )
     }
@@ -675,7 +773,8 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
       parsed.command === "candidates" ||
       parsed.command === "review" ||
       parsed.command === "consolidate" ||
-      parsed.command === "reembed"
+      parsed.command === "reembed" ||
+      parsed.command === "forget"
     ) {
       const provider =
         parsed.command === "reembed"
@@ -697,6 +796,26 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
             throw new Error("review requires exactly one of --approve or --reject")
           await provider.reviewCandidate(id, approve ? "approved" : "rejected")
           output(`Candidate ${id} ${approve ? "approved" : "rejected"}.`)
+          return 0
+        }
+        if (parsed.command === "forget") {
+          const id = parsed.positionals[0]
+          if (!id) throw new Error("forget requires an evidence id or preview id")
+          if (hasFlag(parsed, "confirm")) {
+            if (stringFlag(parsed, "project")) {
+              throw new Error("forget confirmation uses the preview scope; omit --project")
+            }
+            await confirmForgetInteractively(id, dependencies.confirmForget)
+            output(JSON.stringify(await provider.confirmForget(id), null, 2))
+            return 0
+          }
+          const projectId = boundedFlag(parsed, "project", 256)
+          if (!projectId || projectId.includes("\u0000")) {
+            throw new Error("forget preview requires a non-empty, NUL-free --project")
+          }
+          const preview = await provider.previewForget(provider.id, id, projectId)
+          if (!preview) throw new Error("forget target was not found in the requested project")
+          output(JSON.stringify(preview, null, 2))
           return 0
         }
         if (parsed.command === "reembed") {
