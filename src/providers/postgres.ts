@@ -1410,6 +1410,14 @@ export class PostgresMemoryProvider
    * actually carry an approved/promoted decision candidate (and de-duplicating
    * multiple such candidates per event) shrinks that product without changing
    * the result: GROUP BY still yields one row per (older, newer) pair.
+   *
+   * Correctness of that DISTINCT depends on `min(entity_id)` being the ONLY
+   * aggregate: `min` is duplicate-insensitive, so collapsing the per-event
+   * candidate multiplicity before the join cannot change its value or group
+   * membership (which is existence-based, not count-based). If a
+   * count-sensitive aggregate is ever added here (`count`, `sum`, `array_agg`,
+   * etc.), the CTE de-duplication would silently change results and must be
+   * revisited.
    */
   async listSupersessionCandidates(
     providerId: string,
@@ -1433,6 +1441,9 @@ export class PostgresMemoryProvider
           AND decision_candidate.metadata->>'providerId' = $1
          WHERE newer.provider_id = $1 AND newer.project_id = $2 AND newer.evidence_id IS NOT NULL
        )
+       -- min() must stay the only aggregate: it is duplicate-insensitive, which
+       -- is what makes the CTE's SELECT DISTINCT safe. A count-sensitive
+       -- aggregate here would break equivalence with the pre-CTE query.
        SELECT older.evidence_id, newer.evidence_id AS newer_decision_evidence_id,
               min(older_link.entity_id::text) AS shared_entity_id,
               older.occurred_at, newer.occurred_at AS newer_decision_occurred_at
