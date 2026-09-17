@@ -1212,7 +1212,11 @@ export class PostgresMemoryProvider
           FORGET_PREVIEW_TTL_MS,
         ],
       )
-      return forgetPreviewFromRow(preview.rows[0]!)
+      const previewRow = preview.rows[0]
+      if (!previewRow) {
+        throw new Error("forget preview INSERT ... RETURNING unexpectedly returned no row")
+      }
+      return forgetPreviewFromRow(previewRow)
     })
   }
 
@@ -1286,13 +1290,17 @@ export class PostgresMemoryProvider
              ON CONFLICT (provider_id, project_id, target_kind, target_id) DO NOTHING`,
               [row.provider_id, row.project_id, row.evidence_id, row.id],
             )
-            for (const candidateId of row.candidate_ids) {
+            // One set-based insert rather than a query per candidate: keeps
+            // the transaction's lock-hold time bounded regardless of how many
+            // candidates the episode produced.
+            if (row.candidate_ids.length > 0) {
               await client.query(
                 `INSERT INTO remem.forget_tombstones
                  (provider_id, project_id, target_kind, target_id, preview_id)
-               VALUES ($1, $2, 'candidate', $3, $4)
+               SELECT $1, $2, 'candidate', candidate_id::text, $4
+               FROM unnest($3::uuid[]) AS candidate_id
                ON CONFLICT (provider_id, project_id, target_kind, target_id) DO NOTHING`,
-                [row.provider_id, row.project_id, candidateId, row.id],
+                [row.provider_id, row.project_id, row.candidate_ids, row.id],
               )
             }
             await client.query(
