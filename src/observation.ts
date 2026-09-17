@@ -141,3 +141,84 @@ export function isEpisodicStore(value: unknown): value is EpisodicStore {
     typeof value.readEvidence === "function"
   )
 }
+
+/**
+ * Hard ceilings for TASK-011 scoped episode search. A caller-supplied
+ * `EpisodicSearchOptions` may only lower these, never raise them -- the
+ * implementation clamps rather than trusting a caller's larger request, so
+ * a misbehaving or compromised caller cannot force an unbounded response.
+ */
+export const EPISODIC_SEARCH_MAX_RESULTS = 10
+export const EPISODIC_SEARCH_MAX_NEIGHBORS_PER_SIDE = 1
+export const EPISODIC_SEARCH_MAX_OUTPUT_TOKENS = 2000
+/**
+ * Upper bound on the raw search string length. A misbehaving or compromised
+ * caller cannot force the database to parse an arbitrarily large
+ * `plainto_tsquery` input -- the query is clamped to this length before it
+ * reaches SQL, in the same spirit as the result/token ceilings above.
+ */
+export const EPISODIC_SEARCH_MAX_QUERY_LENGTH = 10_000
+
+export interface EpisodicSearchOptions {
+  /** Clamped to at most `EPISODIC_SEARCH_MAX_RESULTS`. */
+  limit?: number
+  /** Clamped to at most `EPISODIC_SEARCH_MAX_OUTPUT_TOKENS`. */
+  maxOutputTokens?: number
+}
+
+export type EpisodicNeighborPosition = "preceding" | "following"
+
+/**
+ * A single event adjacent (by `occurredAt` within the same session) to a
+ * matched result, included for surrounding context. Carries the same
+ * `role`/`origin` labeling as the envelope it wraps -- a neighbor is never
+ * unlabeled or presented as if it were itself a search match, so a caller
+ * cannot mistake unclassified/historical context for a verified result.
+ */
+export interface EpisodicNeighbor {
+  position: EpisodicNeighborPosition
+  envelope: EvidenceEnvelope
+  /** True if `envelope.payload.text` was shortened to fit the response's output-token budget. */
+  truncated: boolean
+}
+
+export interface EpisodicSearchMatch {
+  envelope: EvidenceEnvelope
+  /** True if `envelope.payload.text` was shortened to fit the response's output-token budget. */
+  truncated: boolean
+  /** At most one preceding and one following neighbor; omitted (not a zero-length placeholder) once the output-token budget is exhausted. */
+  neighbors: EpisodicNeighbor[]
+}
+
+export interface EpisodicSearchResult {
+  matches: EpisodicSearchMatch[]
+  /** True if the output-token budget was reached before every eligible match/neighbor could be included -- distinct from "no more matches exist". */
+  budgetExhausted: boolean
+}
+
+/**
+ * TASK-011: scoped lexical search over previously appended episodic
+ * evidence, with bounded same-session neighbor expansion. Deliberately
+ * lexical only -- semantic/vector episode indexing is explicitly deferred
+ * per the plan. Every `EvidenceEnvelope` ever appended (regardless of
+ * `role`/`origin`, including an unclassified or failed-approach event) is
+ * searchable: this store performs no trust filtering, so a caller can
+ * always independently find and label historical/untrusted evidence
+ * rather than have it silently excluded.
+ */
+export interface EpisodicSearchStore extends EpisodicStore {
+  searchEpisodes(
+    providerId: string,
+    query: string,
+    context: MemoryContext,
+    options?: EpisodicSearchOptions,
+  ): Promise<EpisodicSearchResult>
+}
+
+export function isEpisodicSearchStore(value: unknown): value is EpisodicSearchStore {
+  return (
+    isEpisodicStore(value) &&
+    "searchEpisodes" in value &&
+    typeof (value as { searchEpisodes: unknown }).searchEpisodes === "function"
+  )
+}
