@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest"
 import {
   DEFAULT_EVIDENCE_ADMISSION_CONFIG,
+  RAW_TEXT_MAX_BYTES_BEFORE_REDUCTION,
   admitEvidence,
   summarizeRejections,
   type AdmissionAuthority,
   type EvidenceAdmissionConfig,
   type RawEvidenceCandidate,
 } from "../src/observation-admission.js"
+import { BULK_ARTIFACT_MIN_BYTES } from "../src/bulk-artifact-reduction.js"
 import type { MemoryContext } from "../src/types.js"
 
 const context: MemoryContext = {
@@ -803,5 +805,185 @@ describe("summarizeRejections", () => {
     const results = [admitEvidence(baseCandidate(), authority, enabledConfig)]
 
     expect(summarizeRejections(results)).toEqual({})
+  })
+})
+
+describe("admitEvidence: TASK-059 bulk-artifact reduction", () => {
+  function pythonTraceback(lineCount: number): string {
+    const frames = Array.from(
+      { length: lineCount },
+      (_, index) =>
+        `  File "/app/service/module_${index}.py", line ${100 + index}, in handler_${index}`,
+    ).join("\n")
+    return `Traceback (most recent call last):\n${frames}\nValueError: something went wrong deep in the stack`
+  }
+
+  it("admits a large stack trace that would otherwise exceed maxPayloadBytes, storing only the reduced form", () => {
+    const raw = pythonTraceback(400)
+    expect(Buffer.byteLength(raw, "utf8")).toBeGreaterThan(enabledConfig.maxPayloadBytes)
+
+    const result = admitEvidence(
+      baseCandidate({ payload: { text: raw } }),
+      authority,
+      enabledConfig,
+    )
+
+    expect(result.outcome).toBe("admitted")
+    if (result.outcome !== "admitted") return
+    expect(result.envelope.payload.text).not.toBe(raw)
+    expect(result.envelope.payload.text?.length).toBeLessThan(raw.length)
+    expect(Buffer.byteLength(result.envelope.payload.text ?? "", "utf8")).toBeLessThanOrEqual(
+      enabledConfig.maxPayloadBytes,
+    )
+  })
+
+  it("rejects a large *ordinary narrative* payload as payload-too-large -- TASK-059 never reduces non-tool-output content", () => {
+    const narrative = "We decided to migrate to logical replication because ".repeat(200)
+    expect(Buffer.byteLength(narrative, "utf8")).toBeGreaterThan(enabledConfig.maxPayloadBytes)
+
+    const result = admitEvidence(
+      baseCandidate({ payload: { text: narrative } }),
+      authority,
+      enabledConfig,
+    )
+
+    expect(result.outcome).toBe("rejected")
+    if (result.outcome !== "rejected") return
+    expect(result.reason).toBe("payload-too-large")
+  })
+
+  it("still rejects a stack trace containing a credential, even though the credential falls outside the reduced head/tail/key-line window", () => {
+    const paddingBefore = Array.from(
+      { length: 150 },
+      (_, index) => `  File "/app/pad_${index}.py", line ${index}, in pad`,
+    ).join("\n")
+    const credentialLine = "  api_key=abcdefghijklmnopqrstuvwxyz123456"
+    const paddingAfter = Array.from(
+      { length: 150 },
+      (_, index) => `  File "/app/post_${index}.py", line ${index}, in post`,
+    ).join("\n")
+    const raw = `Traceback (most recent call last):\n${paddingBefore}\n${credentialLine}\n${paddingAfter}\nValueError: done`
+
+    const result = admitEvidence(
+      baseCandidate({ payload: { text: raw } }),
+      authority,
+      enabledConfig,
+    )
+
+    expect(result.outcome).toBe("rejected")
+    if (result.outcome !== "rejected") return
+    expect(result.reason).toBe("unscreenable-content")
+  })
+
+  it("passes an ordinary short payload through completely unchanged", () => {
+    const result = admitEvidence(baseCandidate(), authority, enabledConfig)
+    expect(result.outcome).toBe("admitted")
+    if (result.outcome !== "admitted") return
+    expect(result.envelope.payload.text).toBe("We decided to use logical replication for Orion.")
+  })
+
+  it("uses a configured bulkArtifactSummarizer instead of the deterministic reduction when one is provided", () => {
+    const raw = pythonTraceback(400)
+    const config: EvidenceAdmissionConfig = {
+      ...enabledConfig,
+      bulkArtifactSummarizer: (text) => `SUMMARIZED (${text.length} raw chars)`,
+    }
+
+    const result = admitEvidence(baseCandidate({ payload: { text: raw } }), authority, config)
+
+    expect(result.outcome).toBe("admitted")
+    if (result.outcome !== "admitted") return
+    expect(result.envelope.payload.text).toBe(`SUMMARIZED (${raw.length} raw chars)`)
+  })
+
+  it("falls back to deterministic reduction when the configured summarizer throws -- never the only path", () => {
+    const raw = pythonTraceback(400)
+    const config: EvidenceAdmissionConfig = {
+      ...enabledConfig,
+      bulkArtifactSummarizer: () => {
+        throw new Error("summarizer backend unavailable")
+      },
+    }
+
+    const result = admitEvidence(baseCandidate({ payload: { text: raw } }), authority, config)
+
+    expect(result.outcome).toBe("admitted")
+    if (result.outcome !== "admitted") return
+    expect(result.envelope.payload.text).not.toBe(raw)
+    expect(result.envelope.payload.text?.length).toBeLessThan(raw.length)
+  })
+
+  it("falls back to deterministic reduction when the configured summarizer returns an empty/non-string value", () => {
+    const raw = pythonTraceback(400)
+    const config: EvidenceAdmissionConfig = {
+      ...enabledConfig,
+      bulkArtifactSummarizer: () => "",
+    }
+
+    const result = admitEvidence(baseCandidate({ payload: { text: raw } }), authority, config)
+
+    expect(result.outcome).toBe("admitted")
+    if (result.outcome !== "admitted") return
+    expect(result.envelope.payload.text).not.toBe(raw)
+    expect(result.envelope.payload.text?.length).toBeLessThan(raw.length)
+  })
+
+  it("a configured summarizer never runs on ordinary short payloads (deterministic classification is the gate, not the summarizer)", () => {
+    let called = false
+    const config: EvidenceAdmissionConfig = {
+      ...enabledConfig,
+      bulkArtifactSummarizer: (text) => {
+        called = true
+        return `SUMMARIZED: ${text}`
+      },
+    }
+
+    const result = admitEvidence(baseCandidate(), authority, config)
+
+    expect(result.outcome).toBe("admitted")
+    expect(called).toBe(false)
+  })
+
+  it("never reduces tool-output-shaped content living in payload.metadata -- TASK-059 only ever touches payload.text", () => {
+    // Deliberately large enough that it WOULD be classified and reduced if it
+    // lived in payload.text (over BULK_ARTIFACT_MIN_BYTES), so this test proves
+    // reduction is scoped to text -- not that an undersized value merely fails
+    // classification. Kept well under maxPayloadBytes (8 KiB) so the envelope
+    // is still admitted with the metadata carried through verbatim.
+    const stackTraceShapedMetadataValue = pythonTraceback(45)
+    expect(Buffer.byteLength(stackTraceShapedMetadataValue, "utf8")).toBeGreaterThan(
+      BULK_ARTIFACT_MIN_BYTES,
+    )
+    const result = admitEvidence(
+      baseCandidate({
+        payload: { metadata: { rawOutput: stackTraceShapedMetadataValue } },
+      }),
+      authority,
+      enabledConfig,
+    )
+
+    expect(result.outcome).toBe("admitted")
+    if (result.outcome !== "admitted") return
+    // Byte-for-byte unchanged -- not reduced, not summarized, not touched.
+    expect(result.envelope.payload.metadata?.rawOutput).toBe(stackTraceShapedMetadataValue)
+  })
+
+  it("rejects a raw payload text so large it is not even worth running the credential scan/classification pipeline on", () => {
+    // Comfortably larger than RAW_TEXT_MAX_BYTES_BEFORE_REDUCTION, but
+    // still shaped like something reduceBulkArtifact would otherwise
+    // happily reduce -- this must be rejected before classification ever
+    // runs, on cost grounds alone, not on shape.
+    const raw = pythonTraceback(Math.ceil(RAW_TEXT_MAX_BYTES_BEFORE_REDUCTION / 40))
+    expect(Buffer.byteLength(raw, "utf8")).toBeGreaterThan(RAW_TEXT_MAX_BYTES_BEFORE_REDUCTION)
+
+    const result = admitEvidence(
+      baseCandidate({ payload: { text: raw } }),
+      authority,
+      enabledConfig,
+    )
+
+    expect(result.outcome).toBe("rejected")
+    if (result.outcome !== "rejected") return
+    expect(result.reason).toBe("payload-too-large")
   })
 })
