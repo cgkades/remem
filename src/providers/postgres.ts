@@ -1696,14 +1696,21 @@ export class PostgresMemoryProvider
   }
 
   /**
-   * TASK-062: session-start hard-limit capacity warning. Serialized per
-   * `(providerId, projectId)` (see `withCapacityLock`) since firing
-   * atomically stamps `last_hard_limit_warning_at` -- without the lock,
-   * two concurrent session-start checks racing the same throttle window
-   * could both observe "never warned"/"throttle expired" and both fire,
-   * defeating the throttle entirely.
+   * TASK-062: session-start hard-limit capacity warning. No advisory lock
+   * is needed to enforce the throttle: firing is a single conditional
+   * `UPDATE ... WHERE (last_hard_limit_warning_at IS NULL OR ... elapsed)`
+   * that both tests and stamps `last_hard_limit_warning_at` atomically.
+   * Under READ COMMITTED, two concurrent session-start checks racing the
+   * same throttle window serialize on the row: the first UPDATE stamps
+   * `now()` and reports one affected row; the second blocks on the row
+   * lock, then re-evaluates its `WHERE` against the freshly committed
+   * timestamp, fails the throttle predicate, and reports zero affected
+   * rows -- so exactly one fires. The preceding read (`computeTotalBytes`)
+   * only feeds the informational byte counts in the returned warning; it
+   * has no bearing on the throttle decision, so it needs no serialization
+   * with the UPDATE.
    *
-   * The throttle-elapsed decision is evaluated inside a single SQL
+   * The throttle-elapsed decision is evaluated inside that single SQL
    * `UPDATE ... WHERE ...` using Postgres's own `now()` throughout, rather
    * than reading `last_hard_limit_warning_at` back into Node and comparing
    * it against a Node-side `new Date()` (`capacity.ts`'s
@@ -1721,28 +1728,26 @@ export class PostgresMemoryProvider
   ): Promise<HardLimitWarning | undefined> {
     const limits = options.limits ?? DEFAULT_CAPACITY_LIMITS
     const throttleMs = options.throttleMs ?? DEFAULT_HARD_LIMIT_WARNING_THROTTLE_MS
-    return this.withCapacityLock(providerId, projectId, async (client) => {
-      const totalBytes = await this.computeTotalBytes(providerId, projectId, client)
-      if (totalBytes <= limits.hardLimitBytes) return undefined
+    const totalBytes = await this.computeTotalBytes(providerId, projectId, this.pool)
+    if (totalBytes <= limits.hardLimitBytes) return undefined
 
-      await client.query(
-        `INSERT INTO remem.capacity_state (provider_id, project_id)
-         VALUES ($1, $2)
-         ON CONFLICT (provider_id, project_id) DO NOTHING`,
-        [providerId, projectId],
-      )
+    await this.pool.query(
+      `INSERT INTO remem.capacity_state (provider_id, project_id)
+       VALUES ($1, $2)
+       ON CONFLICT (provider_id, project_id) DO NOTHING`,
+      [providerId, projectId],
+    )
 
-      const fired = await client.query(
-        `UPDATE remem.capacity_state
-         SET last_hard_limit_warning_at = now(), updated_at = now()
-         WHERE provider_id = $1 AND project_id = $2
-           AND (last_hard_limit_warning_at IS NULL
-                OR last_hard_limit_warning_at <= now() - ($3 || ' milliseconds')::interval)`,
-        [providerId, projectId, throttleMs],
-      )
-      if (fired.rowCount === 0) return undefined
-      return { totalBytes, hardLimitBytes: limits.hardLimitBytes }
-    })
+    const fired = await this.pool.query(
+      `UPDATE remem.capacity_state
+       SET last_hard_limit_warning_at = now(), updated_at = now()
+       WHERE provider_id = $1 AND project_id = $2
+         AND (last_hard_limit_warning_at IS NULL
+              OR last_hard_limit_warning_at <= now() - ($3 || ' milliseconds')::interval)`,
+      [providerId, projectId, throttleMs],
+    )
+    if (!fired.rowCount) return undefined
+    return { totalBytes, hardLimitBytes: limits.hardLimitBytes }
   }
 
   async listCandidates(status?: CandidateMemory["status"]): Promise<CandidateReviewItem[]> {
