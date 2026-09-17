@@ -1399,6 +1399,17 @@ export class PostgresMemoryProvider
    * graph to inflate one response row. Evidence event kinds are deliberately
    * raw transport categories; treating one as a decision here would bypass
    * the Phase 6 classifier.
+   *
+   * The newer side is collapsed to distinct qualifying decision events in a
+   * CTE before the entity self-join. Joining `evidence_entities` to itself on
+   * `entity_id` is O(older-degree x newer-degree) per shared entity, so a
+   * single high-degree entity (a feature/project linked to thousands of
+   * events) would otherwise produce a quadratic intermediate blowup that
+   * `LIMIT` -- applied only after aggregation and the full sort -- cannot
+   * bound. Pre-filtering the newer side to the far smaller set of events that
+   * actually carry an approved/promoted decision candidate (and de-duplicating
+   * multiple such candidates per event) shrinks that product without changing
+   * the result: GROUP BY still yields one row per (older, newer) pair.
    */
   async listSupersessionCandidates(
     providerId: string,
@@ -1412,20 +1423,24 @@ export class PostgresMemoryProvider
         ? Math.max(1, Math.min(SUPERSESSION_CANDIDATE_MAX_RESULTS, Math.floor(requestedLimit)))
         : SUPERSESSION_CANDIDATE_MAX_RESULTS
     const result = await this.pool.query<SupersessionCandidateRow>(
-      `SELECT older.evidence_id, newer.evidence_id AS newer_decision_evidence_id,
+      `WITH newer_decision AS (
+         SELECT DISTINCT newer.id, newer.evidence_id, newer.occurred_at
+         FROM remem.session_events newer
+         JOIN remem.candidate_memories decision_candidate
+           ON decision_candidate.session_event_id = newer.id
+          AND decision_candidate.type = 'decision'
+          AND decision_candidate.status IN ('approved', 'promoted')
+          AND decision_candidate.metadata->>'providerId' = $1
+         WHERE newer.provider_id = $1 AND newer.project_id = $2 AND newer.evidence_id IS NOT NULL
+       )
+       SELECT older.evidence_id, newer.evidence_id AS newer_decision_evidence_id,
               min(older_link.entity_id::text) AS shared_entity_id,
               older.occurred_at, newer.occurred_at AS newer_decision_occurred_at
-       FROM remem.session_events older
-       JOIN remem.evidence_entities older_link ON older_link.session_event_id = older.id
-       JOIN remem.evidence_entities newer_link ON newer_link.entity_id = older_link.entity_id
-       JOIN remem.session_events newer ON newer.id = newer_link.session_event_id
-       JOIN remem.candidate_memories decision_candidate
-         ON decision_candidate.session_event_id = newer.id
-        AND decision_candidate.type = 'decision'
-        AND decision_candidate.status IN ('approved', 'promoted')
-        AND decision_candidate.metadata->>'providerId' = $1
+       FROM newer_decision newer
+       JOIN remem.evidence_entities newer_link ON newer_link.session_event_id = newer.id
+       JOIN remem.evidence_entities older_link ON older_link.entity_id = newer_link.entity_id
+       JOIN remem.session_events older ON older.id = older_link.session_event_id
        WHERE older.provider_id = $1 AND older.project_id = $2 AND older.evidence_id IS NOT NULL
-         AND newer.provider_id = $1 AND newer.project_id = $2 AND newer.evidence_id IS NOT NULL
          AND newer.occurred_at > older.occurred_at
        GROUP BY older.evidence_id, newer.evidence_id, older.occurred_at, newer.occurred_at
        ORDER BY newer.occurred_at DESC, older.occurred_at DESC, older.evidence_id, newer.evidence_id
