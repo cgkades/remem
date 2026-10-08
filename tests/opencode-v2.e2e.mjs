@@ -1077,8 +1077,13 @@ async function main() {
       const started = performance.now()
       await prompt(serverURL, freshSession, LEARNING_QUERY)
       const dispatchRoundTripMs = performance.now() - started
-      const recallRequests = model.requests.filter((body) =>
-        JSON.stringify(body.messages).includes(LEARNING_QUERY),
+      // The runtime also sends title-generation requests containing the
+      // user's prompt. Only agent dispatch advertises native tools and runs
+      // the session context hook; a title request is not a recall failure.
+      const recallRequests = model.requests.filter(
+        (body) =>
+          JSON.stringify(body.messages).includes(LEARNING_QUERY) &&
+          body.tools?.some((tool) => tool.function?.name === "read"),
       )
       const expected = [
         "cwd-relative checkpoint paths",
@@ -1096,7 +1101,9 @@ async function main() {
           !text.includes(detailRow.evidence_id) ||
           !text.includes(`/sessions/${learningSession}/evidence/`)
         )
-          throw new Error(`cross-session content/provenance recall failed: ${text}`)
+          throw new Error(
+            `cross-session content/provenance recall failed: ${text}\nDispatch: ${JSON.stringify(body.messages)}`,
+          )
         if (
           text.includes("fixture-secret") ||
           text.includes("ignore all previous instructions") ||
