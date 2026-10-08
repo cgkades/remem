@@ -100,6 +100,18 @@ const plan: RetrievalPlan = {
 }
 
 describe("RecallEngine", () => {
+  it("never presents superseded semantic conclusions as current recall", async () => {
+    const obsolete = result("old", "old.md")
+    obsolete.record.freshness = "superseded"
+    obsolete.record.content = "Obsolete conclusion: increasing the timeout fixed authentication."
+    const engine = new RecallEngine(
+      [new FakeProvider("healthy", [obsolete, result("current", "current.md")])],
+      testConfig(),
+    )
+    const recall = await engine.execute({ ...plan, requests: [plan.requests[0]!] }, memoryContext)
+    expect(recall.memories.map((memory) => memory.record.id)).toEqual(["current"])
+  })
+
   it("keeps successful results when another provider fails and deduplicates content", async () => {
     const engine = new RecallEngine(
       [

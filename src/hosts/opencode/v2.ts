@@ -383,11 +383,29 @@ export const RememPlugin = Plugin.define({
         episodicRecall: parsed.config.evidenceAdmission.enabled,
       })
       capture = createCaptureCoordinator(created.providers, parsed.config, logger)
+      const coordinator = capture
       evidence = createEvidenceCaptureCoordinator(
         created.providers,
         parsed.config,
         { host: "opencode-v2", projectId: location.projectId },
         logger,
+        (envelope) => {
+          if (
+            envelope.role !== "user" ||
+            envelope.origin !== "direct-user" ||
+            !envelope.context.sessionId ||
+            !envelope.payload.text
+          )
+            return
+          coordinator?.enqueue({
+            host: "opencode-v2",
+            context: envelope.context,
+            sessionId: envelope.context.sessionId,
+            ...(envelope.messageId ? { messageId: envelope.messageId } : {}),
+            text: envelope.payload.text,
+            evidenceRefs: [{ providerId: envelope.providerId, eventId: envelope.id }],
+          })
+        },
       )
       if (evidence) {
         const primary = parsed.config.providers.find(
@@ -417,8 +435,7 @@ export const RememPlugin = Plugin.define({
           })
         }
       }
-      const coordinator = capture
-      if (coordinator) {
+      if (coordinator && !parsed.config.evidenceAdmission.enabled) {
         promptRegistration = await context.session.hook("prompt", (event) => {
           try {
             coordinator.enqueue({
@@ -470,7 +487,9 @@ export const RememPlugin = Plugin.define({
           evidencePromptRegistration?.dispose(),
           evidenceToolRegistration?.dispose(),
         ])
-        await Promise.allSettled([capture?.dispose(), evidence?.dispose()])
+        // Evidence persistence may enqueue semantic capture while draining.
+        await Promise.allSettled([evidence?.dispose()])
+        await Promise.allSettled([capture?.dispose()])
         await Promise.allSettled([toolRegistration.dispose(), disposeProviders(providers)])
       }
     } catch (error) {
@@ -481,7 +500,8 @@ export const RememPlugin = Plugin.define({
         evidencePromptRegistration?.dispose(),
         evidenceToolRegistration?.dispose(),
       ])
-      await Promise.allSettled([capture?.dispose(), evidence?.dispose()])
+      await Promise.allSettled([evidence?.dispose()])
+      await Promise.allSettled([capture?.dispose()])
       await disposeProviders(providers)
       safeLoggerCall(logger, "error", "plugin.initialization_failed", {
         error: error instanceof Error ? error.name : "unknown error",

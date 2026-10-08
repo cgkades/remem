@@ -76,6 +76,7 @@ function normalizeResult(
     typeof record.source !== "string" ||
     !MEMORY_TYPES.has(record.type) ||
     !FRESHNESS_VALUES.has(record.freshness) ||
+    record.freshness === "superseded" ||
     !scopeAllowed(record.scope, context)
   ) {
     return undefined
@@ -308,7 +309,7 @@ export class RecallEngine {
                 : providerResults.length === results.length
                   ? {}
                   : {
-                      error: `${providerResults.length - results.length} invalid or out-of-scope result(s) omitted`,
+                      error: `${providerResults.length - results.length} invalid, superseded or out-of-scope result(s) omitted`,
                     }),
             } satisfies ProviderAttempt,
           }

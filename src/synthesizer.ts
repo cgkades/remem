@@ -20,12 +20,30 @@ function escapeXml(value: string): string {
 }
 
 function sourceLines(memory: RankedMemory): string[] {
+  const evidence = (memory.record.provenance ?? []).flatMap((provenance) => {
+    const refs: unknown = provenance.source.metadata?.evidenceRefs
+    if (!Array.isArray(refs)) return []
+    return refs.slice(0, 16).flatMap((ref: unknown) => {
+      if (
+        !ref ||
+        typeof ref !== "object" ||
+        !("providerId" in ref) ||
+        ref.providerId !== memory.record.providerId ||
+        !("eventId" in ref) ||
+        typeof ref.eventId !== "string" ||
+        !/^[a-f0-9]{64}$/u.test(ref.eventId)
+      )
+        return []
+      return [`  Evidence: ${escapeXml(ref.providerId)}:${ref.eventId}`]
+    })
+  })
   return [
     `  Source: ${escapeXml(memory.record.providerId)}:${escapeXml(memory.record.id)} (${escapeXml(memory.record.source)})`,
     ...memory.duplicateSources.map(
       (source) =>
         `  Duplicate source: ${escapeXml(source.providerId)}:${escapeXml(source.id)} (${escapeXml(source.source)})`,
     ),
+    ...[...new Set(evidence)].slice(0, 16),
   ]
 }
 

@@ -362,6 +362,8 @@ function screenPayload(payload: EvidencePayload): "too-complex" | "unscreenable"
       for (const entry of Object.values(value)) stack.push({ value: entry, depth: depth + 1 })
     }
   }
+  // Key/value context matters: an ordinary string under "password" is still a credential.
+  if (containsSensitiveCredential(JSON.stringify(payload.metadata))) return "unscreenable"
   return undefined
 }
 
