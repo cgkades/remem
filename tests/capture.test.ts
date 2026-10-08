@@ -66,6 +66,29 @@ function input(text: string): UserPromptCapture {
 }
 
 describe("DeterministicCandidateExtractor", () => {
+  it.each([
+    "We'll use PostgreSQL for durable memory.",
+    "We will use PostgreSQL for durable memory.",
+    "Let's use PostgreSQL for durable memory.",
+  ])("preserves explicit adoption decisions: %s", async (text) => {
+    const candidates = await new DeterministicCandidateExtractor(config).extract([
+      observation(text),
+    ])
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]?.memory).toMatchObject({ type: "decision", content: text })
+  })
+
+  it.each([
+    "Let's continue the Phoenix authentication work.",
+    "Let's run the failing check again.",
+    "We'll try increasing the pool timeout.",
+    "We are going to investigate the credential chain.",
+  ])("does not promote continuity or tactical work as an adopted decision: %s", async (text) => {
+    expect(await new DeterministicCandidateExtractor(config).extract([observation(text)])).toEqual(
+      [],
+    )
+  })
+
   it("extracts explicit user corrections and decisions with message provenance", async () => {
     const extractor = new DeterministicCandidateExtractor(config)
     const correction = await extractor.extract([

@@ -353,6 +353,20 @@ describe("admitEvidence", () => {
   })
 
   describe("nested credentials", () => {
+    it.each([
+      { input: { password: "ordinary-secret" } },
+      { entries: [{ api_key: "ordinary-secret" }] },
+      { output: { nested: { access_token: "ordinary-secret" } } },
+    ])("rejects credentials identified by their metadata key, not just value shape", (metadata) => {
+      expect(
+        admitEvidence(
+          baseCandidate({ payload: { text: "safe output", metadata } }),
+          authority,
+          enabledConfig,
+        ),
+      ).toMatchObject({ outcome: "rejected", reason: "unscreenable-content" })
+    })
+
     it("rejects a credential in payload.text", () => {
       const result = admitEvidence(
         baseCandidate({ payload: { text: "the api_key=1234567890abcdef1234567890abcdef value" } }),

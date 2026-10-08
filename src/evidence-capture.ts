@@ -11,7 +11,7 @@ import { withTimeout } from "./timeout.js"
 import type { MemoryProvider, RememLogger } from "./types.js"
 
 /** Host-neutral evidence queue. Admission precedes all persistence and is
- * independent of semantic significance, legacy capture, and promotion. */
+ * independent of semantic significance and promotion. */
 export class EvidenceCaptureCoordinator {
   private readonly queue: EvidenceEnvelope[] = []
   private draining: Promise<void> | undefined
@@ -24,6 +24,7 @@ export class EvidenceCaptureCoordinator {
     private readonly config: EvidenceAdmissionConfig,
     private readonly timeoutMs: number,
     private readonly logger: RememLogger,
+    private readonly onPersisted?: (envelope: EvidenceEnvelope) => void,
   ) {}
 
   private diagnostic(reason: string): void {
@@ -66,7 +67,7 @@ export class EvidenceCaptureCoordinator {
         const envelope = this.queue.shift()
         if (!envelope) continue
         try {
-          await withTimeout(
+          const persistedEnvelope = await withTimeout(
             this.timeoutMs,
             async (signal) => {
               // The pinned host callbacks have IDs but no timestamp. Keep
@@ -89,10 +90,11 @@ export class EvidenceCaptureCoordinator {
                 this.diagnostic("replay-rejected")
                 return
               }
-              let persisted = await this.store.appendEvidence(
-                replay?.outcome === "admitted" ? replay.envelope : envelope,
-                { timeoutMs: this.timeoutMs, signal },
-              )
+              let admitted = replay?.outcome === "admitted" ? replay.envelope : envelope
+              let persisted = await this.store.appendEvidence(admitted, {
+                timeoutMs: this.timeoutMs,
+                signal,
+              })
               // Two processes can both observe a first delivery before
               // either append commits. Re-read once after a collision so
               // differing ingestion clocks don't turn identical evidence
@@ -112,6 +114,7 @@ export class EvidenceCaptureCoordinator {
                     this.config,
                   )
                 if (retry?.outcome === "admitted") {
+                  admitted = retry.envelope
                   persisted = await this.store.appendEvidence(retry.envelope, {
                     timeoutMs: this.timeoutMs,
                     signal,
@@ -120,6 +123,7 @@ export class EvidenceCaptureCoordinator {
               }
               if (persisted.outcome === "collision" || persisted.outcome === "forgotten") {
                 this.diagnostic(persisted.outcome)
+                return
               }
               // Reuse the approved bounded compaction/hard-limit policy.
               // Do not invent an age-based deletion path.
@@ -130,9 +134,13 @@ export class EvidenceCaptureCoordinator {
                   envelope.context.projectId,
                 )
               }
+              signal.throwIfAborted()
+              return admitted
             },
             this.shutdown.signal,
           )
+          if (persistedEnvelope && !this.shutdown.signal.aborted)
+            this.onPersisted?.(persistedEnvelope)
         } catch {
           this.diagnostic("persistence-failed")
         }
@@ -159,18 +167,33 @@ export function createEvidenceCaptureCoordinator(
   config: RememConfig,
   authority: Omit<AdmissionAuthority, "providerId">,
   logger: RememLogger,
+  onPersisted?: (envelope: EvidenceEnvelope) => void,
 ): EvidenceCaptureCoordinator | undefined {
   if (!config.evidenceAdmission.enabled) return undefined
   const primary = config.providers.find(
     (provider) => provider.type === "postgres" && provider.primary,
   )
   const store = primary && providers.find((provider) => provider.id === primary.id)
-  if (!store || !isEpisodicStore(store)) return undefined
+  if (!store || !isEpisodicStore(store)) {
+    try {
+      void Promise.resolve(
+        logger.log("warn", "evidence.capture_gap", {
+          host: authority.host,
+          reason: "no-primary-episodic-store",
+          count: 1,
+        }),
+      ).catch(() => undefined)
+    } catch {
+      // Observability cannot break host initialization.
+    }
+    return undefined
+  }
   return new EvidenceCaptureCoordinator(
     store,
     { ...authority, providerId: store.id },
     config.evidenceAdmission,
     config.providerTimeoutMs,
     logger,
+    onPersisted,
   )
 }

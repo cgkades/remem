@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest"
-import { EvidenceCaptureCoordinator } from "../src/evidence-capture.js"
+import {
+  EvidenceCaptureCoordinator,
+  createEvidenceCaptureCoordinator,
+} from "../src/evidence-capture.js"
+import { parseConfig } from "../src/config.js"
 import { V2EvidenceAdapter } from "../src/hosts/opencode/evidence.js"
 import {
   DEFAULT_EVIDENCE_ADMISSION_CONFIG,
@@ -29,6 +33,7 @@ function fixture(options: { limit?: number; timeout?: number } = {}) {
   })
   const store: EpisodicStore = { readEvidence, appendEvidence }
   const log = vi.fn()
+  const onPersisted = vi.fn<(envelope: EvidenceEnvelope) => void>()
   const coordinator = new EvidenceCaptureCoordinator(
     store,
     authority,
@@ -39,9 +44,10 @@ function fixture(options: { limit?: number; timeout?: number } = {}) {
     },
     options.timeout ?? 100,
     { log },
+    onPersisted,
   )
   const adapter = new V2EvidenceAdapter(coordinator, "local", location)
-  return { records, store, readEvidence, appendEvidence, log, coordinator, adapter }
+  return { records, store, readEvidence, appendEvidence, log, onPersisted, coordinator, adapter }
 }
 
 const prompt = {
@@ -60,6 +66,69 @@ const tool = {
 }
 
 describe("host evidence capture", () => {
+  it("reports an unavailable enabled evidence store without failing host initialization", () => {
+    const log = vi.fn()
+    const config = parseConfig({ evidenceAdmission: { enabled: true } }).config
+    expect(createEvidenceCaptureCoordinator([], config, authority, { log })).toBeUndefined()
+    expect(log).toHaveBeenCalledWith(
+      "warn",
+      "evidence.capture_gap",
+      expect.objectContaining({ reason: "no-primary-episodic-store" }),
+    )
+  })
+
+  it("does not authorize downstream capture until evidence has persisted", async () => {
+    const f = fixture()
+    let release: () => void = () => undefined
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    f.readEvidence.mockImplementationOnce(async () => {
+      await blocked
+      return undefined
+    })
+    f.adapter.prompt(prompt)
+    expect(f.onPersisted).not.toHaveBeenCalled()
+    release()
+    await f.coordinator.idle()
+    expect(f.onPersisted).toHaveBeenCalledExactlyOnceWith([...f.records.values()][0])
+  })
+
+  it("recovers interrupted downstream capture on evidence re-delivery", async () => {
+    const f = fixture()
+    f.onPersisted.mockImplementationOnce(() => {
+      throw new Error("fixture downstream interruption")
+    })
+    f.adapter.prompt(prompt)
+    await f.coordinator.idle()
+    f.adapter.prompt(prompt)
+    await f.coordinator.idle()
+    expect(f.records.size).toBe(1)
+    expect(f.onPersisted).toHaveBeenCalledTimes(2)
+    expect(f.onPersisted.mock.calls[1]?.[0]).toEqual([...f.records.values()][0])
+    expect(JSON.stringify(f.log.mock.calls)).not.toContain("fixture downstream interruption")
+  })
+
+  it("does not authorize capture when a stored replay timestamp is invalid", async () => {
+    const f = fixture()
+    f.adapter.prompt(prompt)
+    await f.coordinator.idle()
+    const row = [...f.records.values()][0]
+    if (!row) throw new Error("missing fixture evidence")
+    f.records.set(row.id, { ...row, occurredAt: "invalid" })
+    f.onPersisted.mockClear()
+    f.appendEvidence.mockClear()
+    f.adapter.prompt(prompt)
+    await f.coordinator.idle()
+    expect(f.onPersisted).not.toHaveBeenCalled()
+    expect(f.appendEvidence).not.toHaveBeenCalled()
+    expect(f.log).toHaveBeenCalledWith(
+      "warn",
+      "evidence.capture_gap",
+      expect.objectContaining({ reason: "replay-rejected" }),
+    )
+  })
+
   it("persists ordinary input and tool evidence without semantic significance or candidate promotion", async () => {
     const f = fixture()
     f.adapter.prompt(prompt)
@@ -128,6 +197,7 @@ describe("host evidence capture", () => {
     expect(f.records.size).toBe(1)
     expect(f.appendEvidence).toHaveBeenCalledTimes(2)
     expect([...f.records.values()][0]?.occurredAt).toBe("2026-10-01T00:00:00.000Z")
+    expect(f.onPersisted).toHaveBeenCalledExactlyOnceWith([...f.records.values()][0])
     expect(f.log).not.toHaveBeenCalled()
   })
 
@@ -165,6 +235,7 @@ describe("host evidence capture", () => {
     f.adapter.tool({ ...tool, result: { content: "Different evidence" } })
     await f.coordinator.idle()
     expect([...f.records.values()][0]?.payload.text).toBe(tool.result.content)
+    expect(f.onPersisted).toHaveBeenCalledTimes(1)
     expect(f.log).toHaveBeenCalledWith(
       "warn",
       "evidence.capture_gap",
@@ -175,6 +246,7 @@ describe("host evidence capture", () => {
   it.each([
     { ...tool, result: { content: "password=supersecret" } },
     { ...tool, input: { path: "src/worker.ts", extra: { nested: "api_key=supersecret" } } },
+    { ...tool, input: { nested: { password: "ordinary-secret" } } },
     {
       ...tool,
       result: { content: "safe output", metadata: { nested: { token: "password=supersecret" } } },
@@ -184,6 +256,7 @@ describe("host evidence capture", () => {
     expect(() => f.adapter.tool(event)).not.toThrow()
     await f.coordinator.idle()
     expect(f.appendEvidence).not.toHaveBeenCalled()
+    expect(f.onPersisted).not.toHaveBeenCalled()
     expect(JSON.stringify(f.log.mock.calls)).not.toContain("supersecret")
   })
 
@@ -261,6 +334,7 @@ describe("host evidence capture", () => {
     f.adapter.tool({ ...tool, id: "call-2" })
     await f.coordinator.idle()
     expect(f.records.size).toBe(1)
+    expect(f.onPersisted).toHaveBeenCalledExactlyOnceWith([...f.records.values()][0])
     expect(JSON.stringify(f.log.mock.calls)).not.toContain("secret provider body")
   })
 
@@ -273,6 +347,7 @@ describe("host evidence capture", () => {
     f.adapter.tool(tool)
     await f.coordinator.idle()
     expect(f.records.size).toBe(0)
+    expect(f.onPersisted).not.toHaveBeenCalled()
     expect(f.log).toHaveBeenCalledWith(
       "warn",
       "evidence.capture_gap",
@@ -287,6 +362,7 @@ describe("host evidence capture", () => {
     await f.coordinator.dispose()
     f.adapter.tool({ ...tool, id: "late-call" })
     expect(f.records.size).toBe(0)
+    expect(f.onPersisted).not.toHaveBeenCalled()
     expect(f.log).toHaveBeenCalled()
   })
 })

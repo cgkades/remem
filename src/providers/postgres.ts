@@ -676,6 +676,7 @@ export class PostgresMemoryProvider
           )
           AND ($8::text[] IS NULL OR m.type = ANY($8::text[]))
           AND ($9::text[] IS NULL OR m.scope_kind = ANY($9::text[]))
+          AND m.freshness <> 'superseded'
           AND m.search_vector @@ query.terms
           ORDER BY lexical_score DESC
           LIMIT $7
@@ -696,6 +697,7 @@ export class PostgresMemoryProvider
           )
           AND ($8::text[] IS NULL OR m.type = ANY($8::text[]))
           AND ($9::text[] IS NULL OR m.scope_kind = ANY($9::text[]))
+          AND m.freshness <> 'superseded'
           ORDER BY me.embedding <=> $6::vector
           LIMIT $13
         ),

@@ -1,6 +1,6 @@
 import type { Context } from "@opencode-ai/plugin/promise/plugin"
 import { Pool } from "pg"
-import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { RememPlugin } from "../src/hosts/opencode/v2.js"
 import { PostgresMemoryProvider } from "../src/providers/postgres.js"
 import { runMigrations } from "../src/storage/migrations.js"
@@ -116,6 +116,20 @@ integration("OpenCode callbacks to PostgreSQL evidence and fresh-session recall"
       "SELECT count(*)::int AS count FROM remem.memories WHERE provider_id='host-loop'",
     )
     expect(semantic.rows[0]?.count).toBe(3)
+    const conclusion = rows.rows.find((row) => row.safe_text.startsWith("Phoenix worker uses"))
+    expect(conclusion).toBeDefined()
+    const sources = await pool.query<{ metadata: unknown }>(
+      `SELECT s.metadata FROM remem.memories m
+       JOIN remem.memory_provenance p ON p.memory_id = m.id
+       JOIN remem.sources s ON s.id = p.source_id
+       WHERE m.provider_id = 'host-loop'`,
+    )
+    expect(sources.rows).toHaveLength(3)
+    for (const source of sources.rows) {
+      expect(source.metadata).toMatchObject({
+        evidenceRefs: [{ providerId: "host-loop", eventId: conclusion?.evidence_id }],
+      })
+    }
 
     const fresh = host()
     const disposeB = await RememPlugin.setup(fresh.context)
@@ -137,6 +151,7 @@ integration("OpenCode callbacks to PostgreSQL evidence and fresh-session recall"
         expect(injected).toContain("interruption tests")
         expect(injected).toContain("lookup root: workspace cwd")
         expect(injected).toContain("/sessions/session-a/evidence/")
+        expect(injected).toContain(`Evidence: host-loop:${conclusion?.evidence_id}`)
         expect(injected).toContain("not a verified conclusion")
         expect(injected).not.toContain("ignore all previous instructions")
         expect(injected).not.toContain("fixture-secret")
@@ -250,5 +265,59 @@ integration("OpenCode callbacks to PostgreSQL evidence and fresh-session recall"
         projectId: "phoenix-project",
       }),
     ).toBeUndefined()
+  })
+
+  it.each(["outage", "forgotten", "collision"] as const)(
+    "does not authorize semantic capture when evidence persistence reports %s",
+    async (outcome) => {
+      const append = vi
+        .spyOn(PostgresMemoryProvider.prototype, "appendEvidence")
+        .mockImplementation((envelope) => {
+          if (outcome === "outage") return Promise.reject(new Error("fixture storage unavailable"))
+          return Promise.resolve({ id: envelope.id, outcome })
+        })
+      const projectId = `failure-${outcome}`
+      const session = host(projectId)
+      let dispose: Awaited<ReturnType<typeof RememPlugin.setup>> = undefined
+      try {
+        dispose = await RememPlugin.setup(session.context)
+        expect(dispose).toBeTypeOf("function")
+        await session.emit("prompt", {
+          sessionID: "failed-session",
+          messageID: "failed-assertion",
+          prompt: { text: "We decided to use isolated queues for Phoenix." },
+        })
+      } finally {
+        await dispose?.()
+        append.mockRestore()
+      }
+      const memories = await pool.query<{ count: number }>(
+        "SELECT count(*)::int AS count FROM remem.memories WHERE provider_id='host-loop' AND scope_id=$1",
+        [projectId],
+      )
+      expect(memories.rows[0]?.count).toBe(0)
+    },
+  )
+
+  it("does not learn metadata-bearing generated prompts through legacy capture", async () => {
+    const projectId = "generated-project"
+    const session = host(projectId)
+    const dispose = await RememPlugin.setup(session.context)
+    try {
+      expect(dispose).toBeTypeOf("function")
+      await session.emit("prompt", {
+        sessionID: "generated-session",
+        messageID: "generated-assertion",
+        prompt: { text: "We decided to use generated assertions for Phoenix." },
+        metadata: { source: "extension" },
+      })
+    } finally {
+      await dispose?.()
+    }
+    const memories = await pool.query<{ count: number }>(
+      "SELECT count(*)::int AS count FROM remem.memories WHERE provider_id='host-loop' AND scope_id=$1",
+      [projectId],
+    )
+    expect(memories.rows[0]?.count).toBe(0)
   })
 })

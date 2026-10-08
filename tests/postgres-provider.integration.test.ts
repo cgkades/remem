@@ -3,7 +3,7 @@ import { appendFile, copyFile, mkdir, mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { Pool } from "pg"
-import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { createCaptureCoordinator } from "../src/capture.js"
 import {
   DeterministicConsolidationPipeline,
@@ -134,6 +134,43 @@ integration("PostgreSQL managed provider", () => {
       await expect(runMigrations(pool, directory)).rejects.toBeInstanceOf(MigrationIntegrityError)
     } finally {
       await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it("excludes superseded rows before the search result limit can crowd out current knowledge", async () => {
+    const embeddingModel = new LocalHashEmbeddingModel()
+    const provider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "current-only",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 100,
+      },
+      { pool, embeddingModel },
+    )
+    const memory = {
+      title: "Phoenix continuity exclusion regression",
+      content: "Phoenix continuity exclusion regression",
+      scope: { kind: "project" as const, id: context.projectId },
+      type: "semantic" as const,
+    }
+    for (let i = 0; i < 10; i++)
+      await provider.write({
+        ...memory,
+        content: Array.from({ length: 10 }, () => memory.content).join(" "),
+        freshness: "superseded",
+      })
+    const current = await provider.write(memory)
+    const embed = vi
+      .spyOn(embeddingModel, "embed")
+      .mockRejectedValue(new Error("fixture embedding outage"))
+    try {
+      const results = await provider.search({ ...request(memory.title), limit: 2 })
+      expect(results.map((result) => result.record.id)).toEqual([current.id])
+    } finally {
+      embed.mockRestore()
     }
   })
 
