@@ -1,5 +1,6 @@
 export * from "./catalog.js"
 export * from "./capture.js"
+export * from "./evidence-capture.js"
 export * from "./consolidation.js"
 export * from "./config.js"
 export * from "./correction.js"

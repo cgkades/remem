@@ -4,7 +4,7 @@ import type {
   CompactionLevel,
   HardLimitWarning,
 } from "./capacity.js"
-import type { EvidenceEnvelope } from "./observation-admission.js"
+import type { EvidenceEnvelope, EvidenceRole } from "./observation-admission.js"
 import type { MemoryContext, MemoryWrite } from "./types.js"
 
 export type SessionEventKind =
@@ -276,6 +276,11 @@ export interface EpisodicSearchOptions {
   limit?: number
   /** Clamped to at most `EPISODIC_SEARCH_MAX_OUTPUT_TOKENS`. */
   maxOutputTokens?: number
+  /** Defaults to all roles. Automatic historical recall may restrict matches
+   * without changing the historical store's general search behavior. */
+  roles?: readonly EvidenceRole[]
+  /** Defaults to true; automatic recall omits unrequested adjacent content. */
+  includeNeighbors?: boolean
 }
 
 export type EpisodicNeighborPosition = "preceding" | "following"

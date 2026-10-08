@@ -1,4 +1,6 @@
 import type { OrchestratorConfig } from "./config.js"
+import { episodeResults } from "./episodic-recall.js"
+import { isEpisodicSearchStore } from "./observation.js"
 import {
   institutionalApplies,
   institutionalReviewStatus,
@@ -179,6 +181,7 @@ export class RecallEngine {
   constructor(
     providers: MemoryProvider[],
     private readonly config: OrchestratorConfig,
+    private readonly episodicRecall = false,
   ) {
     this.providers = new Map()
     for (const provider of providers) {
@@ -231,7 +234,7 @@ export class RecallEngine {
               } satisfies ProviderAttempt,
             }
           }
-          const providerResults = await withTimeout(
+          const semanticPromise = withTimeout(
             this.config.providerTimeoutMs,
             (signal) =>
               provider.search({
@@ -245,6 +248,42 @@ export class RecallEngine {
               }),
             parentSignal,
           )
+          const episodicPromise =
+            this.episodicRecall &&
+            plan.signals.includes("explicit continuity phrase") &&
+            capabilities.episodicHistory &&
+            isEpisodicSearchStore(provider)
+              ? withTimeout(
+                  this.config.providerTimeoutMs,
+                  async (signal) => {
+                    const episodes = await provider.searchEpisodes(
+                      provider.id,
+                      request.query,
+                      context,
+                      {
+                        limit: Math.min(request.limit, this.config.maxResults),
+                        maxOutputTokens: this.config.budgets.perProviderTokens,
+                        roles: ["tool"],
+                        includeNeighbors: false,
+                      },
+                    )
+                    signal.throwIfAborted()
+                    return episodeResults(episodes, provider.id, context)
+                  },
+                  parentSignal,
+                )
+              : Promise.resolve([] as MemoryResult[])
+          const [semantic, episodic] = await Promise.allSettled([semanticPromise, episodicPromise])
+          // An episodic outage must not discard semantic results, and vice
+          // versa. If both fail the existing failure path reports it.
+          if (parentSignal?.aborted) parentSignal.throwIfAborted()
+          if (semantic.status === "rejected" && episodic.status === "rejected")
+            throw semantic.reason
+          const providerResults = [
+            ...(semantic.status === "fulfilled" ? semantic.value : []),
+            ...(episodic.status === "fulfilled" ? episodic.value : []),
+          ]
+          if (semantic.status === "rejected" && providerResults.length === 0) throw semantic.reason
           const results = providerResults
             .map((result) =>
               normalizeResult(
@@ -264,11 +303,13 @@ export class RecallEngine {
               status: "ok",
               durationMs: Math.round(performance.now() - started),
               resultCount: results.length,
-              ...(providerResults.length === results.length
-                ? {}
-                : {
-                    error: `${providerResults.length - results.length} invalid or out-of-scope result(s) omitted`,
-                  }),
+              ...(episodic.status === "rejected" || semantic.status === "rejected"
+                ? { error: "one retrieval plane failed; available results retained" }
+                : providerResults.length === results.length
+                  ? {}
+                  : {
+                      error: `${providerResults.length - results.length} invalid or out-of-scope result(s) omitted`,
+                    }),
             } satisfies ProviderAttempt,
           }
         } catch (error) {
