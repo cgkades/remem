@@ -120,6 +120,7 @@ integration("OpenCode callbacks to PostgreSQL evidence and fresh-session recall"
     const fresh = host()
     const disposeB = await RememPlugin.setup(fresh.context)
     const samples: number[] = []
+    const contextBytes: number[] = []
     try {
       for (let index = 0; index < 10; index++) {
         const event = {
@@ -141,9 +142,9 @@ integration("OpenCode callbacks to PostgreSQL evidence and fresh-session recall"
         expect(injected).not.toContain("fixture-secret")
         expect(injected).not.toContain("missing checkpoint at incorrect path")
         const memory = event.messages.slice(1) as unknown as { content: { text: string }[] }[]
-        expect(Buffer.byteLength(memory[0]?.content[0]?.text ?? "", "utf8")).toBeLessThanOrEqual(
-          7001,
-        ) // catalog + recall budgets and separator
+        const bytes = Buffer.byteLength(memory[0]?.content[0]?.text ?? "", "utf8")
+        contextBytes.push(bytes)
+        expect(bytes).toBeLessThanOrEqual(7001) // catalog + recall budgets and separator
       }
       const unrelated = {
         sessionID: "unrelated",
@@ -166,6 +167,8 @@ integration("OpenCode callbacks to PostgreSQL evidence and fresh-session recall"
           provenanceCorrect: true,
           samples: samples.length,
           p95CallbackMs: samples.sort((a, b) => a - b)[9],
+          maxContextBytes: Math.max(...contextBytes),
+          contextBudgetEstimate: "conservative UTF-8 bytes, not model tokenizer tokens",
         }),
       )
     } finally {
