@@ -23,6 +23,12 @@ function entropy(value: string): number {
 
 function looksLikeHighEntropyCredential(value: string): boolean {
   if (UUID.test(value)) return false
+  // Temporary workspace paths combine many harmless components into one high-entropy token.
+  if (value.startsWith("/") && value.slice(1).includes("/")) {
+    return value
+      .split("/")
+      .some((component) => component.length >= 32 && looksLikeHighEntropyCredential(component))
+  }
   const diversity = [/[a-z]/u, /[A-Z]/u, /\d/u, /[_~+/-]/u].filter((pattern) =>
     pattern.test(value),
   ).length
@@ -34,6 +40,11 @@ export function containsSensitiveCredential(value: string): boolean {
   return [...value.matchAll(HIGH_ENTROPY_TOKEN)].some((match) =>
     looksLikeHighEntropyCredential(match[0]),
   )
+}
+
+export function containsSensitiveCredentialInPath(value: string): boolean {
+  if (CREDENTIAL_PATTERNS.some((pattern) => pattern.test(value))) return true
+  return value.split(/[\\/]/u).some(containsSensitiveCredential)
 }
 
 export function redactSensitiveText(value: string): string {

@@ -268,6 +268,7 @@ export interface ProviderRetrievalRequest {
   reason: string
   limit: number
   topics?: string[]
+  evidenceClass?: "semantic" | "episodic"
 }
 
 export interface RetrievalPlan {

@@ -391,7 +391,11 @@ export class RememOrchestrator {
     context: MemoryContext,
     providerId?: string,
     signal?: AbortSignal,
+    evidenceClass: "semantic" | "episodic" = "semantic",
   ): Promise<ManualSearchResult> {
+    if (evidenceClass !== "semantic" && evidenceClass !== "episodic") {
+      throw new TypeError("unsupported memory evidence class")
+    }
     const started = performance.now()
     const requestedProviderIds = providerId ? [providerId] : this.providerIds
     const plan: RetrievalPlan = {
@@ -404,6 +408,7 @@ export class RememOrchestrator {
         reason: "explicit memory_search tool request",
         limit: this.config.maxResults,
         topics: [query],
+        evidenceClass,
       })),
       matches: [],
       signals: ["explicit tool request"],

@@ -9,6 +9,10 @@ import {
 } from "../../correction.js"
 import { CORRECTION_INPUT_LIMITS } from "../../correction.js"
 import { createCorrectionReviewQueue } from "../../correction-wiring.js"
+import {
+  createEvidenceCaptureCoordinator,
+  type EvidenceCaptureCoordinator,
+} from "../../evidence-capture.js"
 import { RememOrchestrator } from "../../orchestrator.js"
 import { PostgresMemoryProvider } from "../../providers/postgres.js"
 import { PostgresCorrectionCandidateStore } from "../../providers/postgres-correction-store.js"
@@ -151,17 +155,28 @@ async function registerTools(
         properties: {
           query: { type: "string", minLength: 1 },
           provider: { type: "string", minLength: 1 },
+          evidenceClass: {
+            type: "string",
+            enum: ["semantic", "episodic"],
+            description: "Use episodic for historical evidence, not verified current knowledge.",
+          },
         },
         required: ["query"],
         additionalProperties: false,
       },
       async execute(input, toolContext) {
-        const args = input as { query: string; provider?: string }
+        const args = input as {
+          query: string
+          provider?: string
+          evidenceClass?: "semantic" | "episodic"
+        }
         try {
           const result = await orchestrator.search(
             args.query,
             memoryContext(location, toolContext.sessionID),
             args.provider,
+            undefined,
+            args.evidenceClass,
           )
           return {
             content: result.text,
@@ -335,7 +350,9 @@ export const RememPlugin = Plugin.define({
     let contextRegistration: { dispose(): Promise<void> } | undefined
     let promptRegistration: { dispose(): Promise<void> } | undefined
     let reembedRegistration: { dispose(): Promise<void> } | undefined
+    let evidenceToolRegistration: { dispose(): Promise<void> } | undefined
     let capture: CaptureCoordinator | undefined
+    let evidence: EvidenceCaptureCoordinator | undefined
     // Scoped to this setup() call rather than module-level: every plugin
     // setup has at most one primaryPostgres, and `remem init` always writes
     // the same literal provider id ("remem-local"), so a module-level Map
@@ -375,10 +392,53 @@ export const RememPlugin = Plugin.define({
       })
       capture = createCaptureCoordinator(created.providers, parsed.config, logger)
       const coordinator = capture
-      if (coordinator) {
+      evidence = createEvidenceCaptureCoordinator(
+        created.providers,
+        parsed.config,
+        { host: "opencode-v2", projectId: location.projectId },
+        logger,
+        (envelope) => {
+          if (
+            envelope.role !== "user" ||
+            envelope.origin !== "direct-user" ||
+            !envelope.context.sessionId
+          )
+            return
+          coordinator?.enqueue({
+            host: "opencode-v2",
+            context: envelope.context,
+            sessionId: envelope.context.sessionId,
+            ...(envelope.messageId ? { messageId: envelope.messageId } : {}),
+            text: envelope.payload.text ?? "",
+            evidenceRefs: [{ providerId: envelope.providerId, eventId: envelope.id }],
+          })
+        },
+      )
+      const evidenceCoordinator = evidence
+      if (coordinator || parsed.config.evidenceAdmission.enabled) {
         promptRegistration = await context.session.hook("prompt", (event) => {
           try {
-            coordinator.enqueue({
+            if (parsed.config.evidenceAdmission.enabled) {
+              evidenceCoordinator?.enqueue({
+                providerId: evidenceCoordinator.providerId,
+                host: "opencode-v2",
+                context: memoryContext(location, event.sessionID),
+                messageId: event.messageID,
+                role: "user",
+                origin:
+                  event.metadata?.source !== undefined && event.metadata.source !== "user"
+                    ? "extension"
+                    : "direct-user",
+                kind: "turn-completed",
+                occurredAt: new Date().toISOString(),
+                payload: {
+                  text: event.prompt.text,
+                  ...(event.metadata ? { metadata: event.metadata } : {}),
+                },
+              })
+              return
+            }
+            coordinator?.enqueue({
               host: "opencode-v2",
               context: memoryContext(location, event.sessionID),
               sessionId: event.sessionID,
@@ -387,6 +447,51 @@ export const RememPlugin = Plugin.define({
             })
           } catch (error) {
             safeLoggerCall(logger, "warn", "capture.enqueue_failed", {
+              error: error instanceof Error ? error.name : "unknown error",
+            })
+          }
+        })
+      }
+      if (evidenceCoordinator) {
+        evidenceToolRegistration = await context.tool.hook("execute.after", (event) => {
+          try {
+            // ReMem retrieval results are derived data, never fresh evidence.
+            if (event.tool.startsWith("memory_")) return
+            const result = event.status === "completed" ? event.result : undefined
+            const text =
+              typeof result?.content === "string"
+                ? result.content
+                : result?.content
+                    ?.filter((part) => part.type === "text")
+                    .map((part) => part.text)
+                    .join("\n")
+            evidenceCoordinator.enqueue({
+              providerId: evidenceCoordinator.providerId,
+              host: "opencode-v2",
+              context: memoryContext(location, event.sessionID),
+              turnId: event.messageID,
+              messageId: event.id,
+              role: "tool",
+              origin: "host-observed",
+              kind: "tool-result",
+              occurredAt: new Date().toISOString(),
+              payload: {
+                ...(event.status === "error"
+                  ? { text: event.error.message }
+                  : text !== undefined
+                    ? { text }
+                    : {}),
+                metadata: {
+                  tool: event.tool,
+                  status: event.status,
+                  input: event.input,
+                  ...(result ? { resultMetadata: result.metadata, output: result.output } : {}),
+                  ...(event.status === "error" ? { errorMetadata: event.error.metadata } : {}),
+                },
+              },
+            })
+          } catch (error) {
+            safeLoggerCall(logger, "warn", "evidence.normalization_failed", {
               error: error instanceof Error ? error.name : "unknown error",
             })
           }
@@ -424,7 +529,9 @@ export const RememPlugin = Plugin.define({
           contextRegistration?.dispose(),
           promptRegistration?.dispose(),
           reembedRegistration?.dispose(),
+          evidenceToolRegistration?.dispose(),
         ])
+        await evidence?.dispose()
         await capture?.dispose()
         await Promise.allSettled([toolRegistration.dispose(), disposeProviders(providers)])
       }
@@ -433,7 +540,9 @@ export const RememPlugin = Plugin.define({
         contextRegistration?.dispose(),
         promptRegistration?.dispose(),
         reembedRegistration?.dispose(),
+        evidenceToolRegistration?.dispose(),
       ])
+      await evidence?.dispose()
       await Promise.allSettled([capture?.dispose(), disposeProviders(providers)])
       safeLoggerCall(logger, "error", "plugin.initialization_failed", {
         error: error instanceof Error ? error.name : "unknown error",

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { RecallEngine } from "../src/recall.js"
+import { admitEvidence, DEFAULT_EVIDENCE_ADMISSION_CONFIG } from "../src/observation-admission.js"
 import type {
   CatalogEntry,
   MemoryCapabilities,
@@ -100,6 +101,118 @@ const plan: RetrievalPlan = {
 }
 
 describe("RecallEngine", () => {
+  it("keeps episode provenance historical and rejects foreign matches and neighbors", async () => {
+    const admitted = admitEvidence(
+      {
+        providerId: "healthy",
+        host: "opencode-v2",
+        context: memoryContext,
+        messageId: "original-tool",
+        role: "tool",
+        origin: "host-observed",
+        kind: "tool-result",
+        occurredAt: "2026-10-08T12:00:00.000Z",
+        payload: { text: "Phoenix omitted diagnostic detail." },
+      },
+      { providerId: "healthy", host: "opencode-v2", projectId: memoryContext.projectId },
+      { ...DEFAULT_EVIDENCE_ADMISSION_CONFIG, enabled: true },
+    )
+    if (admitted.outcome !== "admitted") throw new Error("fixture evidence was not admitted")
+    const envelope = admitted.envelope
+    const provider = Object.assign(new FakeProvider("healthy", []), {
+      capabilities: () => ({ ...capabilities, lexicalSearch: false, episodicHistory: true }),
+      appendEvidence: () => Promise.resolve({ id: envelope.id, outcome: "duplicate" as const }),
+      readEvidence: () => Promise.resolve(envelope),
+      searchEpisodes: () =>
+        Promise.resolve({
+          matches: [
+            {
+              envelope,
+              truncated: false,
+              neighbors: [
+                {
+                  position: "following" as const,
+                  truncated: false,
+                  envelope: {
+                    ...envelope,
+                    id: "foreign-neighbor",
+                    context: { ...memoryContext, sessionId: "foreign-session" },
+                  },
+                },
+              ],
+            },
+            {
+              envelope: {
+                ...envelope,
+                id: "foreign-match",
+                context: { ...memoryContext, projectId: "foreign-project" },
+              },
+              truncated: false,
+              neighbors: [],
+            },
+          ],
+          budgetExhausted: false,
+        }),
+    })
+    const recall = await new RecallEngine([provider], testConfig()).execute(
+      {
+        ...plan,
+        requests: [
+          {
+            providerId: "healthy",
+            query: "Phoenix",
+            reason: "history",
+            limit: 8,
+            evidenceClass: "episodic",
+          },
+        ],
+      },
+      { ...memoryContext, sessionId: "fresh-session" },
+    )
+    expect(recall.memories).toHaveLength(1)
+    expect(recall.memories[0]?.record).toMatchObject({
+      type: "episodic",
+      freshness: "unknown",
+      confidence: 0,
+      provenance: [expect.objectContaining({ original: false })],
+    })
+    expect(recall.memories[0]?.record.source).toContain(memoryContext.sessionId)
+  })
+
+  it("reports unsupported episode search without falling back to semantic claims", async () => {
+    const provider = new FakeProvider("healthy", [result("semantic", "semantic.md")])
+    const recall = await new RecallEngine([provider], testConfig()).execute(
+      {
+        ...plan,
+        requests: [
+          {
+            providerId: "healthy",
+            query: "Phoenix",
+            reason: "history",
+            limit: 8,
+            evidenceClass: "episodic",
+          },
+        ],
+      },
+      memoryContext,
+    )
+    expect(recall.memories).toHaveLength(0)
+    expect(recall.attempts[0]).toMatchObject({
+      status: "failed",
+      error: "provider does not support episodic search",
+    })
+  })
+
+  it("never presents superseded semantic conclusions as current recall", async () => {
+    const obsolete = result("old", "old.md")
+    obsolete.record.freshness = "superseded"
+    const engine = new RecallEngine(
+      [new FakeProvider("healthy", [obsolete, result("current", "current.md")])],
+      testConfig(),
+    )
+    const recall = await engine.execute({ ...plan, requests: [plan.requests[0]!] }, memoryContext)
+    expect(recall.memories.map((memory) => memory.record.id)).toEqual(["current"])
+  })
   it("keeps successful results when another provider fails and deduplicates content", async () => {
     const engine = new RecallEngine(
       [

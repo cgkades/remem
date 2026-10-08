@@ -60,7 +60,9 @@ augmentation. This is the host side of [ADR 0007](adr/0007-fail-open-without-mem
 
 The v2 adapter registers:
 
-- `memory_search`: explicit bounded search across all providers or one provider ID;
+- `memory_search`: explicit bounded search across all providers or one provider ID.
+  `evidenceClass: "episodic"` selects historical evidence and same-session neighbors;
+  the default `"semantic"` searches durable knowledge and excludes superseded records;
 - `memory_status`: provider capabilities, sanitized health, catalog counts, budgets, and latest trace;
 - `memory_explain`: the latest sanitized retrieval decision for the current session;
 - `memory_submit_correction`: submits an expert correction for review (see
@@ -75,9 +77,61 @@ Users can speak naturally: say **“remember that …”**, **“save this …�
 **“keep this in mind …”** to submit a durable statement to the configured
 capture pipeline. Capture remains subject to the configured review or
 promotion policy and never bypasses credential and untrusted-content filters.
-After a verified successful investigation, hosts may also submit a compact
-resolved-task episode (`enqueueResolvedTask`) so Remem can store a reusable
-procedure without persisting transcripts or failed attempts.
+The core also has a resolved-task episode API (`enqueueResolvedTask`), but the
+v2 adapter does **not** yet call it. Tool completion alone does not verify a
+successful investigation or authorize a procedure/root-cause claim.
+
+### Opt-in investigation evidence
+
+With a configured primary PostgreSQL provider, explicitly setting
+`evidenceAdmission.enabled: true` records completed user inputs and host-observed
+tool results, including failed attempts and inputs with no semantic candidates.
+It does not enable assistant-transcript capture, alter Pi/v1 capture, change
+existing opt-outs, or authorize new semantic promotion rules. The pinned v2 SDK
+provides `session.hook("prompt")` and `tool.hook("execute.after")`; it does not
+provide a task-resolution/assistant-completion session hook.
+
+```json
+{
+  "evidenceAdmission": { "enabled": true },
+  "capture": { "enabled": true, "autoPromote": true }
+}
+```
+
+These are plugin options, alongside the existing primary PostgreSQL provider
+configuration. Evidence admission defaults to **disabled**, independently of
+legacy user-statement capture. Enabling evidence alone retains history without
+promoting knowledge. Enabling both paths persists admitted user evidence before
+passing eligible user statements to existing semantic capture. Unavailable
+storage, rejected content, identity collisions, or forgotten evidence never
+fall back to unsupported semantic capture on this opted-in path.
+
+Credential screening covers text and nested input/result metadata before
+storage; bulk tool output is reduced by the existing admission rules. Work is
+bounded by `maxPayloadBytes` (default 8 KiB), `maxQueuedEvents` (32), and the
+provider timeout. Capture gaps have body-free reason/count diagnostics.
+Re-delivery keeps the first observation timestamp because these SDK callbacks
+do not supply an event timestamp. Changed content under the same identity is a
+collision, not an update. Disposal drains bounded work before closing providers.
+Retrieval-tool results and ephemeral ReMem messages are not recaptured.
+
+Natural continuity still retrieves semantic knowledge automatically. Raw
+history is deliberately **not** automatically mixed into current conclusions:
+failed hypotheses, tool text, and unverified claims need explicit historical
+labels. When automatic context omits a detail, the agent can use
+`memory_search` with `evidenceClass: "episodic"` and a focused lexical query.
+Results identify role, origin, original session, and event ID, with unknown
+truth/freshness rather than verified authority. Empty results are not proof that
+work never happened; provider failures appear in search diagnostics.
+
+Automatically learned user claims retain admitted evidence references in source
+provenance, and recall renders those references within its token budget. This
+is not yet a complete processed-candidate ledger: interrupted learning requires
+host re-delivery, and existing explicit forget/capacity operations do not infer
+whether a retained semantic claim has independent support. Evidence references
+may become unavailable after authorized forgetting. Use the existing forget
+preview/confirmation workflow; disabling admission stops new capture but does
+not delete stored history. No defaults or automatic deletion policy change here.
 
 For a stored item that automatic recall did not surface, ask **“search memory
 for …”** or **“what do you remember about …”**; OpenCode can call

@@ -137,6 +137,30 @@ integration("PostgreSQL managed provider", () => {
     }
   })
 
+  it("excludes superseded rows before the search result limit can crowd out current knowledge", async () => {
+    const provider = new PostgresMemoryProvider(
+      {
+        type: "postgres",
+        id: "current-only",
+        connectionString: databaseUrl ?? "",
+        primary: true,
+        maxConnections: 2,
+        catalogLimit: 100,
+      },
+      { pool },
+    )
+    const memory = {
+      title: "Phoenix continuity exclusion regression",
+      content: "Phoenix continuity exclusion regression",
+      scope: { kind: "project" as const, id: context.projectId },
+      type: "semantic" as const,
+    }
+    const current = await provider.write(memory)
+    for (let i = 0; i < 10; i++) await provider.write({ ...memory, freshness: "superseded" })
+    const results = await provider.search({ ...request(memory.title), limit: 2 })
+    expect(results.map((result) => result.record.id)).toEqual([current.id])
+  })
+
   it("supports CRUD, scope filtering, provenance, FTS, vector search, and supersession", async () => {
     const provider = new PostgresMemoryProvider(
       {

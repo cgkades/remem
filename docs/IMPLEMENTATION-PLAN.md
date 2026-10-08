@@ -56,7 +56,30 @@ Build the test before or alongside the implementation so the project stops optim
 
 **P1 exit:** CI contains a failing-or-passing executable definition of the product rather than only component tests.
 
-### Initial executable slice
+### Host-driven evidence slice (not milestone completion)
+
+The opt-in OpenCode v2 path now uses the existing admission and episodic store
+for user inputs and tool results, independently of candidate extraction.
+Eligible user claims retain evidence IDs before existing consolidation; tool
+evidence has no promotion authority. Explicit episodic retrieval uses the shared
+recall/synthesis pipeline with historical provenance and existing scope/budgets.
+Continuity/tactical requests are not automatically learned as adopted decisions,
+and superseded semantic records are excluded from normal recall.
+
+`npm run test:learning-evidence` runs a PostgreSQL-required, actual v2 runtime
+fixture with a failed approach, verified edit/check, user-confirmed conclusions,
+decision and unresolved follow-up, followed by five transcript-free sessions.
+It measures supported claim recall, forbidden injection, token overhead and
+latency. See [evaluation](evaluation.md) for the exact boundaries.
+
+No milestone checkbox is completed by this slice alone. #96 still needs a
+reviewed verification contract and durable host-derived procedure path; #49
+still needs a complete candidate association/audit ledger and unattended
+recovery. #43 still needs automatic episodic selection, complete lineage/forget
+handling, and retention scheduling across hosts. #97 still needs all of those,
+actual-host restart coverage, and separate model-dependent quality evaluation.
+
+### Earlier user-statement slice
 
 `tests/postgres-provider.integration.test.ts` now covers multiple ordinary user statements flowing
 through automatic capture/consolidation into PostgreSQL, followed by recall through a new provider

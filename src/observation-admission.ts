@@ -30,7 +30,7 @@
  */
 import { createHash } from "node:crypto"
 import { looksLikeToolOutput, reduceBulkArtifact } from "./bulk-artifact-reduction.js"
-import { containsSensitiveCredential } from "./sensitive-data.js"
+import { containsSensitiveCredential, containsSensitiveCredentialInPath } from "./sensitive-data.js"
 import type { MemoryContext } from "./types.js"
 
 /** Transport/source classification assigned by the host adapter, not self-reported by event content. */
@@ -362,6 +362,8 @@ function screenPayload(payload: EvidencePayload): "too-complex" | "unscreenable"
       for (const entry of Object.values(value)) stack.push({ value: entry, depth: depth + 1 })
     }
   }
+  // Key/value context matters: an ordinary string under "password" is still a credential.
+  if (containsSensitiveCredential(JSON.stringify(payload.metadata))) return "unscreenable"
   return undefined
 }
 
@@ -520,16 +522,16 @@ function admitEvidenceUnsafe(
   // just payload text -- screen these the same way, rejecting the whole
   // candidate rather than admitting a secret through a field the payload
   // screen never looks at.
-  for (const value of [
-    candidate.context.sessionId,
-    candidate.context.directory,
-    candidate.context.worktree,
-    candidate.turnId,
-    candidate.messageId,
-  ]) {
+  for (const value of [candidate.context.sessionId, candidate.turnId, candidate.messageId]) {
     if (typeof value === "string" && containsSensitiveCredential(value)) {
       return rejected("unscreenable-content", "an identity field contains an unscreenable value")
     }
+  }
+  if (
+    containsSensitiveCredentialInPath(candidate.context.directory) ||
+    containsSensitiveCredentialInPath(candidate.context.worktree)
+  ) {
+    return rejected("unscreenable-content", "a context path contains an unscreenable value")
   }
 
   // Host identity must be documented or use an established stable turn

@@ -30,6 +30,59 @@ The test runs the normal `RememOrchestrator` with provider/topic catalog constru
 and local semantic recognition, provider execution, normalization, deduplication, synthesis, and
 token accounting.
 
+## Host-Driven Learning Evidence Gate
+
+```sh
+npm run test:postgres:up
+REMEM_TEST_DATABASE_URL=postgres://remem_test:remem_test@127.0.0.1:54330/remem_test npm run test:learning-evidence
+```
+
+Use only disposable PostgreSQL: the existing host harness resets the `remem`
+schema. `test:learning-evidence` fails before starting if its database variable
+is absent, rather than treating a required scenario skip as success. The v2 CI
+job runs this command. It builds and installs the package tarball, starts the
+pinned actual OpenCode v2 runtime and a loopback deterministic model, and drives
+real `shell`, `read`, `edit`, prompt, and context callbacks.
+
+Session A contains a failing authentication check, an incorrect pool-timeout
+hypothesis/attempt, a credential-forwarding edit, a passing check, an adopted
+decision, and a blocked rotation follow-up. Ordinary user confirmation supplies
+the three durable claims; no `remember`, `memory_search`, or candidate approval
+is used to create them. An intentionally false model success claim does not
+become knowledge. Five Session B sessions start with empty histories and a
+natural continuity prompt. Positive memories are never seeded directly.
+Negative seeds cover superseded knowledge and another project.
+
+The gate asserts complete recovery of the three expected user-confirmed claims
+at the configured eight-result ceiling, correct evidence references, zero
+forbidden detailed injection (obsolete/foreign/secret/model-asserted/poisoned
+content), no detailed recall for an unrelated prompt, a 2,000-token recall
+ceiling, and a 5-second prompt ceiling. Catalog awareness is distinct from
+detailed recall. A separate actual host `memory_search` invocation recovers a
+zero-candidate diagnostic detail with historical tool/session attribution.
+
+The JSON stdout report records five-session repeatability, claim recall,
+forbidden injection, maximum recall and catalog-plus-recall tokens, provider
+recall p95, and prompt round-trip p95. Provider latency is measured through
+fresh core orchestrators using the same durable data and PostgreSQL pool; prompt
+latency includes the actual host and mock model. Five local samples are a small
+deterministic regression, not a production latency benchmark or model answer
+correctness evaluation. Compare reports only with the same environment/budgets.
+
+`tests/opencode-v2-wiring.integration.test.ts` separately disposes Session A's
+plugin and starts a fresh plugin instance for B. `tests/evidence-capture.test.ts`
+covers duplicate/restarted delivery, collisions, nested secrets, scope/source
+rejection, forgotten evidence, storage failure, queue/shutdown limits, and
+re-delivery after an interrupted post-append operation.
+
+**Not the full #97 release gate:** host-derived verified procedure promotion is
+still absent (#96), raw episodes are not automatically recalled, and durable
+candidate/audit recovery with derived-memory forget semantics remains #49/#43.
+The test explicitly requires zero auto-learned procedures rather than scoring
+an unverified tool outcome as success. Real-model answer/procedure accuracy,
+unattended crash recovery, and a process-restarted actual host acceptance gate
+remain unverified. Existing optional model evaluations stay separate.
+
 ## Curated Guidance Replays
 
 `tests/fixtures/replay/curated-guidance.v1.json` is a versioned behavioral replay fixture for

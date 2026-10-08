@@ -9,6 +9,7 @@ import type {
   SessionObservation,
 } from "./observation.js"
 import { isObservationStore } from "./observation.js"
+import type { EvidenceReference } from "./observation-admission.js"
 import {
   extractProcedureCandidate,
   observationFromResolvedTask,
@@ -25,6 +26,7 @@ export interface UserPromptCapture {
   sessionId: string
   messageId?: string
   text: string
+  evidenceRefs?: EvidenceReference[]
 }
 
 const QUOTED_OR_SYNTHETIC_PATTERN = /(^\s*>|```|<memory-|tool[- ]output|source:\s*remem)/imu
@@ -61,7 +63,7 @@ const CORRECTION_PATTERN =
 const PREFERENCE_PATTERN =
   /\b(?:i prefer|my preference(?: is)?|i(?:'d| would) rather|please always|please never|always use|never use)\b/iu
 const DECISION_PATTERN =
-  /(?:\bdecision\s*:|\bwe decided\b|\bwe will use\b|\blet(?:'s| us) use\b|\barchitecture decision\b|\blet(?:'s| us)\b|\bwe(?:'re| are) going to\b|\bwe(?:'ll| will)\b|\bgoing forward\b|\bfrom now on\b|\bthe plan is\b|\bswitch to\b|\bmove to\b|\badopt\b)/iu
+  /(?:\bdecision\s*:|\bwe decided\b|\bwe will use\b|\blet(?:'s| us) use\b|\barchitecture decision\b|\bgoing forward\b|\bfrom now on\b|\bthe plan is\b|\bswitch to\b|\bmove to\b|\badopt\b)/iu
 const FACT_PATTERN =
   /\b(?:is located (?:at|in)|lives in|is stored in|runs on|uses|belongs to|is configured (?:at|in|with)|can be found (?:at|in))\b/iu
 const TASK_PATTERN =
@@ -251,6 +253,7 @@ export class DeterministicCandidateExtractor implements CandidateExtractor {
                     host: observation.payload.host,
                     sessionId: observation.context.sessionId,
                     messageId,
+                    evidenceRefs: observation.payload.evidenceRefs,
                   },
                 },
                 capturedAt: observation.occurredAt,
@@ -424,6 +427,7 @@ export class CaptureCoordinator {
         host: input.host,
         text,
         ...(input.messageId ? { messageId: input.messageId } : {}),
+        ...(input.evidenceRefs ? { evidenceRefs: input.evidenceRefs } : {}),
       },
     })
     this.recordExplanation(input.sessionId, {

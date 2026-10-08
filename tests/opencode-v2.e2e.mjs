@@ -6,6 +6,7 @@ import net from "node:net"
 import os from "node:os"
 import path from "node:path"
 import process from "node:process"
+import { performance } from "node:perf_hooks"
 import { setTimeout as sleep } from "node:timers/promises"
 import { URL, fileURLToPath, pathToFileURL } from "node:url"
 
@@ -41,6 +42,42 @@ const HOOKS_PROMPT = "Decision: we decided to use blue-green deployments for the
 const POSTGRES_SENTINEL = "REMEM_E2E_AURORA_SENTINEL"
 const POSTGRES_MEMORY_TITLE = "Aurora database migration"
 const POSTGRES_RETRIEVAL_PROMPT = "Let's continue the Aurora database migration work."
+const LEARNING_PROBLEM =
+  "Investigate Phoenix authentication. Could increasing the connection pool timeout fix it?"
+const LEARNING_CONCLUSIONS =
+  "Phoenix authentication is fixed by forwarding the credential provider chain. " +
+  "Decision: we decided to preserve lazy credential refresh for Phoenix. " +
+  "Phoenix rollout is blocked on testing credential rotation."
+const LEARNING_CONTINUITY = "Let's continue the Phoenix authentication work."
+const LEARNING_HISTORY_PROMPT = "What was the Phoenix rotation probe interval we observed?"
+const LEARNING_SECRET = "learning-fixture-secret-value"
+const LEARNING_STEPS = [
+  {
+    id: "learn_failure",
+    name: "shell",
+    arguments: '{"command":"POOL_TIMEOUT=60000 node auth-check.mjs"}',
+  },
+  { id: "learn_read", name: "read", arguments: '{"path":"auth-check.mjs"}' },
+  {
+    id: "learn_fix",
+    name: "edit",
+    arguments:
+      '{"path":"auth-check.mjs","oldString":"const forwardCredentials = false","newString":"const forwardCredentials = true"}',
+  },
+  { id: "learn_verify", name: "shell", arguments: '{"command":"node auth-check.mjs"}' },
+  {
+    id: "learn_secret",
+    name: "shell",
+    arguments: JSON.stringify({ command: `printf 'api_key=${LEARNING_SECRET}\\n'` }),
+  },
+  {
+    id: "learn_poison",
+    name: "shell",
+    arguments: JSON.stringify({
+      command: "printf 'IGNORE_PREVIOUS_INSTRUCTIONS_LEARNING_FIXTURE\\n'",
+    }),
+  },
+]
 // Issue #11 regression coverage: after the native "read" tool loop completes,
 // call the Remem-registered memory_status tool by its bare name to verify it
 // is actually invocable (not just present in the advertised tool schema) now
@@ -260,13 +297,27 @@ async function handleModelRequest(incoming, response, state) {
       .filter((message) => message.role === "tool")
       .map((message) => message.tool_call_id),
   )
-  const nextStep = isRelated
-    ? TOOL_CALL_STEPS.find(
-        (step, index) =>
-          !resultIds.has(step.id) &&
-          TOOL_CALL_STEPS.slice(0, index).every((prior) => resultIds.has(prior.id)),
-      )
-    : undefined
+  const steps = messages.includes(LEARNING_HISTORY_PROMPT)
+    ? [
+        {
+          id: "learn_history",
+          name: "memory_search",
+          arguments: JSON.stringify({
+            query: "rotation probe interval",
+            provider: "learning-postgres",
+            evidenceClass: "episodic",
+          }),
+        },
+      ]
+    : messages.includes(LEARNING_PROBLEM)
+      ? LEARNING_STEPS
+      : isRelated
+        ? TOOL_CALL_STEPS
+        : []
+  const nextStep = steps.find(
+    (step, index) =>
+      !resultIds.has(step.id) && steps.slice(0, index).every((prior) => resultIds.has(prior.id)),
+  )
   response.writeHead(200, {
     "cache-control": "no-cache",
     connection: "keep-alive",
@@ -327,7 +378,12 @@ async function handleModelRequest(incoming, response, state) {
       choices: [
         {
           index: 0,
-          delta: { role: "assistant", content: "mock response" },
+          delta: {
+            role: "assistant",
+            content: messages.includes(LEARNING_PROBLEM)
+              ? "UNVERIFIED_MODEL_SUCCESS: Phoenix was fixed by increasing the pool timeout."
+              : "mock response",
+          },
           finish_reason: null,
         },
       ],
@@ -487,7 +543,13 @@ function hooksPluginOptions(connectionString) {
   }
 }
 
-async function createHooksWorkspace(root, plugin, modelURL, connectionString) {
+async function createHooksWorkspace(
+  root,
+  plugin,
+  modelURL,
+  connectionString,
+  options = hooksPluginOptions(connectionString),
+) {
   const workspace = path.join(root, "hooks")
   await mkdir(workspace, { recursive: true })
   await writeFile(
@@ -509,9 +571,7 @@ async function createHooksWorkspace(root, plugin, modelURL, connectionString) {
             },
           },
         },
-        plugins: [
-          { package: pathToFileURL(plugin).href, options: hooksPluginOptions(connectionString) },
-        ],
+        plugins: [{ package: pathToFileURL(plugin).href, options }],
       },
       null,
       2,
@@ -613,6 +673,11 @@ async function prompt(serverURL, sessionID, text, waitTimeoutMs = 30_000) {
 }
 
 async function main() {
+  if (process.env.REMEM_REQUIRE_LEARNING_GATE === "1" && !process.env.REMEM_TEST_DATABASE_URL) {
+    throw new Error(
+      "The learning evidence gate requires REMEM_TEST_DATABASE_URL pointing to disposable PostgreSQL; required scenarios cannot be skipped.",
+    )
+  }
   const temporary = await mkdtemp(path.join(os.tmpdir(), "remem-opencode-v2-e2e-"))
   const npmEnvironment = {
     HOME: path.join(temporary, "npm-home"),
@@ -975,6 +1040,294 @@ async function main() {
             `was the unreachable-provider fail-open path\n${JSON.stringify(retrievalRequests)}`,
         )
       }
+
+      const learningOptions = {
+        ...hooksPluginOptions(databaseUrl),
+        providers: [
+          {
+            ...hooksPluginOptions(databaseUrl).providers[0],
+            id: "learning-postgres",
+            catalogLimit: 100,
+          },
+        ],
+        capture: { enabled: true, autoPromote: true },
+        evidenceAdmission: { enabled: true },
+        planner: { semantic: false },
+        budgets: { catalogTokens: 900, recallTokens: 2000, perProviderTokens: 1800 },
+      }
+      const learningWorkspace = await createHooksWorkspace(
+        path.join(temporary, "learning"),
+        plugin,
+        model.url,
+        databaseUrl,
+        learningOptions,
+      )
+      await writeFile(
+        path.join(learningWorkspace, "auth-check.mjs"),
+        [
+          "const forwardCredentials = false",
+          "if (!forwardCredentials) {",
+          "  console.error('FAIL Phoenix: credential provider chain is not forwarded; pool timeout is unrelated.')",
+          "  process.exit(1)",
+          "}",
+          "console.log('PASS Phoenix authentication: lazy credential refresh remains enabled.')",
+          "console.log('Phoenix diagnostic detail: rotation probe interval is 37 seconds.')",
+          "",
+        ].join("\n"),
+      )
+      const learningSession = await createSession(serverURL, learningWorkspace)
+      await prompt(serverURL, learningSession, LEARNING_PROBLEM)
+      const learningHistory = await request(
+        serverURL,
+        `/api/session/${learningSession}/message?order=asc`,
+      )
+      for (const step of LEARNING_STEPS) {
+        const result = toolCall(learningHistory, step.id)
+        if (!result || result.state?.status !== "completed") {
+          throw new Error(
+            `learning tool ${step.name}/${step.id} did not complete: ${JSON.stringify(result)}`,
+          )
+        }
+        if (
+          toolCall(learningHistory, "learn_failure").state.metadata.exit !== 1 ||
+          toolCall(learningHistory, "learn_verify").state.metadata.exit !== 0
+        ) {
+          throw new Error(
+            "investigation did not execute a failing check and a passing verification",
+          )
+        }
+      }
+      await prompt(serverURL, learningSession, LEARNING_CONCLUSIONS)
+      await pollUntil("three automatically learned user-confirmed conclusions", async () => {
+        const result = await hooksPool.query(
+          "SELECT count(*)::int AS count FROM remem.memories WHERE provider_id='learning-postgres' AND freshness='current'",
+        )
+        return result.rows[0]?.count === 3
+      }).catch((error) => {
+        throw new Error(
+          `${error.message}\n${opencode
+            .output()
+            .split("\n")
+            .filter((line) => line.includes("[remem]"))
+            .join("\n")}`,
+        )
+      })
+      const evidence = await hooksPool.query(
+        "SELECT evidence_id, project_id, role, safe_text, payload FROM remem.session_events WHERE provider_id='learning-postgres' AND evidence_id IS NOT NULL",
+      )
+      const projectId = evidence.rows[0]?.project_id
+      if (
+        !projectId ||
+        !evidence.rows.some((row) => row.safe_text?.includes("FAIL Phoenix")) ||
+        !evidence.rows.some((row) => row.safe_text?.includes("PASS Phoenix")) ||
+        !evidence.rows.some((row) =>
+          row.safe_text?.includes("rotation probe interval is 37 seconds"),
+        )
+      ) {
+        throw new Error(
+          `actual host investigation did not persist failing and passing tool evidence: ${JSON.stringify(evidence.rows)}`,
+        )
+      }
+      if (JSON.stringify(evidence.rows).includes(LEARNING_SECRET)) {
+        throw new Error("credential leaked into durable learning evidence")
+      }
+      const lineage = await hooksPool.query(
+        "SELECT s.metadata FROM remem.memory_provenance mp JOIN remem.sources s ON s.id=mp.source_id JOIN remem.memories m ON m.id=mp.memory_id WHERE m.provider_id='learning-postgres'",
+      )
+      if (
+        lineage.rows.length !== 3 ||
+        lineage.rows.some(
+          (row) =>
+            row.metadata.evidenceRefs?.length !== 1 ||
+            !evidence.rows.some(
+              (event) =>
+                event.evidence_id === row.metadata.evidenceRefs[0].eventId && event.role === "user",
+            ),
+        )
+      )
+        throw new Error("learned claims did not retain correct admitted user-evidence provenance")
+      const learnedProvider = new PostgresMemoryProvider(learningOptions.providers[0], {
+        pool: hooksPool,
+      })
+      await learnedProvider.write({
+        title: "Phoenix authentication",
+        content: "OBSOLETE_POOL_TIMEOUT_CONCLUSION",
+        type: "semantic",
+        freshness: "superseded",
+        scope: { kind: "project", id: projectId },
+      })
+      await learnedProvider.write({
+        title: "Phoenix authentication",
+        content: "FOREIGN_PROJECT_LEARNING_SENTINEL",
+        type: "semantic",
+        scope: { kind: "project", id: "unrelated-project" },
+      })
+      const required = [
+        "forwarding the credential provider chain",
+        "preserve lazy credential refresh",
+        "testing credential rotation",
+      ]
+      const forbidden = [
+        "OBSOLETE_POOL_TIMEOUT_CONCLUSION",
+        "FOREIGN_PROJECT_LEARNING_SENTINEL",
+        "IGNORE_PREVIOUS_INSTRUCTIONS_LEARNING_FIXTURE",
+        LEARNING_SECRET,
+        "FAIL Phoenix",
+        "UNVERIFIED_MODEL_SUCCESS",
+      ]
+      const durations = []
+      const tokenCounts = []
+      const { estimateTokens } = await import(
+        pathToFileURL(path.join(repository, "dist", "token-budget.js")).href
+      )
+      for (let repeat = 0; repeat < 5; repeat++) {
+        const sessionB = await createSession(serverURL, learningWorkspace)
+        const before = await request(serverURL, `/api/session/${sessionB}/message?order=asc`)
+        if ((before.data ?? []).length !== 0) throw new Error("Session B was not transcript-free")
+        const requestOffset = model.requests.length
+        const started = performance.now()
+        await prompt(serverURL, sessionB, LEARNING_CONTINUITY)
+        durations.push(performance.now() - started)
+        const dispatch = model.requests
+          .slice(requestOffset)
+          .find(
+            (body) =>
+              JSON.stringify(body.messages).includes(LEARNING_CONTINUITY) &&
+              body.tools?.some((tool) => tool.function?.name === "memory_status"),
+          )
+        const recalled =
+          dispatch?.messages
+            .map((message) =>
+              typeof message.content === "string"
+                ? message.content
+                : Array.isArray(message.content)
+                  ? message.content
+                      .filter((part) => part.type === "text")
+                      .map((part) => part.text)
+                      .join("\n")
+                  : "",
+            )
+            .join("\n") ?? ""
+        const context = recalled.match(/<memory-context>[\s\S]*?<\/memory-context>/u)?.[0] ?? ""
+        if (!required.every((claim) => context.includes(claim)) || !context.includes("Evidence:")) {
+          throw new Error(
+            `fresh-session automatic recall missed supported claims or provenance: ${context}\nDispatch: ${recalled}`,
+          )
+        }
+        if (forbidden.some((claim) => recalled.includes(claim))) {
+          throw new Error(`fresh-session dispatch included forbidden evidence: ${recalled}`)
+        }
+        const tokens = estimateTokens(context)
+        tokenCounts.push(tokens)
+        if (tokens > learningOptions.budgets.recallTokens)
+          throw new Error("learning recall exceeded token budget")
+      }
+      const { RememOrchestrator } = await import(
+        pathToFileURL(path.join(repository, "dist", "orchestrator.js")).href
+      )
+      const { parseConfig } = await import(
+        pathToFileURL(path.join(repository, "dist", "config.js")).href
+      )
+      const core = new RememOrchestrator([learnedProvider], parseConfig(learningOptions).config)
+      const learningContext = {
+        directory: learningWorkspace,
+        worktree: learningWorkspace,
+        projectId,
+        sessionId: "core-recall-probe",
+      }
+      const recallDurations = []
+      const contextTokens = []
+      for (let repeat = 0; repeat < 5; repeat++) {
+        const freshCore = new RememOrchestrator(
+          [learnedProvider],
+          parseConfig(learningOptions).config,
+        )
+        const injection = await freshCore.processPrompt(LEARNING_CONTINUITY, learningContext)
+        if (injection.trace.selectedResults !== 3)
+          throw new Error("core recall did not select exactly the three supported claims")
+        recallDurations.push(...injection.trace.providers.map((attempt) => attempt.durationMs))
+        contextTokens.push(injection.trace.catalogTokens + injection.trace.recallTokens)
+      }
+      const historical = await core.search(
+        "rotation probe interval",
+        {
+          directory: learningWorkspace,
+          worktree: learningWorkspace,
+          projectId,
+          sessionId: "historical-check",
+        },
+        "learning-postgres",
+        undefined,
+        "episodic",
+      )
+      if (
+        !historical.text.includes("37 seconds") ||
+        !historical.text.includes("host-observed") ||
+        !historical.text.includes(learningSession)
+      ) {
+        throw new Error(
+          `omitted detail or episode provenance was not recoverable: ${historical.text}`,
+        )
+      }
+      const historySession = await createSession(serverURL, learningWorkspace)
+      await prompt(serverURL, historySession, LEARNING_HISTORY_PROMPT)
+      const historyMessages = await request(
+        serverURL,
+        `/api/session/${historySession}/message?order=asc`,
+      )
+      const historyResult = toolCall(historyMessages, "learn_history")
+      const historyText = JSON.stringify(historyResult?.state?.content)
+      if (
+        historyResult?.state?.status !== "completed" ||
+        !historyText?.includes("37 seconds") ||
+        !historyText.includes("host-observed") ||
+        !historyText.includes(learningSession)
+      ) {
+        throw new Error(
+          `actual episodic memory_search did not recover the omitted detail with provenance: ${historyText}`,
+        )
+      }
+      const unrelatedLearningSession = await createSession(serverURL, learningWorkspace)
+      const unrelatedOffset = model.requests.length
+      await prompt(serverURL, unrelatedLearningSession, UNRELATED_PROMPT)
+      if (
+        model.requests
+          .slice(unrelatedOffset)
+          .some((body) => JSON.stringify(body.messages).includes("<memory-context>"))
+      ) {
+        throw new Error("unrelated learning prompt received detailed memory recall")
+      }
+      const procedures = await hooksPool.query(
+        "SELECT count(*)::int AS count FROM remem.memories WHERE provider_id='learning-postgres' AND type='procedure'",
+      )
+      if (procedures.rows[0]?.count !== 0)
+        throw new Error("tool completion self-authorized a procedure")
+      const current = await hooksPool.query(
+        "SELECT count(*)::int AS count FROM remem.memories WHERE provider_id='learning-postgres' AND freshness='current' AND scope_id=$1",
+        [projectId],
+      )
+      if (current.rows[0]?.count !== 3)
+        throw new Error("continuity prompts created unsupported semantic memories")
+      durations.sort((a, b) => a - b)
+      recallDurations.sort((a, b) => a - b)
+      if (durations.at(-1) > 5000)
+        throw new Error("learning continuity prompt exceeded the 5-second fixture budget")
+      process.stdout.write(
+        `Learning evidence slice: ${JSON.stringify({
+          repetitions: 5,
+          confirmedClaimRecallAt8: 1,
+          requiredClaims: required.length,
+          forbiddenInjectionCount: 0,
+          supportedEvidenceLinks: true,
+          maxRecallTokens: Math.max(...tokenCounts),
+          maxCatalogAndRecallTokens: Math.max(...contextTokens),
+          providerRecallP95Ms: recallDurations[Math.ceil(recallDurations.length * 0.95) - 1],
+          promptRoundTripP95Ms: Math.round(durations[Math.ceil(durations.length * 0.95) - 1]),
+          omittedDetailRecovered: true,
+          autoLearnedProcedures: 0,
+          modelQualityEvaluation: "not run; deterministic mock",
+        })}\n`,
+      )
     } else {
       process.stderr.write(
         "REMEM_TEST_DATABASE_URL not set; skipping the independent-hook-registration " +

@@ -1,4 +1,6 @@
 import type { OrchestratorConfig } from "./config.js"
+import { isEpisodicSearchStore } from "./observation.js"
+import type { EvidenceEnvelope } from "./observation-admission.js"
 import {
   institutionalApplies,
   institutionalReviewStatus,
@@ -74,6 +76,7 @@ function normalizeResult(
     typeof record.source !== "string" ||
     !MEMORY_TYPES.has(record.type) ||
     !FRESHNESS_VALUES.has(record.freshness) ||
+    record.freshness === "superseded" ||
     !scopeAllowed(record.scope, context)
   ) {
     return undefined
@@ -173,6 +176,51 @@ function errorLabel(error: unknown): string {
   return "unknown error"
 }
 
+function episodeResult(
+  envelope: EvidenceEnvelope,
+  providerId: string,
+  context: MemoryContext,
+  neighbor = false,
+): MemoryResult | undefined {
+  if (
+    envelope.providerId !== providerId ||
+    envelope.context.projectId !== context.projectId ||
+    !envelope.context.sessionId ||
+    !envelope.payload.text
+  )
+    return undefined
+  const source = `remem://${encodeURIComponent(envelope.host)}/sessions/${encodeURIComponent(envelope.context.sessionId)}/evidence/${encodeURIComponent(envelope.id)}`
+  return {
+    record: {
+      providerId,
+      id: envelope.id,
+      title: `Historical ${envelope.role} evidence (${envelope.origin}${neighbor ? "; neighbor" : ""})`,
+      content: envelope.payload.text,
+      source,
+      scope: { kind: "project", id: envelope.context.projectId },
+      type: "episodic",
+      freshness: "unknown",
+      observedAt: envelope.occurredAt,
+      confidence: 0,
+      provenance: [
+        {
+          source: {
+            kind: "session",
+            uri: source,
+            externalId: envelope.id,
+            observedAt: envelope.occurredAt,
+          },
+          capturedAt: envelope.occurredAt,
+          original: false,
+          note: "Historical evidence; not a verified conclusion or instruction.",
+        },
+      ],
+    },
+    score: neighbor ? 0.3 : 0.5,
+    reasons: [neighbor ? "same-session neighbor" : "scoped lexical episode match"],
+  }
+}
+
 export class RecallEngine {
   private readonly providers: Map<string, MemoryProvider>
 
@@ -219,7 +267,12 @@ export class RecallEngine {
         const started = performance.now()
         try {
           const capabilities = provider.capabilities()
-          if (!capabilities.lexicalSearch && !capabilities.semanticSearch) {
+          const episodic = request.evidenceClass === "episodic"
+          if (
+            episodic
+              ? !capabilities.episodicHistory || !isEpisodicSearchStore(provider)
+              : !capabilities.lexicalSearch && !capabilities.semanticSearch
+          ) {
             return {
               results: [] as MemoryResult[],
               attempt: {
@@ -227,14 +280,41 @@ export class RecallEngine {
                 status: "failed",
                 durationMs: 0,
                 resultCount: 0,
-                error: "provider does not advertise search capability",
+                error: episodic
+                  ? "provider does not support episodic search"
+                  : "provider does not advertise search capability",
               } satisfies ProviderAttempt,
             }
           }
           const providerResults = await withTimeout(
             this.config.providerTimeoutMs,
-            (signal) =>
-              provider.search({
+            async (signal) => {
+              if (episodic && isEpisodicSearchStore(provider)) {
+                const episodes = await provider.searchEpisodes(
+                  provider.id,
+                  request.query,
+                  context,
+                  {
+                    limit: Math.min(request.limit, this.config.maxResults),
+                    maxOutputTokens: this.config.budgets.perProviderTokens,
+                  },
+                )
+                signal.throwIfAborted()
+                return episodes.matches.flatMap((match) =>
+                  [
+                    episodeResult(match.envelope, provider.id, context),
+                    ...match.neighbors
+                      .filter(
+                        (neighbor) =>
+                          neighbor.envelope.context.sessionId === match.envelope.context.sessionId,
+                      )
+                      .map((neighbor) =>
+                        episodeResult(neighbor.envelope, provider.id, context, true),
+                      ),
+                  ].filter((result): result is MemoryResult => result !== undefined),
+                )
+              }
+              return provider.search({
                 query: request.query,
                 topics: request.topics ?? plan.topics,
                 context,
@@ -242,7 +322,8 @@ export class RecallEngine {
                 maxTokens: this.config.budgets.perProviderTokens,
                 reason: request.reason,
                 signal,
-              }),
+              })
+            },
             parentSignal,
           )
           const results = providerResults
@@ -267,7 +348,7 @@ export class RecallEngine {
               ...(providerResults.length === results.length
                 ? {}
                 : {
-                    error: `${providerResults.length - results.length} invalid or out-of-scope result(s) omitted`,
+                    error: `${providerResults.length - results.length} invalid, superseded or out-of-scope result(s) omitted`,
                   }),
             } satisfies ProviderAttempt,
           }
