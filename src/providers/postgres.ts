@@ -1598,6 +1598,14 @@ export class PostgresMemoryProvider
     context: MemoryContext,
     options: EpisodicSearchOptions = {},
   ): Promise<EpisodicSearchResult> {
+    const roles = options.roles ?? EVIDENCE_ROLES
+    if (
+      !Array.isArray(roles) ||
+      roles.length === 0 ||
+      roles.some((role: unknown) => !EVIDENCE_ROLES.some((allowed) => allowed === role))
+    ) {
+      return { matches: [], budgetExhausted: false }
+    }
     // `Number.isFinite` guards against a caller-supplied `NaN` (which
     // survives `Math.min`/`Math.max` unclamped -- `Math.min(NaN, 10)` is
     // `NaN`, not `10`) reaching the SQL `LIMIT` parameter as an invalid
@@ -1669,20 +1677,23 @@ export class PostgresMemoryProvider
               scope.evidence_id, scope.content_hash, scope.schema_version,
               scope.preceding_id, scope.following_id
        FROM scope, query
-       WHERE scope.search_vector @@ query.terms
+       WHERE scope.search_vector @@ query.terms AND scope.role = ANY($5::text[])
        ORDER BY ts_rank_cd(scope.search_vector, query.terms) DESC, scope.occurred_at DESC, scope.id
        LIMIT $4`,
-      [providerId, context.projectId, boundedQuery, limit],
+      [providerId, context.projectId, boundedQuery, limit, roles],
     )
     if (matched.rows.length === 0) return { matches: [], budgetExhausted: false }
 
-    const neighborIds = [
-      ...new Set(
-        matched.rows.flatMap((row) =>
-          [row.preceding_id, row.following_id].filter((id): id is string => id !== null),
-        ),
-      ),
-    ]
+    const neighborIds =
+      options.includeNeighbors === false
+        ? []
+        : [
+            ...new Set(
+              matched.rows.flatMap((row) =>
+                [row.preceding_id, row.following_id].filter((id): id is string => id !== null),
+              ),
+            ),
+          ]
     const neighborRowsById = new Map<string, EpisodicEventRow>()
     if (neighborIds.length > 0) {
       const neighborResult = await this.pool.query<EpisodicEventRow>(
@@ -1720,7 +1731,7 @@ export class PostgresMemoryProvider
         ["preceding", row.preceding_id],
         ["following", row.following_id],
       ] as const) {
-        if (!neighborId) continue
+        if (!neighborId || options.includeNeighbors === false) continue
         if (remainingTokens <= 0) {
           budgetExhausted = true
           break

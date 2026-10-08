@@ -30,7 +30,7 @@
  */
 import { createHash } from "node:crypto"
 import { looksLikeToolOutput, reduceBulkArtifact } from "./bulk-artifact-reduction.js"
-import { containsSensitiveCredential } from "./sensitive-data.js"
+import { containsSensitiveCredential, containsSensitivePathCredential } from "./sensitive-data.js"
 import type { MemoryContext } from "./types.js"
 
 /** Transport/source classification assigned by the host adapter, not self-reported by event content. */
@@ -520,16 +520,15 @@ function admitEvidenceUnsafe(
   // just payload text -- screen these the same way, rejecting the whole
   // candidate rather than admitting a secret through a field the payload
   // screen never looks at.
-  for (const value of [
-    candidate.context.sessionId,
-    candidate.context.directory,
-    candidate.context.worktree,
-    candidate.turnId,
-    candidate.messageId,
-  ]) {
+  for (const value of [candidate.context.sessionId, candidate.turnId, candidate.messageId]) {
     if (typeof value === "string" && containsSensitiveCredential(value)) {
       return rejected("unscreenable-content", "an identity field contains an unscreenable value")
     }
+  }
+  if (
+    [candidate.context.directory, candidate.context.worktree].some(containsSensitivePathCredential)
+  ) {
+    return rejected("unscreenable-content", "a workspace path contains an unscreenable value")
   }
 
   // Host identity must be documented or use an established stable turn

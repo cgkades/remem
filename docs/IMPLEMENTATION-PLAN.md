@@ -8,6 +8,8 @@ For bounded coding tasks, use the [executable recovery plan](../plan/feature-mem
 The [issue audit](ISSUE-AUDIT.md) records all open/closed dispositions and proposed GitHub updates.
 Those documents refine execution scope; they do not replace this checklist's full milestone criteria.
 
+The [host evidence integration note](host-evidence-learning.md) describes the first implemented capture/recall slice and its executable gates. It explicitly records remaining verified-procedure, durable-lineage, and full cross-session acceptance work; it does not mark those milestones complete.
+
 ## How to use this document
 
 - `[ ]` means not verified complete on `main`.

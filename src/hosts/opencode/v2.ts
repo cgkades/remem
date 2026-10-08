@@ -3,6 +3,10 @@ import type { Context } from "@opencode-ai/plugin/promise/plugin"
 import { createCaptureCoordinator, type CaptureCoordinator } from "../../capture.js"
 import { parseConfig } from "../../config.js"
 import {
+  createEvidenceCaptureCoordinator,
+  type EvidenceCaptureCoordinator,
+} from "../../evidence-capture.js"
+import {
   InMemoryCorrectionCandidateStore,
   type CorrectionCandidate,
   type CorrectionCandidateStore,
@@ -18,6 +22,7 @@ import { loadInstalledPluginOptions } from "../../storage/config-file.js"
 import { createEmbeddingModel } from "../../storage/embedding-neural.js"
 import type { MemoryContext, MemoryProvider, RememLogger } from "../../types.js"
 import { formatMemoryExplain, MEMORY_TOOL_DESCRIPTIONS } from "./memory-ux.js"
+import { V2EvidenceAdapter } from "./evidence.js"
 import {
   TRUSTED_REMEM_INSTRUCTION,
   currentTurnId,
@@ -335,6 +340,9 @@ export const RememPlugin = Plugin.define({
     let contextRegistration: { dispose(): Promise<void> } | undefined
     let promptRegistration: { dispose(): Promise<void> } | undefined
     let reembedRegistration: { dispose(): Promise<void> } | undefined
+    let evidencePromptRegistration: { dispose(): Promise<void> } | undefined
+    let evidenceToolRegistration: { dispose(): Promise<void> } | undefined
+    let evidence: EvidenceCaptureCoordinator | undefined
     let capture: CaptureCoordinator | undefined
     // Scoped to this setup() call rather than module-level: every plugin
     // setup has at most one primaryPostgres, and `remem init` always writes
@@ -372,8 +380,43 @@ export const RememPlugin = Plugin.define({
       const orchestrator = new RememOrchestrator(created.providers, parsed.config, logger, {
         embeddingModel,
         reviewQueue,
+        episodicRecall: parsed.config.evidenceAdmission.enabled,
       })
       capture = createCaptureCoordinator(created.providers, parsed.config, logger)
+      evidence = createEvidenceCaptureCoordinator(
+        created.providers,
+        parsed.config,
+        { host: "opencode-v2", projectId: location.projectId },
+        logger,
+      )
+      if (evidence) {
+        const primary = parsed.config.providers.find(
+          (provider) => provider.type === "postgres" && provider.primary,
+        )
+        if (primary) {
+          const adapter = new V2EvidenceAdapter(evidence, primary.id, location)
+          evidencePromptRegistration = await context.session.hook("prompt", (event) => {
+            try {
+              adapter.prompt(event)
+            } catch {
+              safeLoggerCall(logger, "warn", "evidence.adapter_failed", {
+                host: "opencode-v2",
+                count: 1,
+              })
+            }
+          })
+          evidenceToolRegistration = await context.tool.hook("execute.after", (event) => {
+            try {
+              adapter.tool(event)
+            } catch {
+              safeLoggerCall(logger, "warn", "evidence.adapter_failed", {
+                host: "opencode-v2",
+                count: 1,
+              })
+            }
+          })
+        }
+      }
       const coordinator = capture
       if (coordinator) {
         promptRegistration = await context.session.hook("prompt", (event) => {
@@ -424,8 +467,10 @@ export const RememPlugin = Plugin.define({
           contextRegistration?.dispose(),
           promptRegistration?.dispose(),
           reembedRegistration?.dispose(),
+          evidencePromptRegistration?.dispose(),
+          evidenceToolRegistration?.dispose(),
         ])
-        await capture?.dispose()
+        await Promise.allSettled([capture?.dispose(), evidence?.dispose()])
         await Promise.allSettled([toolRegistration.dispose(), disposeProviders(providers)])
       }
     } catch (error) {
@@ -433,8 +478,11 @@ export const RememPlugin = Plugin.define({
         contextRegistration?.dispose(),
         promptRegistration?.dispose(),
         reembedRegistration?.dispose(),
+        evidencePromptRegistration?.dispose(),
+        evidenceToolRegistration?.dispose(),
       ])
-      await Promise.allSettled([capture?.dispose(), disposeProviders(providers)])
+      await Promise.allSettled([capture?.dispose(), evidence?.dispose()])
+      await disposeProviders(providers)
       safeLoggerCall(logger, "error", "plugin.initialization_failed", {
         error: error instanceof Error ? error.name : "unknown error",
       })

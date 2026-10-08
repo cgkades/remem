@@ -128,6 +128,8 @@ export interface ManualSearchResult {
 
 export interface OrchestratorDependencies {
   embeddingModel?: EmbeddingModel
+  /** Explicit opt-in for bounded historical tool recall on continuity plans. */
+  episodicRecall?: boolean
   synthesizer?: SynthesisStrategy
   /**
    * Owns the correction-candidate review lifecycle. Deliberately not exposed
@@ -178,7 +180,7 @@ export class RememOrchestrator {
     this.semantic = new SemanticCatalogRecognizer(
       dependencies.embeddingModel ?? new LocalHashEmbeddingModel(),
     )
-    this.recall = new RecallEngine(this.providers, config)
+    this.recall = new RecallEngine(this.providers, config, dependencies.episodicRecall === true)
     this.fallbackSynthesizer = new DeterministicSynthesizer(config.budgets)
     this.synthesizer = dependencies.synthesizer ?? this.fallbackSynthesizer
     this.providerIds = this.providers.map((provider) => provider.id)

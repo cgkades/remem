@@ -78,6 +78,31 @@ describe("admitEvidence", () => {
     // candidates: admission never inspects/requires a classifier result.
   })
 
+  it("admits normal workspace paths without treating their joined segments as an opaque credential", () => {
+    const directory = "/workspace/scratch/34d27914feff/remem/tests/fixtures/memory"
+    expect(
+      admitEvidence(
+        baseCandidate({ context: { ...context, directory, worktree: directory } }),
+        authority,
+        enabledConfig,
+      ).outcome,
+    ).toBe("admitted")
+  })
+
+  it.each([
+    "/repo/password=supersecret/src",
+    "/repo/ghp_abcdefghijklmnopqrstuvwxyz0123456789/src",
+    "/repo/Kf83aZpQ0dR9mT2sV6wX1bN8cH4jL7uE5gY/src",
+  ])("still rejects credential-bearing path components", (directory) => {
+    expect(
+      admitEvidence(
+        baseCandidate({ context: { ...context, directory, worktree: directory } }),
+        authority,
+        enabledConfig,
+      ),
+    ).toMatchObject({ outcome: "rejected", reason: "unscreenable-content" })
+  })
+
   it("rejects everything when the feature is disabled, regardless of shape validity", () => {
     const result = admitEvidence(baseCandidate(), authority, DEFAULT_EVIDENCE_ADMISSION_CONFIG)
 

@@ -36,6 +36,16 @@ export function containsSensitiveCredential(value: string): boolean {
   )
 }
 
+/** Workspace paths are structured identities, not one opaque base64 token.
+ * Keep explicit credential patterns across the whole path and entropy checks
+ * on each component, so long ordinary paths do not suppress all capture. */
+export function containsSensitivePathCredential(value: string): boolean {
+  return (
+    CREDENTIAL_PATTERNS.some((pattern) => pattern.test(value)) ||
+    value.split(/[\\/]/u).some(containsSensitiveCredential)
+  )
+}
+
 export function redactSensitiveText(value: string): string {
   let result = value
   for (const pattern of CREDENTIAL_PATTERNS) {
