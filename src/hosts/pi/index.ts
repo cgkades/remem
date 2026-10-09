@@ -254,9 +254,13 @@ async function buildSessionState(
     const options = await loadInstalledPluginOptions(undefined)
     const parsed = parseConfig(options)
     const statusUI =
-      typeof options === "object" && options !== null && "pi" in options &&
-      typeof options.pi === "object" && options.pi !== null &&
-      "memoryStatusUI" in options.pi && options.pi.memoryStatusUI === true
+      typeof options === "object" &&
+      options !== null &&
+      "pi" in options &&
+      typeof options.pi === "object" &&
+      options.pi !== null &&
+      "memoryStatusUI" in options.pi &&
+      options.pi.memoryStatusUI === true
     for (const diagnostic of parsed.diagnostics) {
       safeLoggerCall(logger, diagnostic.level, "config.invalid", { message: diagnostic.message })
     }
@@ -324,40 +328,70 @@ function queueHealthStatus(
   getState: () => PiSessionState | undefined,
 ): void {
   try {
-    if (!state.statusUI || ctx.mode !== "tui" || !ctx.hasUI ||
-      typeof ctx.ui?.setStatus !== "function" || state.statusPending ||
-      Date.now() - (state.lastStatusAt ?? 0) < 10_000) return
+    if (
+      !state.statusUI ||
+      ctx.mode !== "tui" ||
+      !ctx.hasUI ||
+      typeof ctx.ui?.setStatus !== "function" ||
+      state.statusPending ||
+      Date.now() - (state.lastStatusAt ?? 0) < 10_000
+    )
+      return
     const sessionId = ctx.sessionManager.getSessionId()
     const controller = new AbortController()
     state.statusAbort = controller
     state.statusPending = true
     state.lastStatusAt = Date.now()
     state.clearStatus = () => {
-      try { ctx.ui.setStatus("remem", undefined) } catch { /* Advisory UI cannot fail teardown. */ }
+      try {
+        ctx.ui.setStatus("remem", undefined)
+      } catch {
+        /* Advisory UI cannot fail teardown. */
+      }
     }
     const publish = (text: string) => {
       try {
-        if (controller.signal.aborted || getState() !== state ||
-          ctx.sessionManager.getSessionId() !== sessionId) return
+        if (
+          controller.signal.aborted ||
+          getState() !== state ||
+          ctx.sessionManager.getSessionId() !== sessionId
+        )
+          return
         ctx.ui.setStatus("remem", text)
-      } catch { /* Host UI failures remain isolated. */ }
+      } catch {
+        /* Host UI failures remain isolated. */
+      }
     }
-    void withTimeout(250, () => state.orchestrator.status(contextFor(state, ctx)), controller.signal)
+    void withTimeout(
+      250,
+      () => state.orchestrator.status(contextFor(state, ctx)),
+      controller.signal,
+    )
       .then((status) => {
         const providers: unknown[] = Array.isArray(status.providers) ? status.providers : []
         const healthy = providers.filter((provider) => {
-          const health = typeof provider === "object" && provider !== null && "health" in provider
-            ? provider.health : undefined
-          return typeof health === "object" && health !== null && "status" in health &&
+          const health =
+            typeof provider === "object" && provider !== null && "health" in provider
+              ? provider.health
+              : undefined
+          return (
+            typeof health === "object" &&
+            health !== null &&
+            "status" in health &&
             health.status === "healthy"
+          )
         }).length
         const trace = state.orchestrator.explain(sessionId)
-        const recalled = "status" in trace || !Number.isFinite(trace.selectedResults)
-          ? "pending" : String(Math.max(0, Math.min(999, trace.selectedResults)))
+        const recalled =
+          "status" in trace || !Number.isFinite(trace.selectedResults)
+            ? "pending"
+            : String(Math.max(0, Math.min(999, trace.selectedResults)))
         publish("ReMem: " + healthy + "/" + providers.length + " providers; recall " + recalled)
       })
       .catch(() => publish("ReMem: unavailable"))
-      .finally(() => { state.statusPending = false })
+      .finally(() => {
+        state.statusPending = false
+      })
   } catch {
     // Unsupported/throwing UI APIs must never affect host initialization or dispatch.
   }
