@@ -224,11 +224,13 @@ jobs:
       - run: npx vitest run tests/hybrid-quality.integration.test.ts
         env:
           REMEM_TEST_DATABASE_URL: postgres://remem:remem-ci-password@127.0.0.1:5432/remem_test
-      - run: npx prettier --check tests/hybrid-quality.integration.test.ts tests/fixtures/evaluation/hybrid-quality.json
+      - run: npx prettier --check tests/hybrid-quality.integration.test.ts tests/fixtures/evaluation/hybrid-quality.json src/providers/postgres.ts
       - if: failure()
         run: npx prettier tests/hybrid-quality.integration.test.ts
       - if: failure()
         run: npx prettier tests/fixtures/evaluation/hybrid-quality.json
+      - if: failure()
+        run: npx prettier src/providers/postgres.ts
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

@@ -160,6 +160,8 @@ interface MemoryRow extends QueryResultRow {
   tags: string[]
   lexical_score?: number
   semantic_score?: number
+  catalog_topic_match?: boolean
+  full_text_match?: boolean
   provenance?: MemoryProvenance[]
   entities?: MemoryEntity[]
   relationships?: MemoryRelationship[]
@@ -745,12 +747,31 @@ export class PostgresMemoryProvider
           ORDER BY me.embedding <=> $6::vector
           LIMIT $13
         ),
+        topic_candidates AS (
+          SELECT m.id, 0.91::double precision AS lexical_score,
+            0::double precision AS semantic_score
+          FROM remem.memories m
+          WHERE m.provider_id = $1 AND (
+            m.scope_kind = 'global' OR
+            (m.scope_kind = 'workspace' AND m.scope_id = $2) OR
+            (m.scope_kind = 'project' AND m.scope_id = $3) OR
+            (m.scope_kind = 'session' AND m.scope_id = $4)
+          )
+          AND ($8::text[] IS NULL OR m.type = ANY($8::text[]))
+          AND ($9::text[] IS NULL OR m.scope_kind = ANY($9::text[]))
+          AND m.freshness <> 'superseded'
+          AND m.title = ANY($14::text[])
+          ORDER BY m.updated_at DESC
+          LIMIT $7
+        ),
         candidates AS (
           SELECT id, max(lexical_score) AS lexical_score, max(semantic_score) AS semantic_score
           FROM (
             SELECT * FROM lexical_candidates
             UNION ALL
             SELECT * FROM semantic_candidates
+            UNION ALL
+            SELECT * FROM topic_candidates
           ) combined
           GROUP BY id
           HAVING max(lexical_score) > 0 OR max(semantic_score) >= 0.34
@@ -773,7 +794,9 @@ export class PostgresMemoryProvider
             JOIN remem.sources ps ON ps.id = mp.source_id
             WHERE mp.memory_id = m.id
           ), '[]'::jsonb) AS provenance,
-          candidates.lexical_score, candidates.semantic_score
+          candidates.lexical_score, candidates.semantic_score,
+          m.title = ANY($14::text[]) AS catalog_topic_match,
+          m.search_vector @@ (SELECT terms FROM query) AS full_text_match
         FROM candidates
         JOIN remem.memories m ON m.id = candidates.id
         LEFT JOIN remem.sources s ON s.id = m.source_id
@@ -795,6 +818,7 @@ export class PostgresMemoryProvider
         this.embeddingModel.dimensions,
         perResultCharacters,
         Math.max(32, request.limit * 4),
+        request.topics.filter((topic) => typeof topic === "string").slice(0, 8),
       ],
     )
     request.signal.throwIfAborted()
@@ -805,7 +829,8 @@ export class PostgresMemoryProvider
         record: rowToRecord(row),
         score: Math.max(0, Math.min(1, Math.max(lexical, semantic))),
         reasons: [
-          ...(lexical > 0 ? ["PostgreSQL full-text match"] : []),
+          ...(row.full_text_match ? ["PostgreSQL full-text match"] : []),
+          ...(row.catalog_topic_match ? ["PostgreSQL catalog topic match"] : []),
           ...(semantic >= 0.34 ? ["pgvector semantic match"] : []),
         ],
       }
