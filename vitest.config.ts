@@ -6,7 +6,7 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "json-summary"],
     },
-    include: ["tests/**/*.test.ts"],
+    include: ["tests/**/*.test.{ts,mjs}"],
     exclude: ["**/*.eval.test.ts"],
     // Multiple *.integration.test.ts files share one external PostgreSQL
     // instance and each resets the `remem` schema in its own beforeAll;
