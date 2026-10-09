@@ -85,6 +85,22 @@ relaxing that later should only ever apply to `"rpc"` explicitly, never `"extens
 Background reembed-on-input is not gated this way: it is opportunistic maintenance triggered by
 the fact that _some_ input happened, not an assertion about who produced it.
 
+An RPC caller may be a script, another agent, or a remote process. The `rpc` source label does
+not authenticate a human or prove that an operator authorized durable learning. Preference-shaped
+text, a claimed user identity, and an `approved` field supplied by that caller cannot establish
+trust. Enabling ordinary capture or automatic promotion does not override this source gate.
+
+Any future RPC capture option must be separately and explicitly enabled by the operator and
+authenticate the originating source outside model-controlled text. It must bind that authorization
+to the provider, project and session, retain attributable evidence, and preserve sensitive
+correction review. Authentication alone would not authorize every generated statement. There is
+no such RPC opt-in implemented today; `extension` input remains excluded even in that future
+design. This is the conservative policy tracked by [#57](https://github.com/cgkades/remem/issues/57).
+
+`tests/pi-integration.test.ts` retains explicit assertions for all three source variants:
+interactive accepted, RPC and extension excluded. Its input-hook test also verifies that
+extension-generated preference/decision text does not reach persistence.
+
 ## Compaction and Branch Summarization
 
 Pi's `session_before_compact` return value is a full _replacement_ for Pi's own compaction
