@@ -194,9 +194,7 @@ export class RememOrchestrator {
   ): CatalogSnapshot {
     const rendered = renderCatalog(
       catalog.entries.filter(
-        (entry) =>
-          !blockedCatalogIds.has(entry.id) &&
-          catalogPolicyAllows(entry, context, prompt),
+        (entry) => !blockedCatalogIds.has(entry.id) && catalogPolicyAllows(entry, context, prompt),
       ),
       this.config.budgets.catalogTokens,
       catalog.providers,
