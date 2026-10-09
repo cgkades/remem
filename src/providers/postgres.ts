@@ -3279,6 +3279,36 @@ export class PostgresMemoryProvider
     ).run()
   }
 
+  async recoverLearningCandidates(
+    context: MemoryContext,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<{ selected: number; promoted: number; pending: number; failed: number }> {
+    options.signal?.throwIfAborted()
+    if (!context.projectId) throw new TypeError("learning recovery requires a project")
+    // Direct capture has no durable intermediate claim: its first promotion
+    // is atomic. Concurrent startup attempts reuse the managed scope lock and
+    // processed ledger. Keep this one small batch, not a new background worker.
+    const rows = await this.pool.query<CandidateRow>(
+      `SELECT * FROM remem.candidate_memories WHERE status='approved'
+       AND scope_kind='project' AND scope_id=$1 AND metadata->>'providerId'=$2
+       AND metadata->>'canonicalEvidence'='true'
+       AND metadata->'learningPolicy'->>'version'=$3
+       AND metadata->'learningPolicy'->>'outcome'='auto-promote'
+       ORDER BY created_at,id LIMIT 8`,
+      [context.projectId, this.id, LEARNING_POLICY_VERSION],
+    )
+    options.signal?.throwIfAborted()
+    const results = await new DeterministicConsolidationPipeline(this, {
+      batchSize: 8,
+    }).consolidate(rows.rows.map(candidateFromRow), options.signal)
+    return {
+      selected: rows.rows.length,
+      promoted: results.filter((candidate) => candidate.status === "promoted").length,
+      pending: results.filter((candidate) => candidate.status === "pending").length,
+      failed: results.filter((candidate) => candidate.status === "approved").length,
+    }
+  }
+
   async reembedStale(batchSize = 25) {
     return new PostgresReembedRunner(
       this.pool,

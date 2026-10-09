@@ -234,6 +234,7 @@ export const RememV1Plugin = (async (input, options) => {
       embeddingModel,
     })
     const capture = createCaptureCoordinator(created.providers, parsed.config, logger)
+    await capture?.recover(locationFor(input))
     const hooks = createOpenCodeV1Hooks(input, orchestrator, parsed.config, logger, capture)
     hooks.dispose = async () => {
       await capture?.dispose()

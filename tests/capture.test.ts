@@ -373,6 +373,103 @@ describe("DeterministicCandidateExtractor", () => {
 })
 
 describe("CaptureCoordinator", () => {
+  it("runs one bounded scoped recovery attempt and shares it with idle and shutdown", async () => {
+    const calls: MemoryContext[] = []
+    const store = Object.assign(new RecordingStore(), {
+      recoverLearningCandidates(current: MemoryContext) {
+        calls.push(current)
+        return Promise.resolve({ selected: 1, promoted: 1, pending: 0, failed: 0 })
+      },
+    })
+    const coordinator = new CaptureCoordinator(
+      store,
+      { ...config, autoPromote: true },
+      logger,
+      undefined,
+      true,
+    )
+    await Promise.all([
+      coordinator.recover(context),
+      coordinator.recover(context),
+      coordinator.idle(),
+    ])
+    await coordinator.recover(context)
+    await coordinator.dispose()
+    await coordinator.recover(context)
+    expect(calls).toEqual([context])
+  })
+
+  it("does not recover when automatic learning or canonical admission is disabled", async () => {
+    let calls = 0
+    const store = Object.assign(new RecordingStore(), {
+      recoverLearningCandidates() {
+        calls++
+        return Promise.resolve({ selected: 0, promoted: 0, pending: 0, failed: 0 })
+      },
+    })
+    for (const [autoPromote, enabled] of [
+      [false, true],
+      [true, false],
+    ]) {
+      const coordinator = new CaptureCoordinator(
+        store,
+        { ...config, autoPromote: Boolean(autoPromote) },
+        logger,
+        undefined,
+        enabled,
+      )
+      await coordinator.recover(context)
+      await coordinator.dispose()
+    }
+    expect(calls).toBe(0)
+  })
+
+  it("fails open and aborts a stalled startup recovery without retrying", async () => {
+    let signal: AbortSignal | undefined
+    let calls = 0
+    const store = Object.assign(new RecordingStore(), {
+      recoverLearningCandidates(_current: MemoryContext, options?: { signal?: AbortSignal }) {
+        calls++
+        signal = options?.signal
+        return new Promise<{ selected: number; promoted: number; pending: number; failed: number }>(
+          () => undefined,
+        )
+      },
+    })
+    const coordinator = new CaptureCoordinator(
+      store,
+      { ...config, autoPromote: true, timeoutMs: 20 },
+      logger,
+      undefined,
+      true,
+    )
+    await expect(coordinator.recover(context)).resolves.toBeUndefined()
+    expect(signal?.aborted).toBe(true)
+    await coordinator.recover(context)
+    await coordinator.dispose()
+    expect(calls).toBe(1)
+  })
+
+  it("keeps capture usable after recovery failure", async () => {
+    const store = Object.assign(new RecordingStore(), {
+      recoverLearningCandidates() {
+        return Promise.reject(new Error("offline"))
+      },
+    })
+    const coordinator = new CaptureCoordinator(
+      store,
+      { ...config, autoPromote: true },
+      logger,
+      undefined,
+      true,
+    )
+    await coordinator.recover(context)
+    coordinator.enqueue(input("Atlas uses local files."))
+    await coordinator.idle()
+    expect(store.persisted).toHaveLength(1)
+    await coordinator.dispose()
+  })
+
   it("captures multiple statements even when the prompt also contains a question", async () => {
     const store = new RecordingStore()
     const coordinator = new CaptureCoordinator(store, config, logger)

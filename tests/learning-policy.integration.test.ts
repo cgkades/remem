@@ -41,12 +41,12 @@ integration("server learning authorization and audit", () => {
   afterAll(async () => {
     await pool.end()
   })
-  async function input(text: string) {
+  async function input(text: string, scope = context) {
     const result = admitEvidence(
       {
         providerId: config.id,
         host: "opencode-v2",
-        context,
+        context: scope,
         messageId: randomUUID(),
         role: "user",
         origin: "direct-user",
@@ -54,7 +54,7 @@ integration("server learning authorization and audit", () => {
         occurredAt: new Date().toISOString(),
         payload: { text },
       },
-      { providerId: config.id, host: "opencode-v2", projectId: context.projectId },
+      { providerId: config.id, host: "opencode-v2", projectId: scope.projectId },
       { ...DEFAULT_EVIDENCE_ADMISSION_CONFIG, enabled: true },
     )
     if (result.outcome !== "admitted") throw new Error("bad fixture")
@@ -63,7 +63,7 @@ integration("server learning authorization and audit", () => {
     const observation: SessionObservation = {
       id: randomUUID(),
       kind: extractor.classify(text)!.kind,
-      context,
+      context: scope,
       occurredAt: result.envelope.occurredAt,
       source: "remem://opencode-v2/sessions/policy-session",
       payload: {
@@ -209,5 +209,44 @@ integration("server learning authorization and audit", () => {
     expect(lineage).toMatchObject({ state: "promoted", policyOutcome: "auto-promote" })
     expect((await runner.run()).promoted).toBe(0)
     expect(await store.candidateLineage(f.candidate.id, context)).toEqual(lineage)
+  })
+
+  it("recovers only current-project canonical policy approvals, concurrently and without replay mutation", async () => {
+    const f = await input("Startup worker uses isolated local files.")
+    const foreign = await input("Foreign startup worker uses isolated local files.", {
+      ...context,
+      projectId: "foreign-project",
+    })
+    const pending = await input("Actually, startup worker uses shared files.")
+    for (const item of [f, foreign, pending])
+      await store.persistCandidate(item.observation, item.candidate, options)
+    const runs = await Promise.all([
+      store.recoverLearningCandidates(context),
+      store.recoverLearningCandidates(context),
+    ])
+    expect(runs.every((run) => run.failed === 0)).toBe(true)
+    expect((await store.candidateLineage(f.candidate.id, context))?.state).toBe("promoted")
+    expect(
+      (await store.candidateLineage(foreign.candidate.id, foreign.observation.context))?.state,
+    ).toBe("approved")
+    expect((await store.candidateLineage(pending.candidate.id, context))?.state).toBe("pending")
+    const lineage = await store.candidateLineage(f.candidate.id, context)
+    expect((await store.recoverLearningCandidates(context)).selected).toBe(0)
+    expect(await store.candidateLineage(f.candidate.id, context)).toEqual(lineage)
+  })
+
+  it("never recovers a legacy approval or an aborted recovery request", async () => {
+    const f = await input("Legacy startup worker uses local files.")
+    await store.persistCandidate(f.observation, f.candidate, { autoApprove: true })
+    expect((await store.recoverLearningCandidates(context)).selected).toBe(0)
+    expect((await store.candidateLineage(f.candidate.id, context))?.state).toBe("approved")
+    const current = await input("Cancelled startup worker uses local files.")
+    await store.persistCandidate(current.observation, current.candidate, options)
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      store.recoverLearningCandidates(context, { signal: controller.signal }),
+    ).rejects.toThrow()
+    expect((await store.candidateLineage(current.candidate.id, context))?.state).toBe("approved")
   })
 })

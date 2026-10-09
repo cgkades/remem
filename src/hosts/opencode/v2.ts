@@ -384,6 +384,7 @@ export const RememPlugin = Plugin.define({
         episodicRecall: parsed.config.evidenceAdmission.enabled,
       })
       capture = createCaptureCoordinator(created.providers, parsed.config, logger)
+      await capture?.recover(location)
       const coordinator = capture
       evidence = createEvidenceCaptureCoordinator(
         created.providers,

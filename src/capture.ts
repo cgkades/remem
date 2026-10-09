@@ -294,6 +294,8 @@ export class CaptureCoordinator {
   private readonly extractor: DeterministicCandidateExtractor
   private readonly queue: SessionObservation[] = []
   private drainPromise: Promise<void> | undefined
+  private recoveryPromise: Promise<void> | undefined
+  private recoveryAttempted = false
   private readonly shutdown = new AbortController()
   private static readonly maxExplanations = 100
   private readonly explanations = new Map<string, CaptureExplanation>()
@@ -305,6 +307,7 @@ export class CaptureCoordinator {
     private readonly config: CaptureConfig,
     private readonly logger: RememLogger,
     private readonly promote?: (candidate: CandidateMemory, signal: AbortSignal) => Promise<void>,
+    private readonly recoveryEnabled = false,
   ) {
     this.extractor = new DeterministicCandidateExtractor(config)
   }
@@ -443,8 +446,40 @@ export class CaptureCoordinator {
     if (!this.drainPromise) this.drainPromise = this.drain()
   }
 
+  recover(context: MemoryContext): Promise<void> {
+    if (this.recoveryPromise) return this.recoveryPromise
+    if (
+      this.closed ||
+      this.recoveryAttempted ||
+      !this.recoveryEnabled ||
+      !this.config.autoPromote ||
+      !context.projectId ||
+      !this.store.recoverLearningCandidates
+    )
+      return Promise.resolve()
+    this.recoveryAttempted = true
+    this.recoveryPromise = withTimeout(
+      this.config.timeoutMs,
+      async (signal) => {
+        const report = await this.store.recoverLearningCandidates!(context, { signal })
+        if (report.failed > 0)
+          logFailure(this.logger, "capture.recovery_incomplete", { count: report.failed })
+      },
+      this.shutdown.signal,
+    )
+      .catch((error: unknown) => {
+        logFailure(this.logger, "capture.recovery_failed", {
+          error: error instanceof Error ? error.name : "unknown error",
+        })
+      })
+      .finally(() => {
+        this.recoveryPromise = undefined
+      })
+    return this.recoveryPromise
+  }
+
   async idle(): Promise<void> {
-    await this.drainPromise
+    await Promise.all([this.drainPromise, this.recoveryPromise])
   }
 
   async dispose(): Promise<void> {
@@ -557,9 +592,15 @@ export function createCaptureCoordinator(
   const pipeline = config.capture.autoPromote
     ? new DeterministicConsolidationPipeline(provider, { batchSize: 1 })
     : undefined
-  return new CaptureCoordinator(provider, config.capture, logger, async (candidate, signal) => {
-    if (!pipeline) return
-    const [result] = await pipeline.consolidate([candidate], signal)
-    if (result?.status !== "promoted") throw new Error("automatic capture was not promoted")
-  })
+  return new CaptureCoordinator(
+    provider,
+    config.capture,
+    logger,
+    async (candidate, signal) => {
+      if (!pipeline) return
+      const [result] = await pipeline.consolidate([candidate], signal)
+      if (result?.status !== "promoted") throw new Error("automatic capture was not promoted")
+    },
+    config.evidenceAdmission.enabled,
+  )
 }
