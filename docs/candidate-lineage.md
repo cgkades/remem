@@ -18,7 +18,11 @@ Every duplicate merge keeps its own association. Replaying any processed candida
 
 Persisted reviewed candidate bodies are authoritative during promotion. Supplying `status: approved` cannot approve a stored pending candidate or replace its reviewed text. The existing direct approved-candidate core API remains trusted application code, not a host/model-facing approval endpoint. Stored legacy candidates without an attributable provider are refused by managed consolidation.
 
-The ledger currently uses existing observation UUIDs. The first OpenCode capture slice emits separate normalized episodic events and legacy semantic observations; linking their canonical evidence IDs automatically remains follow-up work with #43/#96. Version labels distinguish this legacy/capture baseline; they do not assert a new verification policy. No root-cause or procedure verification is introduced here, and no correction-domain state machine is replaced.
+New captures declaring evidence references resolve them to canonical episode UUIDs in the same transaction. Provider, project, session, host, admission/hash integrity, original-user authority and source text must match. Provenance references must agree with the capture's declared sources. Missing, forgotten, foreign, corrupted or compacted evidence cannot fall back to legacy capture. The candidate and ledger retain the canonical UUIDs without a second legacy observation row. New canonical candidates also revalidate evidence availability/integrity before their first semantic promotion; processed replay remains non-mutating even after retention removes a source.
+
+Forget previews include every candidate directly associated with the target episode, including secondary ledger references. A newly linked candidate invalidates an earlier preview rather than silently expanding human authorization. Confirmed deletion leaves body-free lineage and does not delete semantic memory automatically. This does not authorize sensitive corrections or independently supported semantic deletion.
+
+Legacy captures without declared references retain their existing observation path, and reviewed legacy associations are not rewritten retroactively. Version labels distinguish this legacy/capture baseline; they do not assert a new verification policy. No root-cause or procedure verification is introduced here, and no correction-domain state machine is replaced.
 
 ## Verification
 
