@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import type { CandidateLineage } from "../learning-ledger.js"
 import { Pool, type PoolClient, type QueryResultRow } from "pg"
 import type { PostgresProviderConfig } from "../config.js"
 import {
@@ -57,6 +58,8 @@ import {
   type EvidenceReference,
 } from "../observation-admission.js"
 import {
+  candidateFromRow,
+  type CandidateRow,
   DeterministicConsolidationPipeline,
   PostgresConsolidationRunner,
 } from "../consolidation.js"
@@ -647,6 +650,13 @@ export class PostgresMemoryProvider
   }
 
   async search(request: MemorySearchRequest): Promise<MemoryResult[]> {
+    return this.searchWithClient(this.pool, request)
+  }
+
+  private async searchWithClient(
+    queryable: Pool | PoolClient,
+    request: MemorySearchRequest,
+  ): Promise<MemoryResult[]> {
     request.signal.throwIfAborted()
     let embedding: string | null = null
     try {
@@ -658,7 +668,7 @@ export class PostgresMemoryProvider
       128,
       Math.floor(request.maxTokens / Math.max(1, request.limit)),
     )
-    const result = await this.pool.query<MemoryRow>(
+    const result = await queryable.query<MemoryRow>(
       `
         WITH settings AS MATERIALIZED (
           SELECT set_config('hnsw.iterative_scan', 'strict_order', true)
@@ -794,8 +804,15 @@ export class PostgresMemoryProvider
       `${BASE_SELECT}
        WHERE m.provider_id = $2
          AND (
-           m.metadata->'consolidation'->>'candidateId' = $1 OR
-           m.metadata->'consolidation'->>'lastCandidateId' = $1
+           EXISTS (SELECT 1 FROM remem.candidate_lineage l
+             WHERE l.provider_id = m.provider_id AND l.scope_kind = m.scope_kind
+               AND l.scope_key = COALESCE(m.scope_id, '') AND l.candidate_id = $1::uuid
+               AND l.memory_id = m.id AND l.state = 'promoted') OR
+           (NOT EXISTS (SELECT 1 FROM remem.candidate_lineage l
+             WHERE l.provider_id = $2 AND l.scope_kind = $3 AND l.scope_key = COALESCE($4, '')
+               AND l.candidate_id = $1::uuid) AND
+             (m.metadata->'consolidation'->>'candidateId' = $1::text OR
+              m.metadata->'consolidation'->>'lastCandidateId' = $1::text))
          )
          AND m.scope_kind = $3
          AND m.scope_id IS NOT DISTINCT FROM $4
@@ -827,22 +844,28 @@ export class PostgresMemoryProvider
     memory: MemoryWrite,
     options: MemoryMutationOptions = {},
   ): Promise<MemoryRecord> {
+    return this.mutateWithClient((client) => this.updateWithClient(client, id, memory, options))
+  }
+
+  private async updateWithClient(
+    client: PoolClient,
+    id: string,
+    memory: MemoryWrite,
+    options: MemoryMutationOptions,
+  ): Promise<MemoryRecord> {
     if (!UUID_PATTERN.test(id)) throw new TypeError("memory id must be a UUID")
-    const client = await this.pool.connect()
-    try {
-      await client.query("BEGIN")
-      const existing = await client.query<{ created_at: Date; freshness: string }>(
-        "SELECT created_at, freshness FROM remem.memories WHERE id = $1 AND provider_id = $2 FOR UPDATE",
-        [id, this.id],
-      )
-      if (!existing.rows[0]) throw new Error("memory not found")
-      if (existing.rows[0].freshness === "superseded") {
-        throw new Error("superseded memories cannot be updated; update their successor")
-      }
-      const temporaryId = randomUUID()
-      const record = await this.writeWithClient(client, { ...memory, id: temporaryId }, options)
-      await client.query(
-        `UPDATE remem.memories original SET
+    const existing = await client.query<{ created_at: Date; freshness: string }>(
+      "SELECT created_at, freshness FROM remem.memories WHERE id = $1 AND provider_id = $2 FOR UPDATE",
+      [id, this.id],
+    )
+    if (!existing.rows[0]) throw new Error("memory not found")
+    if (existing.rows[0].freshness === "superseded") {
+      throw new Error("superseded memories cannot be updated; update their successor")
+    }
+    const temporaryId = randomUUID()
+    const record = await this.writeWithClient(client, { ...memory, id: temporaryId }, options)
+    await client.query(
+      `UPDATE remem.memories original SET
            source_id = replacement.source_id,
            type = replacement.type,
            title = replacement.title,
@@ -860,42 +883,42 @@ export class PostgresMemoryProvider
            metadata = replacement.metadata
          FROM remem.memories replacement
          WHERE original.id = $1 AND replacement.id = $2`,
-        [id, temporaryId],
-      )
-      await client.query("DELETE FROM remem.memory_aliases WHERE memory_id = $1", [id])
-      await client.query("UPDATE remem.memory_aliases SET memory_id = $1 WHERE memory_id = $2", [
-        id,
-        temporaryId,
-      ])
-      await client.query("DELETE FROM remem.memory_tags WHERE memory_id = $1", [id])
-      await client.query("UPDATE remem.memory_tags SET memory_id = $1 WHERE memory_id = $2", [
-        id,
-        temporaryId,
-      ])
-      await client.query("DELETE FROM remem.memory_provenance WHERE memory_id = $1", [id])
-      await client.query("UPDATE remem.memory_provenance SET memory_id = $1 WHERE memory_id = $2", [
-        id,
-        temporaryId,
-      ])
-      await client.query("DELETE FROM remem.memory_entities WHERE memory_id = $1", [id])
-      await client.query("UPDATE remem.memory_entities SET memory_id = $1 WHERE memory_id = $2", [
-        id,
-        temporaryId,
-      ])
-      await client.query("DELETE FROM remem.relationships WHERE source_memory_id = $1", [id])
-      await client.query(
-        "UPDATE remem.relationships SET source_memory_id = $1 WHERE source_memory_id = $2",
-        [id, temporaryId],
-      )
-      await client.query("DELETE FROM remem.memory_embeddings WHERE memory_id = $1", [id])
-      await client.query("UPDATE remem.memory_embeddings SET memory_id = $1 WHERE memory_id = $2", [
-        id,
-        temporaryId,
-      ])
-      const temporarySource = `remem://${this.id}/${temporaryId}`
-      const canonicalSource = `remem://${this.id}/${id}`
-      await client.query(
-        `UPDATE remem.catalog_entries original SET
+      [id, temporaryId],
+    )
+    await client.query("DELETE FROM remem.memory_aliases WHERE memory_id = $1", [id])
+    await client.query("UPDATE remem.memory_aliases SET memory_id = $1 WHERE memory_id = $2", [
+      id,
+      temporaryId,
+    ])
+    await client.query("DELETE FROM remem.memory_tags WHERE memory_id = $1", [id])
+    await client.query("UPDATE remem.memory_tags SET memory_id = $1 WHERE memory_id = $2", [
+      id,
+      temporaryId,
+    ])
+    await client.query("DELETE FROM remem.memory_provenance WHERE memory_id = $1", [id])
+    await client.query("UPDATE remem.memory_provenance SET memory_id = $1 WHERE memory_id = $2", [
+      id,
+      temporaryId,
+    ])
+    await client.query("DELETE FROM remem.memory_entities WHERE memory_id = $1", [id])
+    await client.query("UPDATE remem.memory_entities SET memory_id = $1 WHERE memory_id = $2", [
+      id,
+      temporaryId,
+    ])
+    await client.query("DELETE FROM remem.relationships WHERE source_memory_id = $1", [id])
+    await client.query(
+      "UPDATE remem.relationships SET source_memory_id = $1 WHERE source_memory_id = $2",
+      [id, temporaryId],
+    )
+    await client.query("DELETE FROM remem.memory_embeddings WHERE memory_id = $1", [id])
+    await client.query("UPDATE remem.memory_embeddings SET memory_id = $1 WHERE memory_id = $2", [
+      id,
+      temporaryId,
+    ])
+    const temporarySource = `remem://${this.id}/${temporaryId}`
+    const canonicalSource = `remem://${this.id}/${id}`
+    await client.query(
+      `UPDATE remem.catalog_entries original SET
            title = replacement.title,
            summary = replacement.summary,
            aliases = replacement.aliases,
@@ -911,22 +934,15 @@ export class PostgresMemoryProvider
            updated_at = now()
          FROM remem.catalog_entries replacement
          WHERE original.memory_id = $1 AND replacement.memory_id = $2`,
-        [id, temporaryId, temporarySource, canonicalSource],
-      )
-      await client.query("DELETE FROM remem.catalog_entries WHERE memory_id = $1", [temporaryId])
-      await client.query("DELETE FROM remem.memories WHERE id = $1", [temporaryId])
-      await client.query("COMMIT")
-      return {
-        ...record,
-        id,
-        source: record.source === temporarySource ? canonicalSource : record.source,
-        createdAt: existing.rows[0].created_at.toISOString(),
-      }
-    } catch (error) {
-      await client.query("ROLLBACK")
-      throw error
-    } finally {
-      client.release()
+      [id, temporaryId, temporarySource, canonicalSource],
+    )
+    await client.query("DELETE FROM remem.catalog_entries WHERE memory_id = $1", [temporaryId])
+    await client.query("DELETE FROM remem.memories WHERE id = $1", [temporaryId])
+    return {
+      ...record,
+      id,
+      source: record.source === temporarySource ? canonicalSource : record.source,
+      createdAt: existing.rows[0].created_at.toISOString(),
     }
   }
 
@@ -935,25 +951,41 @@ export class PostgresMemoryProvider
     replacement: MemoryWrite,
     options: MemoryMutationOptions = {},
   ): Promise<MemoryRecord> {
+    return this.mutateWithClient((client) =>
+      this.supersedeWithClient(client, id, replacement, options),
+    )
+  }
+
+  private async supersedeWithClient(
+    client: PoolClient,
+    id: string,
+    replacement: MemoryWrite,
+    options: MemoryMutationOptions,
+  ): Promise<MemoryRecord> {
     if (!UUID_PATTERN.test(id)) throw new TypeError("memory id must be a UUID")
+    const existing = await client.query<{ freshness: string; superseded_by: string | null }>(
+      "SELECT freshness, superseded_by FROM remem.memories WHERE id = $1 AND provider_id = $2 FOR UPDATE",
+      [id, this.id],
+    )
+    if (!existing.rows[0]) throw new Error("memory not found")
+    if (existing.rows[0].freshness === "superseded" || existing.rows[0].superseded_by) {
+      throw new Error("memory is already superseded")
+    }
+    const record = await this.writeWithClient(client, replacement, options)
+    await client.query(
+      "UPDATE remem.memories SET freshness = 'superseded', superseded_by = $3, updated_at = now() WHERE id = $1 AND provider_id = $2",
+      [id, this.id, record.id],
+    )
+    return record
+  }
+
+  private async mutateWithClient<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect()
     try {
       await client.query("BEGIN")
-      const existing = await client.query<{ freshness: string; superseded_by: string | null }>(
-        "SELECT freshness, superseded_by FROM remem.memories WHERE id = $1 AND provider_id = $2 FOR UPDATE",
-        [id, this.id],
-      )
-      if (!existing.rows[0]) throw new Error("memory not found")
-      if (existing.rows[0].freshness === "superseded" || existing.rows[0].superseded_by) {
-        throw new Error("memory is already superseded")
-      }
-      const record = await this.writeWithClient(client, replacement, options)
-      await client.query(
-        "UPDATE remem.memories SET freshness = 'superseded', superseded_by = $3, updated_at = now() WHERE id = $1 AND provider_id = $2",
-        [id, this.id, record.id],
-      )
+      const result = await operation(client)
       await client.query("COMMIT")
-      return record
+      return result
     } catch (error) {
       await client.query("ROLLBACK")
       throw error
@@ -970,19 +1002,309 @@ export class PostgresMemoryProvider
     ])
   }
 
+  /** The domain pipeline runs on one serializable transaction. Its callback
+   * may be retried, so it must only use this transaction-bound provider. */
+  async withCandidateTransaction(
+    candidate: CandidateMemory,
+    operation: (provider: MemoryProvider, candidate: CandidateMemory) => Promise<CandidateMemory>,
+    signal?: AbortSignal,
+  ): Promise<CandidateMemory> {
+    if (!UUID_PATTERN.test(candidate.id) || candidate.status !== "approved")
+      throw new TypeError("consolidation requires an approved candidate identity")
+    const scope = candidate.memory.scope
+    const key = scope.id ?? ""
+    if (scope.kind !== "global" && !key) throw new TypeError("candidate scope is required")
+    for (let attempt = 0; attempt < 3; attempt++) {
+      signal?.throwIfAborted()
+      const client = await this.pool.connect()
+      try {
+        await client.query("BEGIN ISOLATION LEVEL SERIALIZABLE")
+        await client.query("SET LOCAL statement_timeout = '5s'")
+        await this.lockLearningScope(client, scope)
+        const ledger = await client.query<{
+          state: CandidateMemory["status"] | "forgotten"
+          memory_id: string | null
+        }>(
+          `SELECT state, memory_id FROM remem.candidate_lineage
+           WHERE provider_id=$1 AND scope_kind=$2 AND scope_key=$3 AND candidate_id=$4 FOR UPDATE`,
+          [this.id, scope.kind, key, candidate.id],
+        )
+        const previous = ledger.rows[0]
+        if (previous && !["pending", "approved"].includes(previous.state)) {
+          const stored =
+            previous.memory_id && previous.state === "promoted"
+              ? await client.query<MemoryRow>(
+                  `${BASE_SELECT} WHERE m.id=$1 AND m.provider_id=$2
+                AND m.scope_kind=$3 AND COALESCE(m.scope_id,'')=$4`,
+                  [previous.memory_id, this.id, scope.kind, key],
+                )
+              : undefined
+          const record = stored?.rows[0] ? rowToRecord(stored.rows[0]) : undefined
+          await client.query("COMMIT")
+          return {
+            ...candidate,
+            status: record ? "promoted" : previous.state === "rejected" ? "rejected" : "expired",
+            reasons: [
+              ...candidate.reasons,
+              record ? "reused processed candidate" : "processed candidate unavailable",
+            ],
+            memory: {
+              ...(record ?? candidate.memory),
+              metadata: {
+                ...(record?.metadata ?? {}),
+                consolidation: {
+                  ...(record ? { memoryId: record.id } : {}),
+                  action: "reused processed candidate",
+                },
+              },
+            },
+          }
+        }
+        const saved = await client.query<CandidateRow>(
+          "SELECT * FROM remem.candidate_memories WHERE id=$1 FOR UPDATE",
+          [candidate.id],
+        )
+        const row = saved.rows[0]
+        if (
+          row &&
+          (row.metadata.providerId !== this.id ||
+            row.scope_kind !== scope.kind ||
+            (row.scope_id ?? "") !== key ||
+            !["approved", "consolidating"].includes(row.status))
+        )
+          throw new Error("candidate is not approved in this scope")
+        if (previous?.state === "pending") throw new Error("candidate approval is required")
+        // Persisted reviewed bodies are authoritative; a supplied approved flag
+        // cannot replace them. Absent rows retain the existing trusted core API.
+        const durable = row ? { ...candidateFromRow(row), status: "approved" as const } : candidate
+        const forgotten = await client.query(
+          `SELECT 1 FROM remem.forget_tombstones WHERE provider_id=$1 AND project_id=$2
+             AND target_kind='candidate' AND target_id=$3`,
+          [this.id, key, candidate.id],
+        )
+        if (forgotten.rowCount) throw new Error("candidate was forgotten")
+        await client.query(
+          `INSERT INTO remem.candidate_lineage
+          (provider_id,scope_kind,scope_key,candidate_id,state,observation_ids,action,actor)
+          VALUES ($1,$2,$3,$4,'approved',$5,'approved-core-candidate','consolidation')
+          ON CONFLICT DO NOTHING`,
+          [this.id, scope.kind, key, candidate.id, durable.observationIds],
+        )
+        const assertScope = (memory: MemoryWrite) => {
+          if (memory.scope.kind !== scope.kind || (memory.scope.id ?? "") !== key)
+            throw new Error("consolidation mutation crossed scope")
+        }
+        const assertTarget = async (id: string) => {
+          const target = await client.query(
+            `SELECT 1 FROM remem.memories WHERE id=$1 AND provider_id=$2
+            AND scope_kind=$3 AND COALESCE(scope_id,'')=$4 FOR UPDATE`,
+            [id, this.id, scope.kind, key],
+          )
+          if (!target.rowCount) throw new Error("consolidation target unavailable")
+        }
+        const transaction: MemoryProvider = {
+          id: this.id,
+          capabilities: () => this.capabilities(),
+          catalog: () => Promise.reject(new Error("catalog is outside the learning transaction")),
+          search: (request) => this.searchWithClient(client, request),
+          write: (memory, options = {}) => {
+            assertScope(memory)
+            return this.writeWithClient(client, memory, options)
+          },
+          update: async (id, memory, options = {}) => {
+            assertScope(memory)
+            await assertTarget(id)
+            return this.updateWithClient(client, id, memory, options)
+          },
+          supersede: async (id, memory, options = {}) => {
+            assertScope(memory)
+            await assertTarget(id)
+            return this.supersedeWithClient(client, id, memory, options)
+          },
+        }
+        const result = await operation(transaction, durable)
+        const consolidation = result.memory.metadata?.consolidation
+        const memoryId =
+          consolidation && typeof consolidation === "object" && "memoryId" in consolidation
+            ? String(consolidation.memoryId)
+            : ""
+        if (result.status !== "promoted" || !UUID_PATTERN.test(memoryId))
+          throw new Error("learning transaction did not produce a memory")
+        await assertTarget(memoryId)
+        await client.query(
+          `UPDATE remem.candidate_lineage SET state='promoted', memory_id=$5,
+          action='promotion-committed', actor='consolidation'
+          WHERE provider_id=$1 AND scope_kind=$2 AND scope_key=$3 AND candidate_id=$4`,
+          [this.id, scope.kind, key, candidate.id, memoryId],
+        )
+        await client.query(
+          `UPDATE remem.candidate_memories SET status='promoted', reviewed_at=now()
+          WHERE id=$1 AND metadata->>'providerId'=$2 AND status IN ('approved','consolidating')`,
+          [candidate.id, this.id],
+        )
+        signal?.throwIfAborted()
+        await client.query("COMMIT")
+        return result
+      } catch (error) {
+        await client.query("ROLLBACK")
+        const code = error && typeof error === "object" && "code" in error ? error.code : undefined
+        if (attempt < 2 && (code === "40001" || code === "40P01")) continue
+        throw error
+      } finally {
+        client.release()
+      }
+    }
+    throw new Error("learning transaction retry limit exceeded")
+  }
+
+  /** Body-free lineage inspection, authorized by the same scope rules as reads.
+   * Missing evidence stays unavailable; retention does not refresh a claim. */
+  async candidateLineage(
+    candidateId: string,
+    context: MemoryContext,
+  ): Promise<CandidateLineage | undefined> {
+    if (!UUID_PATTERN.test(candidateId)) return undefined
+    const result = await this.pool.query<{
+      scope_kind: string
+      scope_key: string
+      state: string
+      memory_id: string | null
+      revision: number
+      observation_ids: string[]
+      available_ids: string[]
+    }>(
+      `SELECT l.*, ARRAY(SELECT e.id FROM remem.session_events e
+          WHERE e.id=ANY(l.observation_ids) AND e.project_id=$3
+            AND (e.provider_id=$1 OR e.provider_id IS NULL)) AS available_ids
+        FROM remem.candidate_lineage l WHERE provider_id=$1 AND candidate_id=$2
+          AND (scope_kind='global' OR (scope_kind='project' AND scope_key=$3)
+            OR (scope_kind='workspace' AND scope_key=$4) OR (scope_kind='session' AND scope_key=$5))`,
+      [this.id, candidateId, context.projectId, context.worktree, context.sessionId ?? ""],
+    )
+    const row = result.rows[0]
+    if (!row) return undefined
+    const audit = await this.pool.query<CandidateLineage["audit"][number]>(
+      `SELECT revision,state,action,actor FROM remem.candidate_lineage_audit
+       WHERE provider_id=$1 AND scope_kind=$2 AND scope_key=$3 AND candidate_id=$4
+       ORDER BY revision DESC LIMIT 100`,
+      [this.id, row.scope_kind, row.scope_key, candidateId],
+    )
+    return {
+      candidateId,
+      state: row.state,
+      revision: row.revision,
+      ...(row.memory_id ? { memoryId: row.memory_id } : {}),
+      observationIds: row.observation_ids,
+      availableObservationIds: row.available_ids,
+      audit: audit.rows,
+    }
+  }
+
+  private async lockLearningScope(client: PoolClient, scope: MemoryScope): Promise<void> {
+    await client.query("SELECT pg_advisory_xact_lock_shared($1)", [FORGET_RESTORE_ADVISORY_LOCK])
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+      JSON.stringify(["learning", this.id, scope.kind, scope.id ?? ""]),
+    ])
+  }
+
   async persistCandidate(
     observation: SessionObservation,
     candidate: CandidateMemory,
-    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+    options: {
+      timeoutMs?: number
+      signal?: AbortSignal
+      autoApprove?: boolean
+      expectedRevision?: number
+    } = {},
   ): Promise<void> {
     options.signal?.throwIfAborted()
     if (candidate.status !== "pending")
       throw new TypeError("automatic capture may only persist pending candidates")
     const sessionId = observation.context.sessionId
     if (!sessionId) throw new TypeError("captured observations require a session id")
+    const scope = candidate.memory.scope
+    const key = scopeId(candidate.memory, observation.context) ?? ""
+    const authorizedKey =
+      scope.kind === "project"
+        ? observation.context.projectId
+        : scope.kind === "workspace"
+          ? observation.context.worktree
+          : scope.kind === "session"
+            ? sessionId
+            : ""
+    if (key !== authorizedKey) throw new Error("captured candidate scope is not authorized")
+    if (
+      candidate.observationIds.length > 16 ||
+      !candidate.observationIds.every((id) => UUID_PATTERN.test(id))
+    )
+      throw new TypeError("invalid candidate observation identities")
+    const storedMemory = Object.fromEntries(
+      Object.entries(candidate.memory).filter(
+        ([field]) => field !== "title" && field !== "content" && field !== "summary",
+      ),
+    )
     const client = await this.pool.connect()
     try {
       await client.query("BEGIN")
+      await this.lockLearningScope(client, scope)
+      const prior = await client.query<{
+        status: CandidateMemory["status"]
+        same_context: boolean
+        unchanged: boolean
+      }>(
+        `SELECT c.status,
+          (c.metadata->>'providerId'=$2 AND c.scope_kind=$3 AND COALESCE(c.scope_id,'')=$4
+            AND c.session_event_id=$5 AND e.session_id=$6 AND e.project_id=$7) AS same_context,
+          (c.title=$8 AND c.content=$9 AND c.type=$10 AND c.metadata->'memory'=$11::jsonb) AS unchanged
+         FROM remem.candidate_memories c LEFT JOIN remem.session_events e ON e.id=c.session_event_id
+         WHERE c.id=$1 FOR UPDATE OF c`,
+        [
+          candidate.id,
+          this.id,
+          scope.kind,
+          key,
+          observation.id,
+          sessionId,
+          observation.context.projectId,
+          candidate.memory.title,
+          candidate.memory.content,
+          candidate.memory.type,
+          JSON.stringify(storedMemory),
+        ],
+      )
+      const old = prior.rows[0]
+      if (old && !old.same_context)
+        throw new Error("captured candidate id belongs to another context")
+      const ledger = await client.query<{ state: string; revision: number }>(
+        `SELECT state,revision FROM remem.candidate_lineage WHERE provider_id=$1 AND scope_kind=$2
+          AND scope_key=$3 AND candidate_id=$4 FOR UPDATE`,
+        [this.id, scope.kind, key, candidate.id],
+      )
+      const previous = ledger.rows[0]
+      const tombstone = await client.query(
+        `SELECT 1 FROM remem.forget_tombstones
+        WHERE provider_id=$1 AND project_id=$2 AND target_kind='candidate' AND target_id=$3`,
+        [this.id, observation.context.projectId, candidate.id],
+      )
+      if (
+        tombstone.rowCount ||
+        (previous && !["pending"].includes(previous.state)) ||
+        (old && old.status !== "pending")
+      ) {
+        await client.query("COMMIT")
+        return
+      }
+      if (
+        old &&
+        !old.unchanged &&
+        (options.expectedRevision === undefined ||
+          options.expectedRevision !== (previous?.revision ?? 0))
+      )
+        throw new Error("candidate revision conflict")
+      if (old?.unchanged && !options.autoApprove) {
+        await client.query("COMMIT")
+        return
+      }
       if (options.timeoutMs) {
         await client.query("SELECT set_config('statement_timeout', $1, true)", [
           String(options.timeoutMs),
@@ -1018,7 +1340,7 @@ export class PostgresMemoryProvider
       const persistedCandidate = await client.query<{ id: string }>(
         `INSERT INTO remem.candidate_memories
          (id, session_event_id, type, title, content, scope_kind, scope_id, confidence, status, metadata)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9::jsonb)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$10,$9::jsonb)
          ON CONFLICT (id) DO UPDATE SET
            session_event_id = EXCLUDED.session_event_id,
            type = EXCLUDED.type,
@@ -1027,6 +1349,7 @@ export class PostgresMemoryProvider
            scope_kind = EXCLUDED.scope_kind,
            scope_id = EXCLUDED.scope_id,
            confidence = EXCLUDED.confidence,
+           status = EXCLUDED.status,
            metadata = EXCLUDED.metadata
          WHERE remem.candidate_memories.status = 'pending'
            AND remem.candidate_memories.session_event_id = EXCLUDED.session_event_id
@@ -1045,14 +1368,11 @@ export class PostgresMemoryProvider
           clamp(candidate.confidence, 0.5),
           JSON.stringify({
             providerId: this.id,
-            memory: Object.fromEntries(
-              Object.entries(candidate.memory).filter(
-                ([key]) => key !== "title" && key !== "content" && key !== "summary",
-              ),
-            ),
+            memory: storedMemory,
             reasons: candidate.reasons,
             observationIds: candidate.observationIds,
           }),
+          options.autoApprove ? "approved" : "pending",
         ],
       )
       if (!persistedCandidate.rows[0]) {
@@ -1071,6 +1391,26 @@ export class PostgresMemoryProvider
         )
         if (!existing.rows[0]) throw new Error("captured candidate id belongs to another context")
       }
+      await client.query(
+        `INSERT INTO remem.candidate_lineage
+        (provider_id,scope_kind,scope_key,candidate_id,state,observation_ids,action,actor)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,'capture')
+        ON CONFLICT (provider_id,scope_kind,scope_key,candidate_id) DO UPDATE SET
+          state=EXCLUDED.state, observation_ids=EXCLUDED.observation_ids, action=EXCLUDED.action, actor='capture'`,
+        [
+          this.id,
+          scope.kind,
+          key,
+          candidate.id,
+          options.autoApprove ? "approved" : "pending",
+          candidate.observationIds,
+          options.autoApprove
+            ? "capture-auto-approved"
+            : old
+              ? "capture-refreshed"
+              : "capture-persisted",
+        ],
+      )
       options.signal?.throwIfAborted()
       await client.query("COMMIT")
     } catch (error) {
@@ -2383,16 +2723,51 @@ export class PostgresMemoryProvider
     }))
   }
 
-  async reviewCandidate(id: string, status: "approved" | "rejected"): Promise<void> {
+  async reviewCandidate(
+    id: string,
+    status: "approved" | "rejected",
+    expectedRevision?: number,
+  ): Promise<void> {
     if (!UUID_PATTERN.test(id)) throw new TypeError("candidate id must be a UUID")
-    const result = await this.pool.query<{ id: string }>(
-      `UPDATE remem.candidate_memories
-       SET status = $3, reviewed_at = now()
-       WHERE id = $1 AND metadata->>'providerId' = $2 AND status = 'pending'
-       RETURNING id`,
-      [id, this.id, status],
-    )
-    if (!result.rows[0]) throw new Error("pending candidate not found")
+    if (!["approved", "rejected"].includes(status)) throw new TypeError("invalid review transition")
+    await this.mutateWithClient(async (client) => {
+      const lookup = await client.query<{
+        scope_kind: MemoryScope["kind"]
+        scope_id: string | null
+      }>(
+        "SELECT scope_kind,scope_id FROM remem.candidate_memories WHERE id=$1 AND metadata->>'providerId'=$2",
+        [id, this.id],
+      )
+      const scope = lookup.rows[0]
+      if (!scope) throw new Error("pending candidate not found")
+      await this.lockLearningScope(client, {
+        kind: scope.scope_kind,
+        ...(scope.scope_id ? { id: scope.scope_id } : {}),
+      })
+      const current = await client.query<{ revision: number }>(
+        `SELECT revision FROM remem.candidate_lineage
+        WHERE provider_id=$1 AND scope_kind=$2 AND scope_key=$3 AND candidate_id=$4 FOR UPDATE`,
+        [this.id, scope.scope_kind, scope.scope_id ?? "", id],
+      )
+      if (expectedRevision !== undefined && current.rows[0]?.revision !== expectedRevision)
+        throw new Error("candidate revision conflict")
+      const result = await client.query(
+        `UPDATE remem.candidate_memories SET status=$3, reviewed_at=now()
+        WHERE id=$1 AND metadata->>'providerId'=$2 AND status='pending' RETURNING id`,
+        [id, this.id, status],
+      )
+      if (!result.rowCount) throw new Error("pending candidate not found")
+      await client.query(
+        `INSERT INTO remem.candidate_lineage
+        (provider_id,scope_kind,scope_key,candidate_id,state,observation_ids,action,actor)
+        SELECT $1,scope_kind,COALESCE(scope_id,''),id,$3,
+          CASE WHEN session_event_id IS NULL THEN '{}'::uuid[] ELSE ARRAY[session_event_id] END,
+          'human-review','review' FROM remem.candidate_memories WHERE id=$2
+        ON CONFLICT (provider_id,scope_kind,scope_key,candidate_id) DO UPDATE SET
+          state=EXCLUDED.state, action='human-review', actor='review'`,
+        [this.id, id, status],
+      )
+    })
   }
 
   async consolidateCandidates(batchSize = 50) {
@@ -2642,6 +3017,35 @@ export class PostgresMemoryProvider
 
   private async insertSource(client: PoolClient, source: MemorySource): Promise<string> {
     const id = source.id && UUID_PATTERN.test(source.id) ? source.id : randomUUID()
+    // A retrieved source can have a UUID without an external ID. PostgreSQL's
+    // external-ID upsert cannot handle that primary-key replay. Reuse only the
+    // same provider and immutable identity, never a caller's foreign UUID.
+    if (source.id && UUID_PATTERN.test(source.id)) {
+      const existing = await client.query<{ id: string }>(
+        "SELECT id FROM remem.sources WHERE id=$1 FOR UPDATE",
+        [id],
+      )
+      if (existing.rowCount) {
+        const reused = await client.query<{ id: string }>(
+          `UPDATE remem.sources SET
+            observed_at=COALESCE($6,observed_at), metadata=metadata || $7::jsonb
+           WHERE id=$1 AND provider_id=$2 AND kind=$3
+             AND uri IS NOT DISTINCT FROM $4 AND external_id IS NOT DISTINCT FROM $5
+           RETURNING id`,
+          [
+            id,
+            this.id,
+            source.kind,
+            source.uri ?? null,
+            source.externalId ?? null,
+            source.observedAt ?? null,
+            JSON.stringify(source.metadata ?? {}),
+          ],
+        )
+        if (!reused.rows[0]) throw new Error("source identity does not match this provider")
+        return reused.rows[0].id
+      }
+    }
     const result = await client.query<{ id: string }>(
       `INSERT INTO remem.sources
          (id, provider_id, kind, uri, external_id, observed_at, metadata)

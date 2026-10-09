@@ -474,6 +474,16 @@ export class CaptureCoordinator {
           )
           const promote = this.config.autoPromote ? this.promote : undefined
           for (const candidate of candidates) {
+            await withTimeout(
+              this.config.timeoutMs,
+              (signal) =>
+                this.store.persistCandidate(observation, candidate, {
+                  timeoutMs: this.config.timeoutMs,
+                  signal,
+                  autoApprove: Boolean(promote),
+                }),
+              this.shutdown.signal,
+            )
             if (promote) {
               const approved = { ...candidate, status: "approved" as const }
               await withTimeout(
@@ -481,17 +491,7 @@ export class CaptureCoordinator {
                 (signal) => promote(approved, signal),
                 this.shutdown.signal,
               )
-              continue
             }
-            await withTimeout(
-              this.config.timeoutMs,
-              (signal) =>
-                this.store.persistCandidate(observation, candidate, {
-                  timeoutMs: this.config.timeoutMs,
-                  signal,
-                }),
-              this.shutdown.signal,
-            )
           }
           this.finishCapture(
             observation,
