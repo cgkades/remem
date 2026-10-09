@@ -190,9 +190,10 @@ integration("PostgreSQL hybrid retrieval quality", () => {
             fixture.entries.find((value) => value.id === item.expected)!.content,
           ),
         unrelatedInjected: !item.expected && injection.trace.selectedResults > 0,
-        nonTargetSelected: fixture.entries.filter((value) =>
-          value.id !== item.expected &&
-          injection.memoryText.includes("Source: " + provider.id + ":" + ids.get(value.id) + " "),
+        nonTargetSelected: fixture.entries.filter(
+          (value) =>
+            value.id !== item.expected &&
+            injection.memoryText.includes("Source: " + provider.id + ":" + ids.get(value.id) + " "),
         ).length,
         selectedCount: injection.trace.selectedResults,
         estimatedTokens: injection.trace.catalogTokens + injection.trace.recallTokens,
@@ -221,7 +222,7 @@ integration("PostgreSQL hybrid retrieval quality", () => {
       relevantInjectionRate: mean(relevant.map((value) => (value.injectedRelevant ? 1 : 0))),
       falseInjectionRate: mean(unrelated.map((value) => (value.unrelatedInjected ? 1 : 0))),
       forbiddenCandidates: 0,
-      nonTargetSelected: cases.reduce((sum,value) => sum+value.nonTargetSelected,0),
+      nonTargetSelected: cases.reduce((sum, value) => sum + value.nonTargetSelected, 0),
       estimatedTokenMax: Math.max(...cases.map((value) => value.estimatedTokens)),
       candidateP95Ms: p95(durations),
       dispatchP95Ms: p95(cases.map((value) => value.dispatchMs)),
@@ -241,14 +242,24 @@ integration("PostgreSQL hybrid retrieval quality", () => {
   })
 
   it("recovers an alias-recognized topic when full-prompt lexical/vector recall misses it", async () => {
-    const injection = await orchestrator.processPrompt("Resume the Phoenix streaming cutover.", context)
+    const injection = await orchestrator.processPrompt(
+      "Resume the Phoenix streaming cutover.",
+      context,
+    )
     expect(injection.plan.requests.flatMap((request) => request.topics ?? [])).toContain(
       "Project Phoenix Kafka migration [phoenix-kafka]",
     )
-    expect(injection.memoryText).toContain("Use dual writes, compare offsets, then cut consumers over.")
+    expect(injection.memoryText).toContain(
+      "Use dual writes, compare offsets, then cut consumers over.",
+    )
     const recalled = await provider.search({
-      query: "Resume the Phoenix streaming cutover.", topics: ["Project Phoenix Kafka migration [phoenix-kafka]"],
-      context, limit: 5, maxTokens: 700, reason: "recognized alias", signal: new AbortController().signal,
+      query: "Resume the Phoenix streaming cutover.",
+      topics: ["Project Phoenix Kafka migration [phoenix-kafka]"],
+      context,
+      limit: 5,
+      maxTokens: 700,
+      reason: "recognized alias",
+      signal: new AbortController().signal,
     })
     expect(recalled[0]?.record.id).toBe(ids.get("phoenix-kafka"))
     expect(recalled[0]?.reasons).toContain("PostgreSQL catalog topic match")
@@ -256,11 +267,17 @@ integration("PostgreSQL hybrid retrieval quality", () => {
   })
 
   it("cannot use planned topics to bypass scope or supersession", async () => {
-    const titles = fixture.entries.filter((value) => forbidden.has(ids.get(value.id) ?? ""))
+    const titles = fixture.entries
+      .filter((value) => forbidden.has(ids.get(value.id) ?? ""))
       .map((value) => value.title + " [" + value.id + "]")
     const results = await provider.search({
-      query: "absentmarker", topics: titles, context, limit: 10, maxTokens: 700,
-      reason: "forged topics", signal: new AbortController().signal,
+      query: "absentmarker",
+      topics: titles,
+      context,
+      limit: 10,
+      maxTokens: 700,
+      reason: "forged topics",
+      signal: new AbortController().signal,
     })
     expect(results.every((value) => !forbidden.has(value.record.id))).toBe(true)
   })
