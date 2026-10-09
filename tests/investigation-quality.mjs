@@ -68,13 +68,15 @@ export function measureInvestigation({
   latencyMs,
 }) {
   const targets = [
-    expected.rootCause,
-    expected.decision,
-    expected.followUp,
-    expected.detail,
-    ...expected.procedure,
+    [expected.rootCause],
+    [expected.decision],
+    [expected.followUp],
+    [expected.detail],
+    expected.procedure,
   ]
-  const recalled = targets.filter((target) => decodeContext(context).includes(target)).length
+  const recalled = targets.filter((record) =>
+    record.every((target) => decodeContext(context).includes(target)),
+  ).length
   const falseInjection = forbidden.filter((text) => context.includes(text)).length
   const unsupportedAssertions = forbidden.filter((text) =>
     JSON.stringify(answer).includes(text),

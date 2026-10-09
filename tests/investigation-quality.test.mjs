@@ -47,6 +47,7 @@ describe("investigation quality gate measures the dispatched evidence", () => {
   it("recovers only current supported fields, commands, uncertainty and provenance", () => {
     expect(measure()).toMatchObject({
       recallAtK: 1,
+      k: 5,
       answerCorrect: true,
       procedureAccuracy: true,
       provenanceCorrect: true,

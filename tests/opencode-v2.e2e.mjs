@@ -1112,7 +1112,9 @@ async function main() {
       ])
       const baselineSession = await createSession(serverURL, learningWorkspace)
       const beforeBaseline = model.requests.length
+      const baselineStarted = performance.now()
       await prompt(serverURL, baselineSession, LEARNING_QUERY)
+      const baselineDispatchMs = performance.now() - baselineStarted
       const baselineDispatch = model.requests
         .slice(beforeBaseline)
         .find((body) => body.tools?.some((tool) => tool.function?.name === "shell"))
@@ -1320,7 +1322,7 @@ async function main() {
         expected: qualityExpected,
         forbidden: [],
         requiredRefs,
-        latencyMs: 0,
+        latencyMs: baselineDispatchMs,
       })
       if (emptyBaseline.recallAtK !== 0 || emptyBaseline.answerCorrect)
         throw new Error("pre-learning baseline unexpectedly had investigation answers")
@@ -1331,7 +1333,9 @@ async function main() {
           baseline: {
             recallAtK: emptyBaseline.recallAtK,
             answerCorrect: emptyBaseline.answerCorrect,
+            dispatchRoundTripMs: emptyBaseline.dispatchRoundTripMs,
           },
+          k: 5,
           recallAtK: Math.min(...qualityRuns.map((run) => run.recallAtK)),
           answerCorrect: qualityRuns.every((run) => run.answerCorrect),
           unsupportedAssertions: Math.max(...qualityRuns.map((run) => run.unsupportedAssertions)),
