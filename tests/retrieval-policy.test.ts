@@ -216,7 +216,8 @@ describe("fixed retrieval policy boundary", () => {
   })
 
   it("keeps scope and supersession checks mandatory even when generic policy allows", async () => {
-    const current = { ...record(), institutional: undefined }
+    const current = record()
+    delete current.institutional
     const foreign = {
       ...current,
       id: "foreign",
