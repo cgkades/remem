@@ -293,6 +293,9 @@ export const EPISODIC_SEARCH_MAX_OUTPUT_TOKENS = 2000
 export const EPISODIC_SEARCH_MAX_QUERY_LENGTH = 10_000
 
 export interface EpisodicSearchOptions {
+  /** Internal automatic-injection path: require complete admissible historical
+   * tool envelopes, skip unusable matches before consuming the output budget. */
+  automaticRecall?: boolean
   /** Clamped to at most `EPISODIC_SEARCH_MAX_RESULTS`. */
   limit?: number
   /** Clamped to at most `EPISODIC_SEARCH_MAX_OUTPUT_TOKENS`. */
@@ -340,7 +343,8 @@ export interface EpisodicSearchResult {
  * lexical only -- semantic/vector episode indexing is explicitly deferred
  * per the plan. Every `EvidenceEnvelope` ever appended (regardless of
  * `role`/`origin`, including an unclassified or failed-approach event) is
- * searchable: this store performs no trust filtering, so a caller can
+ * searchable by default: the opt-in automaticRecall path validates complete
+ * historical tool matches before budgeting. Explicit callers can
  * always independently find and label historical/untrusted evidence
  * rather than have it silently excluded.
  */

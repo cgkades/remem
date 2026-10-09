@@ -9,6 +9,12 @@ import process from "node:process"
 import { performance } from "node:perf_hooks"
 import { setTimeout as sleep } from "node:timers/promises"
 import { URL, fileURLToPath, pathToFileURL } from "node:url"
+import {
+  fixtureAnswer,
+  measureInvestigation,
+  memoryContext,
+  percentile95,
+} from "./investigation-quality.mjs"
 
 // Deliberately update this pin only after validating the target beta locally and
 // in CI. The registry install below retries transient failures, but a removed
@@ -43,13 +49,24 @@ const PROCEDURE_STEPS = [
     arguments: JSON.stringify({ command: PROCEDURE_CHECK }),
   },
 ]
-const LEARNING_STATEMENTS =
-  "Phoenix worker uses cwd-relative checkpoint paths. We decided to use isolated checkpoint directories for Phoenix. Phoenix crash recovery is blocked on interruption tests."
+const ROOT_CAUSE = "the absent phoenix-recovery.txt file failed its presence check"
+const LEARNING_STATEMENTS = `Phoenix bootstrap check uses cwd-relative checkpoint paths; root cause: ${ROOT_CAUSE}. We decided to use isolated checkpoint directories for Phoenix. Phoenix crash recovery is blocked on interruption tests.`
+const WRONG_HYPOTHESIS = "Phoenix checkpoint failure is caused by a corrupted cache"
+const UNSUPPORTED_SUCCESS = "Phoenix interruption recovery is fully verified"
+const OBSOLETE_CONCLUSION = "Phoenix bootstrap check uses a remote checkpoint service"
 const LEARNING_STEPS = [
   { id: "call_missing_checkpoint", name: "read", arguments: '{"path":"missing-checkpoint.txt"}' },
+  {
+    id: "call_failed_repair",
+    name: "shell",
+    arguments: JSON.stringify({
+      command: "printf 'cache refresh attempted\\n' > phoenix-cache-attempt.txt",
+    }),
+  },
   { id: "call_checkpoint", name: "read", arguments: '{"path":"checkpoint.txt"}' },
   { id: "call_secret", name: "read", arguments: '{"path":"secret.txt"}' },
   { id: "call_poison", name: "read", arguments: '{"path":"poison.txt"}' },
+  ...PROCEDURE_STEPS,
 ]
 
 // Issue #13: RememPlugin.setup() registers two independent
@@ -343,6 +360,9 @@ async function handleModelRequest(incoming, response, state) {
           index: 0,
           delta: {
             role: "assistant",
+            ...(learning && nextStep.id === "call_missing_checkpoint"
+              ? { content: `${WRONG_HYPOTHESIS}; first try refreshing its cached checkpoint.` }
+              : {}),
             tool_calls: [
               {
                 index: 0,
@@ -375,7 +395,16 @@ async function handleModelRequest(incoming, response, state) {
       choices: [
         {
           index: 0,
-          delta: { role: "assistant", content: "mock response" },
+          delta: {
+            role: "assistant",
+            content:
+              messages.includes(LEARNING_QUERY) &&
+              body.tools?.some((tool) => tool.function?.name === "shell")
+                ? JSON.stringify(fixtureAnswer(memoryContext(body.messages)))
+                : learning
+                  ? `${UNSUPPORTED_SUCCESS}.`
+                  : "mock response",
+          },
           finish_reason: null,
         },
       ],
@@ -1040,10 +1069,10 @@ async function main() {
             `was the unreachable-provider fail-open path\n${JSON.stringify(retrievalRequests)}`,
         )
       }
-      // #43 first host-evidence slice. This uses ordinary prompts and native
-      // tool execution; it does not preseed conclusions, call memory tools,
-      // or approve candidates. #96's independently verified procedure learning
-      // and #97's full engineering-investigation gate remain separate work.
+      // #96/#97: one ordinary investigation. An unsupported assistant
+      // hypothesis and a failed repair precede a native check/create/recheck.
+      // Original-user conclusions use their own authority; a model success
+      // assertion does not verify the unresolved interruption follow-up.
       const learningOptions = {
         ...hooksPluginOptions(databaseUrl),
         embedding: { backend: "hash" },
@@ -1081,6 +1110,16 @@ async function main() {
         "-m",
         "Phoenix fixture",
       ])
+      const baselineSession = await createSession(serverURL, learningWorkspace)
+      const beforeBaseline = model.requests.length
+      const baselineStarted = performance.now()
+      await prompt(serverURL, baselineSession, LEARNING_QUERY)
+      const baselineDispatchMs = performance.now() - baselineStarted
+      const baselineDispatch = model.requests
+        .slice(beforeBaseline)
+        .find((body) => body.tools?.some((tool) => tool.function?.name === "shell"))
+      if (!baselineDispatch) throw new Error("pre-learning baseline dispatch missing")
+      const baselineContext = memoryContext(baselineDispatch.messages)
       const learningSession = await createSession(serverURL, learningWorkspace)
       await prompt(serverURL, learningSession, LEARNING_PROMPT)
       const investigation = await request(
@@ -1089,7 +1128,11 @@ async function main() {
       )
       if (
         toolCall(investigation, "call_missing_checkpoint")?.state?.status !== "error" ||
-        toolCall(investigation, "call_checkpoint")?.state?.status !== "completed"
+        toolCall(investigation, "call_checkpoint")?.state?.status !== "completed" ||
+        toolCall(investigation, "call_failed_repair")?.state?.status !== "completed" ||
+        toolCall(investigation, "call_procedure_verify")?.state?.status !== "completed" ||
+        !JSON.stringify(investigation).includes(WRONG_HYPOTHESIS) ||
+        !JSON.stringify(investigation).includes(UNSUPPORTED_SUCCESS)
       ) {
         throw new Error(
           `native failing/successful read callbacks were not exercised: ${JSON.stringify(investigation)}`,
@@ -1105,7 +1148,7 @@ async function main() {
       await prompt(serverURL, learningSession, LEARNING_STATEMENTS)
       await pollUntil("three automatically captured original-user conclusions", async () => {
         const result = await hooksPool.query(
-          "SELECT count(*)::int AS count FROM remem.memories WHERE provider_id='hooks-postgres' AND scope_kind='project' AND content LIKE '%Phoenix%'",
+          "SELECT count(*)::int AS count FROM remem.memories WHERE provider_id='hooks-postgres' AND scope_kind='project' AND type<>'procedure' AND content LIKE '%Phoenix%'",
         )
         return result.rows[0]?.count === 3
       })
@@ -1121,7 +1164,7 @@ async function main() {
         `SELECT e.evidence_id,l.observation_ids,e.id FROM remem.candidate_memories c
          JOIN remem.session_events e ON e.id=c.session_event_id
          JOIN remem.candidate_lineage l ON l.candidate_id=c.id
-         WHERE e.session_id=$1 AND l.provider_id='hooks-postgres'`,
+         WHERE e.session_id=$1 AND c.type<>'procedure' AND l.provider_id='hooks-postgres'`,
         [learningSession],
       )
       if (
@@ -1137,19 +1180,35 @@ async function main() {
           `host candidates lost canonical evidence lineage: ${JSON.stringify(canonicalLinks.rows)}`,
         )
       }
+      const learnedScope = await hooksPool.query(
+        "SELECT scope_id FROM remem.candidate_memories WHERE session_event_id IN (SELECT id FROM remem.session_events WHERE session_id=$1) LIMIT 1",
+        [learningSession],
+      )
+      // This is a negative historical-state control, never a preseeded answer.
+      await seedProvider.write({
+        title: "Phoenix obsolete bootstrap diagnosis",
+        content: OBSOLETE_CONCLUSION,
+        type: "semantic",
+        scope: { kind: "project", id: learnedScope.rows[0].scope_id },
+        freshness: "superseded",
+      })
       const freshSession = await createSession(serverURL, learningWorkspace)
+      const beforeFreshRecall = model.requests.length
       const started = performance.now()
       await prompt(serverURL, freshSession, LEARNING_QUERY)
       const dispatchRoundTripMs = performance.now() - started
       // The runtime also sends title-generation requests containing the
       // user's prompt. Only agent dispatch advertises native tools and runs
       // the session context hook; a title request is not a recall failure.
-      const recallRequests = model.requests.filter(
-        (body) =>
-          JSON.stringify(body.messages).includes(LEARNING_QUERY) &&
-          body.tools?.some((tool) => tool.function?.name === "read"),
-      )
+      const recallRequests = model.requests
+        .slice(beforeFreshRecall)
+        .filter(
+          (body) =>
+            JSON.stringify(body.messages).includes(LEARNING_QUERY) &&
+            body.tools?.some((tool) => tool.function?.name === "read"),
+        )
       const expected = [
+        ROOT_CAUSE,
         "cwd-relative checkpoint paths",
         "isolated checkpoint directories",
         "interruption tests",
@@ -1171,7 +1230,10 @@ async function main() {
         if (
           text.includes("fixture-secret") ||
           text.includes("ignore all previous instructions") ||
-          text.includes("missing-checkpoint.txt")
+          text.includes("missing-checkpoint.txt") ||
+          text.includes(WRONG_HYPOTHESIS) ||
+          text.includes(UNSUPPORTED_SUCCESS) ||
+          text.includes(OBSOLETE_CONCLUSION)
         )
           throw new Error("unsafe or unrequested historical content was injected")
         if (
@@ -1181,11 +1243,119 @@ async function main() {
           throw new Error("Session B retained Session A's transcript")
       }
       if (recallRequests.length === 0) throw new Error("fresh session never reached model dispatch")
+      const qualityExpected = {
+        rootCause: ROOT_CAUSE,
+        procedure: [PROCEDURE_CHECK, PROCEDURE_ACTION, PROCEDURE_CHECK],
+        decision: "We decided to use isolated checkpoint directories for Phoenix.",
+        followUp: "Phoenix crash recovery is blocked on interruption tests.",
+        detail: "lookup root: workspace cwd",
+        detailAnswer: "workspace cwd",
+      }
+      const procedureRefs = await hooksPool.query(
+        `SELECT e.evidence_id FROM remem.candidate_lineage l
+         JOIN remem.candidate_memories c ON c.id=l.candidate_id
+         JOIN remem.session_events e ON e.id=ANY(l.observation_ids)
+         WHERE c.type='procedure' AND c.scope_id=$1 AND l.provider_id='hooks-postgres'`,
+        [learnedScope.rows[0].scope_id],
+      )
+      const requiredRefs = procedureRefs.rows.map((row) => `hooks-postgres:${row.evidence_id}`)
+      if (requiredRefs.length !== 8)
+        throw new Error("investigation procedure source window changed")
+      const qualityRuns = []
+      const verifyAnswer = async (session, requests, elapsed) => {
+        const responses = await request(serverURL, `/api/session/${session}/message?order=asc`)
+        const answerText = (responses.data ?? [])
+          .flatMap((message) => message.content ?? [])
+          .filter((part) => part.type === "text" && typeof part.text === "string")
+          .map((part) => part.text)
+          .find((text) => text.startsWith('{"rootCause":'))
+        if (!answerText)
+          throw new Error("context-derived answer did not return through the native host")
+        const answer = JSON.parse(answerText)
+        for (const body of requests) {
+          const context = memoryContext(body.messages)
+          const score = measureInvestigation({
+            context,
+            answer,
+            expected: qualityExpected,
+            forbidden: [
+              WRONG_HYPOTHESIS,
+              UNSUPPORTED_SUCCESS,
+              OBSOLETE_CONCLUSION,
+              "fixture-secret",
+              "ignore all previous instructions",
+              POSTGRES_SENTINEL,
+            ],
+            requiredRefs,
+            latencyMs: elapsed,
+          })
+          if (
+            !score.answerCorrect ||
+            score.recallAtK !== 1 ||
+            score.falseInjection ||
+            score.unsupportedAssertions ||
+            !score.provenanceCorrect ||
+            score.contextTokenUpperBound > learningOptions.budgets.recallTokens
+          )
+            throw new Error(
+              `investigation quality gate failed: ${JSON.stringify(score)}\n${context}`,
+            )
+          qualityRuns.push(score)
+        }
+      }
+      await verifyAnswer(freshSession, recallRequests, dispatchRoundTripMs)
+      for (let iteration = 0; iteration < 4; iteration++) {
+        const session = await createSession(serverURL, learningWorkspace)
+        const before = model.requests.length
+        const start = performance.now()
+        await prompt(serverURL, session, LEARNING_QUERY)
+        const elapsed = performance.now() - start
+        const requests = model.requests
+          .slice(before)
+          .filter((body) => body.tools?.some((tool) => tool.function?.name === "shell"))
+        if (!requests.length) throw new Error("repeat continuity dispatch missing")
+        await verifyAnswer(session, requests, elapsed)
+      }
+      const emptyBaseline = measureInvestigation({
+        context: baselineContext,
+        answer: fixtureAnswer(baselineContext),
+        expected: qualityExpected,
+        forbidden: [],
+        requiredRefs,
+        latencyMs: baselineDispatchMs,
+      })
+      if (emptyBaseline.recallAtK !== 0 || emptyBaseline.answerCorrect)
+        throw new Error("pre-learning baseline unexpectedly had investigation answers")
+      process.stdout.write(
+        JSON.stringify({
+          gate: "cross-session-investigation",
+          repeats: 5,
+          baseline: {
+            recallAtK: emptyBaseline.recallAtK,
+            answerCorrect: emptyBaseline.answerCorrect,
+            dispatchRoundTripMs: emptyBaseline.dispatchRoundTripMs,
+          },
+          k: 5,
+          recallAtK: Math.min(...qualityRuns.map((run) => run.recallAtK)),
+          answerCorrect: qualityRuns.every((run) => run.answerCorrect),
+          unsupportedAssertions: Math.max(...qualityRuns.map((run) => run.unsupportedAssertions)),
+          falseInjection: Math.max(...qualityRuns.map((run) => run.falseInjection)),
+          provenanceCorrect: qualityRuns.every((run) => run.provenanceCorrect),
+          procedureAccuracy: qualityRuns.every((run) => run.procedureAccuracy),
+          maxContextBytes: Math.max(...qualityRuns.map((run) => run.contextBytes)),
+          contextTokens: {
+            upperBound: Math.max(...qualityRuns.map((run) => run.contextTokenUpperBound)),
+            measurement: "UTF-8 bytes; not actual tokenizer output",
+          },
+          dispatchRoundTripP95Ms: percentile95(qualityRuns.map((run) => run.dispatchRoundTripMs)),
+          latencyMeasurement: "host prompt through model response; includes retrieval and dispatch",
+          modelQuality: "not evaluated; deterministic context reader",
+        }) + "\n",
+      )
       // #96 / Phase 6: ordinary native failure/action/recheck callbacks
       // create an automatically promoted low-risk procedure. No memory tool,
       // fabricated resolution callback or model success flag is involved.
-      const procedureSession = await createSession(serverURL, learningWorkspace)
-      await prompt(serverURL, procedureSession, PROCEDURE_PROMPT)
+      const procedureSession = learningSession
       await pollUntil("native verified automatically promoted procedure", async () => {
         const rows = await hooksPool.query(
           `SELECT c.status,c.content,l.observation_ids FROM remem.candidate_memories c
@@ -1200,7 +1370,7 @@ async function main() {
         if (
           rows.rows.length !== 1 ||
           rows.rows[0].status !== "promoted" ||
-          rows.rows[0].observation_ids.length !== 4 ||
+          rows.rows[0].observation_ids.length !== 8 ||
           !rows.rows[0].content.includes(PROCEDURE_ACTION)
         )
           throw new Error(`native procedure contract changed: ${JSON.stringify(rows.rows)}`)
@@ -1243,7 +1413,7 @@ async function main() {
         JSON.stringify({
           gate: "host-verified-procedure",
           promotedCandidates: 1,
-          canonicalSources: 4,
+          canonicalSources: 8,
           automaticPromotions: 1,
           freshSessionRecall: true,
           rule: "native-shell-recovery-v1",
