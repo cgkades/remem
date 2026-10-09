@@ -20,6 +20,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Generic retrieval uses a fixed eligibility policy boundary while retaining mandatory scope and
+  supersession checks and existing explain reasons. Missing/failed applicability denies eligibility.
+  Refs [#48](https://github.com/cgkades/remem/issues/48).
+
 - Optional Pi terminal memory status shows only bounded provider/recall counts. It is off by default,
   nonblocking, deadline-limited and disabled outside interactive terminal mode. Refs [#55](https://github.com/cgkades/remem/issues/55).
 

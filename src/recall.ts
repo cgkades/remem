@@ -1,11 +1,7 @@
 import type { OrchestratorConfig } from "./config.js"
 import { episodeResults } from "./episodic-recall.js"
 import { isEpisodicSearchStore } from "./observation.js"
-import {
-  institutionalApplies,
-  institutionalReviewStatus,
-  isInstitutionalMemory,
-} from "./institutional.js"
+import { recalledPolicyAllows } from "./retrieval-policy.js"
 import { clamp, contentFingerprint } from "./text.js"
 import { truncateToTokens } from "./token-budget.js"
 import { OperationTimeoutError, withTimeout } from "./timeout.js"
@@ -81,18 +77,7 @@ function normalizeResult(
   ) {
     return undefined
   }
-  if (
-    blockedCatalogIds.has(record.id) ||
-    (record.institutional &&
-      (institutionalReviewStatus(record.institutional) !== "current" ||
-        !institutionalApplies(record.institutional, context, query))) ||
-    (record.metadata?.institutional !== undefined &&
-      (!isInstitutionalMemory(record.metadata.institutional) ||
-        institutionalReviewStatus(record.metadata.institutional) !== "current" ||
-        !institutionalApplies(record.metadata.institutional, context, query)))
-  ) {
-    return undefined
-  }
+  if (!recalledPolicyAllows(record, context, query, blockedCatalogIds)) return undefined
   const content = truncateToTokens(record.content, maxTokens).text
   if (!content) return undefined
   return {
