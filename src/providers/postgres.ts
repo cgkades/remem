@@ -50,6 +50,8 @@ import {
   SUPERSESSION_CANDIDATE_MAX_RESULTS,
 } from "../observation.js"
 import {
+  admitEvidence,
+  DEFAULT_EVIDENCE_ADMISSION_CONFIG,
   EVIDENCE_KINDS,
   EVIDENCE_ORIGINS,
   EVIDENCE_ROLES,
@@ -1077,6 +1079,9 @@ export class PostgresMemoryProvider
         // Persisted reviewed bodies are authoritative; a supplied approved flag
         // cannot replace them. Absent rows retain the existing trusted core API.
         const durable = row ? { ...candidateFromRow(row), status: "approved" as const } : candidate
+        if (row?.metadata.canonicalEvidence === true) {
+          await this.assertCanonicalPromotionEvidence(client, durable)
+        }
         const forgotten = await client.query(
           `SELECT 1 FROM remem.forget_tombstones WHERE provider_id=$1 AND project_id=$2
              AND target_kind='candidate' AND target_id=$3`,
@@ -1207,6 +1212,140 @@ export class PostgresMemoryProvider
     ])
   }
 
+  private async assertCanonicalPromotionEvidence(
+    client: PoolClient,
+    candidate: CandidateMemory,
+  ): Promise<void> {
+    const ids = [...new Set(candidate.observationIds)]
+    if (ids.length === 0 || ids.length > 16) throw new Error("candidate evidence is unavailable")
+    const result = await client.query<EpisodicEventRow>(
+      "SELECT * FROM remem.session_events WHERE id=ANY($1::uuid[]) AND provider_id=$2 FOR SHARE",
+      [ids, this.id],
+    )
+    const first = result.rows[0]
+    if (!first || result.rows.length !== ids.length)
+      throw new Error("candidate evidence is unavailable")
+    const scope = candidate.memory.scope
+    if (
+      (scope.kind === "project" && scope.id !== first.project_id) ||
+      (scope.kind === "session" && scope.id !== first.session_id)
+    )
+      throw new Error("candidate evidence is unavailable")
+    for (const row of result.rows) {
+      if (
+        row.project_id !== first.project_id ||
+        row.session_id !== first.session_id ||
+        row.host !== first.host
+      )
+        throw new Error("candidate evidence is unavailable")
+      const envelope = episodicRowToEnvelope(row)
+      const admitted = admitEvidence(
+        {
+          ...envelope,
+          context: {
+            directory: scope.id ?? this.id,
+            worktree: scope.id ?? this.id,
+            projectId: first.project_id,
+            sessionId: first.session_id,
+          },
+        },
+        { providerId: this.id, host: first.host, projectId: first.project_id },
+        { ...DEFAULT_EVIDENCE_ADMISSION_CONFIG, enabled: true },
+      )
+      if (
+        admitted.outcome !== "admitted" ||
+        admitted.envelope.id !== envelope.id ||
+        admitted.envelope.contentHash !== envelope.contentHash
+      )
+        throw new Error("candidate evidence is unavailable")
+    }
+  }
+
+  /** Resolve declared references inside the capture transaction. A source URI
+   * or a hash-shaped string is not proof that evidence exists or is usable. */
+  private async canonicalCaptureEvidence(
+    client: PoolClient,
+    observation: SessionObservation,
+    candidate: CandidateMemory,
+  ): Promise<string[] | undefined> {
+    const raw: unknown = observation.payload.evidenceRefs
+    const provenanceRefs = (candidate.memory.provenance ?? []).flatMap((entry) => {
+      const refs: unknown = entry.source.metadata?.evidenceRefs
+      if (refs === undefined) return []
+      if (!Array.isArray(refs)) throw new Error("candidate evidence is unavailable")
+      return refs as unknown[]
+    })
+    if (raw === undefined && provenanceRefs.length === 0) return undefined
+    if (!Array.isArray(raw) || raw.length === 0 || raw.length > 16 || provenanceRefs.length > 16)
+      throw new Error("candidate evidence is unavailable")
+    const refs = raw.map((value: unknown) => {
+      if (
+        !value ||
+        typeof value !== "object" ||
+        !("providerId" in value) ||
+        value.providerId !== this.id ||
+        !("eventId" in value) ||
+        typeof value.eventId !== "string" ||
+        !EVIDENCE_ID_PATTERN.test(value.eventId)
+      )
+        throw new Error("candidate evidence is unavailable")
+      return value.eventId
+    })
+    for (const value of provenanceRefs) {
+      if (
+        !value ||
+        typeof value !== "object" ||
+        !("providerId" in value) ||
+        value.providerId !== this.id ||
+        !("eventId" in value) ||
+        typeof value.eventId !== "string" ||
+        !refs.includes(value.eventId)
+      )
+        throw new Error("candidate evidence is unavailable")
+    }
+    const ids: string[] = []
+    for (const evidenceId of [...new Set(refs)]) {
+      const result = await client.query<EpisodicEventRow>(
+        `SELECT * FROM remem.session_events
+         WHERE provider_id=$1 AND evidence_id=$2 AND project_id=$3 AND session_id=$4
+           AND NOT EXISTS (SELECT 1 FROM remem.forget_tombstones t
+             WHERE t.provider_id=$1 AND t.project_id=$3 AND t.target_kind='evidence'
+               AND t.target_id=$2)
+         FOR SHARE`,
+        [this.id, evidenceId, observation.context.projectId, observation.context.sessionId],
+      )
+      const row = result.rows[0]
+      if (!row) throw new Error("candidate evidence is unavailable")
+      const envelope = episodicRowToEnvelope(row)
+      const admitted = admitEvidence(
+        { ...envelope, context: observation.context },
+        {
+          providerId: this.id,
+          host: String(observation.payload.host),
+          projectId: observation.context.projectId,
+        },
+        { ...DEFAULT_EVIDENCE_ADMISSION_CONFIG, enabled: true },
+      )
+      if (
+        admitted.outcome !== "admitted" ||
+        admitted.envelope.id !== envelope.id ||
+        admitted.envelope.contentHash !== envelope.contentHash
+      )
+        throw new Error("candidate evidence is unavailable")
+      // Legacy assertion extraction consumes original user text only. Tool
+      // evidence may support a future verified procedure, not a user assertion.
+      if (
+        observation.kind !== "task-resolved" &&
+        (envelope.role !== "user" ||
+          envelope.origin !== "direct-user" ||
+          envelope.payload.text?.trim() !== String(observation.payload.text).trim())
+      )
+        throw new Error("candidate evidence does not support this capture")
+      ids.push(row.id)
+    }
+    return ids
+  }
+
   async persistCandidate(
     observation: SessionObservation,
     candidate: CandidateMemory,
@@ -1246,7 +1385,15 @@ export class PostgresMemoryProvider
     const client = await this.pool.connect()
     try {
       await client.query("BEGIN")
+      if (options.timeoutMs) {
+        await client.query("SELECT set_config('statement_timeout', $1, true)", [
+          String(options.timeoutMs),
+        ])
+      }
       await this.lockLearningScope(client, scope)
+      const canonicalIds = await this.canonicalCaptureEvidence(client, observation, candidate)
+      const observationIds = canonicalIds ?? candidate.observationIds
+      const primaryObservationId = canonicalIds?.[0] ?? observation.id
       const prior = await client.query<{
         status: CandidateMemory["status"]
         same_context: boolean
@@ -1254,7 +1401,7 @@ export class PostgresMemoryProvider
       }>(
         `SELECT c.status,
           (c.metadata->>'providerId'=$2 AND c.scope_kind=$3 AND COALESCE(c.scope_id,'')=$4
-            AND c.session_event_id=$5 AND e.session_id=$6 AND e.project_id=$7) AS same_context,
+            AND c.session_event_id IN ($5::uuid,$12::uuid) AND e.session_id=$6 AND e.project_id=$7) AS same_context,
           (c.title=$8 AND c.content=$9 AND c.type=$10 AND c.metadata->'memory'=$11::jsonb) AS unchanged
          FROM remem.candidate_memories c LEFT JOIN remem.session_events e ON e.id=c.session_event_id
          WHERE c.id=$1 FOR UPDATE OF c`,
@@ -1270,6 +1417,7 @@ export class PostgresMemoryProvider
           candidate.memory.content,
           candidate.memory.type,
           JSON.stringify(storedMemory),
+          primaryObservationId,
         ],
       )
       const old = prior.rows[0]
@@ -1305,35 +1453,32 @@ export class PostgresMemoryProvider
         await client.query("COMMIT")
         return
       }
-      if (options.timeoutMs) {
-        await client.query("SELECT set_config('statement_timeout', $1, true)", [
-          String(options.timeoutMs),
-        ])
-      }
       options.signal?.throwIfAborted()
-      const persistedObservation = await client.query<{ id: string }>(
-        `INSERT INTO remem.session_events
+      const persistedObservation = canonicalIds
+        ? undefined
+        : await client.query<{ id: string }>(
+            `INSERT INTO remem.session_events
          (id, session_id, project_id, kind, occurred_at, payload)
          VALUES ($1,$2,$3,$4,$5,$6::jsonb)
          ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id
          WHERE remem.session_events.session_id = EXCLUDED.session_id
            AND remem.session_events.project_id = EXCLUDED.project_id
          RETURNING id`,
-        [
-          observation.id,
-          sessionId,
-          observation.context.projectId,
-          observation.kind,
-          observation.occurredAt,
-          JSON.stringify({
-            ...Object.fromEntries(
-              Object.entries(observation.payload).filter(([key]) => key !== "text"),
-            ),
-            source: observation.source,
-          }),
-        ],
-      )
-      if (!persistedObservation.rows[0]) {
+            [
+              observation.id,
+              sessionId,
+              observation.context.projectId,
+              observation.kind,
+              observation.occurredAt,
+              JSON.stringify({
+                ...Object.fromEntries(
+                  Object.entries(observation.payload).filter(([key]) => key !== "text"),
+                ),
+                source: observation.source,
+              }),
+            ],
+          )
+      if (!canonicalIds && !persistedObservation?.rows[0]) {
         throw new Error("captured observation id belongs to another context")
       }
       options.signal?.throwIfAborted()
@@ -1352,14 +1497,14 @@ export class PostgresMemoryProvider
            status = EXCLUDED.status,
            metadata = EXCLUDED.metadata
          WHERE remem.candidate_memories.status = 'pending'
-           AND remem.candidate_memories.session_event_id = EXCLUDED.session_event_id
+           AND remem.candidate_memories.session_event_id IN (EXCLUDED.session_event_id,$11::uuid)
            AND remem.candidate_memories.scope_kind = EXCLUDED.scope_kind
            AND remem.candidate_memories.scope_id IS NOT DISTINCT FROM EXCLUDED.scope_id
            AND remem.candidate_memories.metadata->>'providerId' = EXCLUDED.metadata->>'providerId'
          RETURNING id`,
         [
           candidate.id,
-          observation.id,
+          primaryObservationId,
           candidate.memory.type,
           candidate.memory.title,
           candidate.memory.content,
@@ -1370,9 +1515,11 @@ export class PostgresMemoryProvider
             providerId: this.id,
             memory: storedMemory,
             reasons: candidate.reasons,
-            observationIds: candidate.observationIds,
+            observationIds,
+            ...(canonicalIds ? { canonicalEvidence: true } : {}),
           }),
           options.autoApprove ? "approved" : "pending",
+          observation.id,
         ],
       )
       if (!persistedCandidate.rows[0]) {
@@ -1383,7 +1530,7 @@ export class PostgresMemoryProvider
              AND metadata->>'providerId' = $5`,
           [
             candidate.id,
-            observation.id,
+            primaryObservationId,
             candidate.memory.scope.kind,
             scopeId(candidate.memory, observation.context) ?? null,
             this.id,
@@ -1403,7 +1550,7 @@ export class PostgresMemoryProvider
           key,
           candidate.id,
           options.autoApprove ? "approved" : "pending",
-          candidate.observationIds,
+          observationIds,
           options.autoApprove
             ? "capture-auto-approved"
             : old
@@ -1631,11 +1778,13 @@ export class PostgresMemoryProvider
       const sessionEventId = event.rows[0]?.id
       if (!sessionEventId) return undefined
       const candidates = await client.query<{ id: string }>(
-        `SELECT id
-         FROM remem.candidate_memories
-         WHERE session_event_id = $1
-         ORDER BY id`,
-        [sessionEventId],
+        `SELECT c.id FROM remem.candidate_memories c
+         WHERE c.session_event_id=$1 OR EXISTS (
+           SELECT 1 FROM remem.candidate_lineage l
+           WHERE l.candidate_id=c.id AND l.provider_id=$2
+             AND l.observation_ids @> ARRAY[$1::uuid])
+         ORDER BY c.id`,
+        [sessionEventId, this.id],
       )
       const preview = await client.query<ForgetPreviewRow>(
         `INSERT INTO remem.forget_previews
@@ -1703,11 +1852,14 @@ export class PostgresMemoryProvider
               throw new Error("forget preview is unavailable or expired")
             }
             const additionalCandidates = await client.query<{ id: string }>(
-              `SELECT id
-             FROM remem.candidate_memories
-             WHERE session_event_id = $1 AND NOT (id = ANY($2::uuid[]))
+              `SELECT c.id FROM remem.candidate_memories c
+             WHERE (c.session_event_id=$1 OR EXISTS (
+               SELECT 1 FROM remem.candidate_lineage l
+               WHERE l.candidate_id=c.id AND l.provider_id=$3
+                 AND l.observation_ids @> ARRAY[$1::uuid]))
+               AND NOT (c.id = ANY($2::uuid[]))
              LIMIT 1`,
-              [row.session_event_id, row.candidate_ids],
+              [row.session_event_id, row.candidate_ids, this.id],
             )
             if (additionalCandidates.rows[0]) {
               throw new Error("forget preview changed; request a new preview before confirming")

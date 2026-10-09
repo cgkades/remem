@@ -65,6 +65,16 @@ const POSTGRES_RETRIEVAL_PROMPT = "Let's continue the Aurora database migration 
 const TOOL_CALL_STEPS = [
   { id: "call_read", name: "read", arguments: '{"path":"tool-loop.txt"}' },
   { id: "call_memory_status", name: "memory_status", arguments: "{}" },
+  {
+    id: "call_shell_failed",
+    name: "shell",
+    arguments: JSON.stringify({ command: "printf 'fixture process failed\\n'; exit 7" }),
+  },
+  {
+    id: "call_shell_succeeded",
+    name: "shell",
+    arguments: JSON.stringify({ command: "printf 'fixture process succeeded\\n'; exit 0" }),
+  },
 ]
 // Issue #8: the mock model previously always returned a 200 streaming
 // response, so no scenario ever exercised the dispatch/tool-loop's handling
@@ -815,6 +825,18 @@ async function main() {
         )
       }
     }
+    // #96 / TASK-017: native process failure is still a completed tool
+    // callback. Only the native result metadata distinguishes exit outcomes;
+    // assistant prose or generic completed status cannot verify success.
+    for (const [id, exit] of [
+      ["call_shell_failed", 7],
+      ["call_shell_succeeded", 0],
+    ]) {
+      const call = toolCall(relatedMessages, id)
+      if (call?.state?.status !== "completed" || call.state.metadata?.exit !== exit) {
+        throw new Error(`pinned native shell outcome contract changed: ${JSON.stringify(call)}`)
+      }
+    }
     const context = await request(serverURL, `/api/session/${relatedSession}/context`)
     const persistedUserMessages = context.data?.filter((message) => message.type === "user") ?? []
     if (!persistedUserMessages.some((message) => message.text === RELATED_PROMPT)) {
@@ -1073,6 +1095,26 @@ async function main() {
         throw new Error("secret tool output was persisted")
       const detailRow = evidence.rows.find((row) => row.safe_text?.includes(LEARNING_DETAIL))
       if (!detailRow) throw new Error("tool detail lost its durable evidence identity")
+      const canonicalLinks = await hooksPool.query(
+        `SELECT e.evidence_id,l.observation_ids,e.id FROM remem.candidate_memories c
+         JOIN remem.session_events e ON e.id=c.session_event_id
+         JOIN remem.candidate_lineage l ON l.candidate_id=c.id
+         WHERE e.session_id=$1 AND l.provider_id='hooks-postgres'`,
+        [learningSession],
+      )
+      if (
+        canonicalLinks.rows.length !== 3 ||
+        canonicalLinks.rows.some(
+          (row) =>
+            !row.evidence_id ||
+            row.observation_ids.length !== 1 ||
+            row.observation_ids[0] !== row.id,
+        )
+      ) {
+        throw new Error(
+          `host candidates lost canonical evidence lineage: ${JSON.stringify(canonicalLinks.rows)}`,
+        )
+      }
       const freshSession = await createSession(serverURL, learningWorkspace)
       const started = performance.now()
       await prompt(serverURL, freshSession, LEARNING_QUERY)

@@ -130,6 +130,24 @@ integration("OpenCode callbacks to PostgreSQL evidence and fresh-session recall"
         evidenceRefs: [{ providerId: "host-loop", eventId: conclusion?.evidence_id }],
       })
     }
+    const links = await pool.query<{ evidence_id: string; observation_ids: string[]; id: string }>(
+      `SELECT e.evidence_id,l.observation_ids,e.id FROM remem.candidate_memories c
+       JOIN remem.session_events e ON e.id=c.session_event_id
+       JOIN remem.candidate_lineage l ON l.candidate_id=c.id
+       WHERE l.provider_id='host-loop'`,
+    )
+    expect(links.rows).toHaveLength(3)
+    for (const link of links.rows) {
+      expect(link.evidence_id).toBe(conclusion?.evidence_id)
+      expect(link.observation_ids).toEqual([link.id])
+    }
+    expect(
+      (
+        await pool.query(
+          "SELECT id FROM remem.session_events WHERE evidence_id IS NULL AND session_id='session-a'",
+        )
+      ).rowCount,
+    ).toBe(0)
 
     const fresh = host()
     const disposeB = await RememPlugin.setup(fresh.context)

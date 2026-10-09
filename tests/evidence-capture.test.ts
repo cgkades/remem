@@ -66,6 +66,33 @@ const tool = {
 }
 
 describe("host evidence capture", () => {
+  it("preserves native shell exit and timeout data without treating completed callbacks as task success", async () => {
+    const f = fixture()
+    for (const [index, result] of [{ exit: 7 }, { exit: 0 }, { timeout: true }].entries()) {
+      f.adapter.tool({
+        ...tool,
+        tool: "shell",
+        id: `shell-${index}`,
+        input: { command: "npm test" },
+        result: { content: "Native process result", metadata: result },
+      })
+    }
+    await f.coordinator.idle()
+    expect([...f.records.values()].map((record) => record.payload.metadata?.result)).toEqual([
+      { exit: 7 },
+      { exit: 0 },
+      { timeout: true },
+    ])
+    expect(
+      [...f.records.values()].every(
+        (record) =>
+          record.role === "tool" &&
+          record.kind === "tool-result" &&
+          record.payload.metadata?.status === "completed",
+      ),
+    ).toBe(true)
+  })
+
   it("reports an unavailable enabled evidence store without failing host initialization", () => {
     const log = vi.fn()
     const config = parseConfig({ evidenceAdmission: { enabled: true } }).config
