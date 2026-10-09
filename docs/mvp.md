@@ -3,8 +3,9 @@
 > **Historical snapshot.** This document records the original MVP milestone's scope and has not been
 > updated for capture, consolidation, correction-review, and procedure-learning work delivered after
 > it. For current status see [README](../README.md), the
-> [recovery milestone checklist](IMPLEMENTATION-PLAN.md), and the
-> [executable recovery plan](../plan/feature-memory-recovery-1.md).
+> [current implementation status](current-status.md) and
+> [recovery milestone checklist](IMPLEMENTATION-PLAN.md). Lists below describe MVP delivery,
+> not present-day absence.
 
 ## Hypothesis
 
@@ -39,10 +40,11 @@ The canonical runtime, storage, installation, and future-learning diagrams remai
 ## Not Included
 
 At MVP delivery, this list was accurate. Bounded user-text capture, candidate extraction, review,
-and consolidation shipped in later work; broad/automatic session-observation and durable episodic
-evidence beyond that bounded capture remain outstanding (see the
-[executable recovery plan](../plan/feature-memory-recovery-1.md) phases 2-5). The npm package is now
-published; see [README](../README.md) for the current install/version status.
+and consolidation shipped later. Canonical episodic persistence, bounded retrieval/retention,
+forgetting, candidate lineage, native OpenCode v2 outcome wiring and server policy are also now
+implemented. The narrow automatic investigation passes native Session A/B testing; this does not
+complete broad inference or default rollout. See [current status](current-status.md). The npm package
+is published; source builds remain supported.
 
 - Broad automatic session observation and durable episodic evidence persistence beyond bounded,
   screened user-text capture.
@@ -115,7 +117,7 @@ reset must refuse an external database.
 
 ## Exit Boundary
 
-The implemented MVP now demonstrates recognition, routed recall, managed durability, explicit
+At MVP delivery, the implementation demonstrated recognition, routed recall, managed durability, explicit
 mutation, recovery primitives, and both OpenCode host boundaries as separate testable components.
 Automatic learning and a general semantic model are intentionally outside this boundary.
 

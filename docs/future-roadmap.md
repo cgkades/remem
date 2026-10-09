@@ -1,78 +1,41 @@
 # Future Roadmap
 
-The items below are deferred. Managed PostgreSQL, checksum-verified ordered schema migrations
-(currently through version 7), semantic Stage 1, explicit CRUD, backup/restore commands, OpenCode
-v2 integration, publishing `agentic-remem` to npm, and executable evaluation already exist and are
-not roadmap claims.
+**TARGET expansion, not a list of missing primitives.** Use the
+[implementation checklist](IMPLEMENTATION-PLAN.md) and live
+[GitHub issues](https://github.com/cgkades/remem/issues) for work selection. Intended behavior comes
+from [PRODUCT-VISION](PRODUCT-VISION.md), [TARGET-ARCHITECTURE](TARGET-ARCHITECTURE.md) and accepted
+ADRs; [current status](current-status.md) records shipped, tested behavior.
 
-## Phase 1: Harden Distribution and Operations
+Managed/external PostgreSQL, migrations through 0014, local BGE embeddings and hash fallback,
+embedding model tracking/re-embedding, CRUD/supersession, candidate review/consolidation, correction
+audit, canonical episodic persistence/retention/forgetting, evidence links, atomic candidate lineage,
+server learning policy, bounded startup recovery and the native cross-session investigation gate
+already exist. Do not recreate them from older roadmap phases.
 
-- Replace source-only OpenCode setup with tested package installation and upgrade instructions.
-- Validate supported external PostgreSQL/pgvector version ranges and privilege combinations
-  explicitly in `doctor`.
-- Add safe pre-upgrade and optional pre-restore/pre-reset backup workflows.
-- Add scheduled backups, retention, encryption hooks, and restore verification beyond migration
-  checks.
-- Add disk/volume capacity reporting and clearer container lifecycle diagnostics.
-- Define a Windows permission guarantee where POSIX `0600` mode bits are not authoritative.
+## Remaining learning-loop work
 
-## Phase 2: Recognition and Catalog Quality
+- Broader verified outcomes and causal inference beyond the narrow shell recovery grammar.
+- Equivalent canonical evidence/outcome mappings for Pi and v1 where their host APIs support them.
+- Inspectable persisted learning/backlog diagnostics and guidance for explicit bounded episodic recall.
+- Reviewed setup disclosures and source choices before changing capture/admission defaults; preserve opt-outs.
+- More complete current-state transitions, conflict and relationship impact handling.
+- Bounded topic hierarchy evolution and measured paraphrase recognition after learning.
+- Generative-model answer-quality evaluation beyond deterministic context-reader fixtures.
+- Recovery guarantees for events lost before evidence persistence, if justified by host replay contracts.
 
-- Add a stronger opt-in local neural embedding model with explicit download, model identity, and
-  reindexing behavior.
-- Keep `remem-local-hash-v1` as a deterministic fallback and expand evaluation before changing its
-  small concept groups.
-- Populate provider/topic/subtopic relationships from managed writes and render selected hierarchy
-  branches rather than only provider/topic levels.
-- Add embedding model migrations and controlled reindex commands.
-- Improve Markdown chunking, Obsidian aliases, wikilinks, frontmatter parsing, and filesystem refresh.
-- Add near-duplicate grouping and richer temporal/supersession ranking without automatic truth
-  reconciliation.
+## Quality and operations
 
-## Phase 3: Provider Ecosystem
+- Full immutable embedding compatibility identity, safe legacy eligibility and completed reindex semantics (#45).
+- Measure the existing hybrid retrieval baseline before fusion or optional local reranking (#44).
+- Larger redacted corpora, precision/context-cost distributions and exact tokenizer adapters where available.
+- Validate external PostgreSQL/pgvector version and privilege ranges; improve Windows permission guarantees.
+- Pre-operation backup workflows, scheduled backups, encrypted export and representative restore verification.
 
-- Obsidian-specific indexing over Markdown as source of truth.
-- Mem0 adapter with explicit remote-processing and scope policy.
-- Confirm whether the historical "Congee" request means Cognee, then target a stable Cognee API.
-- Generic MCP tool-backed provider with strict output and trust boundaries.
-- OpenCode prior-session provider using stable history APIs.
-- Shared provider conformance coverage for scope, timeout, malformed output, CRUD, and provenance.
+## Later expansion
 
-## Phase 4: Optional Planning and Synthesis
-
-- Ambiguity-gated Stage 2 planner with explicit privacy, latency, and cost controls.
-- Optional local and remote model-backed synthesis behind the existing strategy interface.
-- Conflict grouping and query expansion informed by aliases and project state.
-- Exact tokenizer adapters where a host exposes model tokenization.
-
-No phase should make an LLM call mandatory for every prompt. Deterministic extraction remains the
-fallback required by [ADR 0014](adr/0014-support-bounded-synthesis-strategies.md).
-
-## Phase 5: Observation and Reviewable Learning
-
-- Connect normalized host observations to the `session_events` table introduced in schema version 2.
-- Extract candidate memories without writing durable facts by default.
-- Add redaction, secret scanning, trust classification, and source-message references.
-- Build a user review queue for approve/reject/edit decisions.
-- Promote approved candidates through `MemoryManager` with idempotency and audit metadata.
-- Keep retrieved instructions and generated synthesis unable to authorize their own persistence.
-
-The target learning flow is diagrammed in [Architecture](architecture.md) and constrained by
+Obsidian-specific behavior, Mem0, Cognee, MCP and session-history providers remain extensions behind
+the existing capability contract. Optional model planning/synthesis, opt-in sync, team scopes and
+richer UI follow core learning correctness. No expansion makes a remote service or model call
+mandatory for memory, trusts similarity as truth, or permits generated text to authorize its own
+persistence. See [ADR 0014](adr/0014-support-bounded-synthesis-strategies.md) and
 [ADR 0015](adr/0015-treat-retrieved-memory-as-untrusted-data.md).
-
-## Phase 6: Consolidation and UX
-
-- Session-bound and background consolidation jobs.
-- Idempotent topic summaries and catalog updates.
-- Duplicate merge and supersession proposals with reversible audit records.
-- `/memory`, `/memory explain`, and provider health views if OpenCode exposes stable command APIs.
-- Cross-model evaluation for Anthropic, OpenAI, Bedrock, Gemini, and local models.
-- Larger redacted evaluation sets, repeated latency distributions, and context-cost dashboards.
-- Team and organization scopes with explicit access control.
-
-## Non-Goals
-
-Remem should not become a mandatory hosted service, a universal vector database, a transcript dump,
-or a replacement for provider-owned knowledge systems. It should not silently learn from every
-session, trust similarity as truth, or treat a successful backup command as a complete disaster
-recovery program.

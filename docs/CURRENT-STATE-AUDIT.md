@@ -1,5 +1,11 @@
 # ReMem Current-State Audit
 
+> **HISTORICAL September snapshot.** The assessment and line references below predate canonical
+> episodes, candidate lineage, server policy, host procedure wiring and startup recovery. For the
+> October 9 verified implementation, see [current status](current-status.md) and the
+> [native investigation gate](investigation-acceptance.md). Preserve this audit as dated evidence;
+> do not treat its absence claims or percentages as live measurements.
+
 > **Audit date:** 2026-09-06
 >
 > **Review update:** 2026-09-09, checked against base commit `184e0ed4bfcea7bfa37701268f5ae0643d33fc8c` (the implementation shared by this PR and `main` at review time).

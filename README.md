@@ -28,10 +28,13 @@ Source installation remains supported. OpenCode v2 is the primary adapter; v1 co
 separate, weaker trust boundary. See [OpenCode integration](docs/opencode-integration.md) for the
 supported runtime and configuration details.
 
-For development, start with the [executable recovery plan](plan/feature-memory-recovery-1.md) and
-[issue audit](docs/ISSUE-AUDIT.md). The [product vision](docs/PRODUCT-VISION.md) and
-[target architecture](docs/TARGET-ARCHITECTURE.md) outrank stale roadmap prose. ReMem has working
-capture/recall foundations, but the complete automatic episodic learning loop is not finished.
+For development, start with the [documentation index](docs/index.md),
+[current implementation status](docs/current-status.md), and [contributor guidance](CONTRIBUTING.md).
+The [product vision](docs/PRODUCT-VISION.md), [target architecture](docs/TARGET-ARCHITECTURE.md)
+and accepted ADRs define intended behavior; source and executable tests establish what works today.
+The September audits and recovery handbook are historical baselines. A bounded automatic learning
+loop now passes native OpenCode v2 Session A/B testing; broader task inference, host parity and
+default rollout remain incomplete.
 
 What works now:
 
@@ -47,16 +50,24 @@ What works now:
   conflict preservation, supersession, and restart-safe PostgreSQL run records;
 - bounded, deterministic multi-statement user capture with review-based or configured automatic
   promotion, provenance, and safe processed-identity replay;
+- opt-in OpenCode v2 canonical user/tool evidence, bounded episodic recall, evidence-to-candidate
+  lineage and atomic PostgreSQL promotion/audit;
+- server-authorized automatic learning of supported project assertions and a narrow native shell
+  failure/action/successful-recheck procedure, with sensitive or ambiguous updates kept for review;
+- bounded startup recovery of interrupted approved capture, without callback replay;
 - OpenCode and Pi tools `memory_search`, `memory_status`, and `memory_explain`, plus Pi's
   `before_agent_start` memory injection and optional compaction-context injection;
 - logical backup and guarded restore/reset commands; and
 - an executable evaluation corpus plus PostgreSQL integration tests in CI on Node.js 22 and 24.
 
-Current host capture observes screened user text, not unrestricted model/tool output. Plain, v2, and
-Pi initialization leave capture off unless requested; `remem init --opencode-v1` enables capture and
-automatic promotion. Review-based capture keeps candidates pending. A verified-procedure extraction
-API also exists, but its production host-outcome wiring remains recovery work. See
-[Configuration](docs/configuration.md) for exact defaults, exclusions, and limitations.
+OpenCode v2 can observe screened original user messages and completed native tool evidence when
+canonical evidence admission is explicitly enabled. Assistant assertions cannot verify their own
+success. Pi and v1 still capture screened user statements only. Plain, v2 and Pi initialization leave
+capture off unless requested; `remem init --opencode-v1` enables legacy capture and automatic promotion.
+Canonical evidence admission is separately disabled by default. With admission enabled,
+`autoPromote` is permission to apply the server policy, not approval of every candidate. See
+[Configuration](docs/configuration.md), [host learning](docs/host-evidence-learning.md) and the
+[native acceptance gate](docs/investigation-acceptance.md) for supported behavior and limits.
 
 ## Install from Source
 
@@ -184,8 +195,11 @@ be visible in every context that configures the provider.
 
 ## Documentation
 
+- [Documentation index and authority](docs/index.md)
+- [Current implementation and verified gates](docs/current-status.md)
+- [Contributor guidance](CONTRIBUTING.md)
 - [Executable recovery plan](plan/feature-memory-recovery-1.md)
-- [GitHub issue audit and proposed updates](docs/ISSUE-AUDIT.md)
+- [Historical GitHub issue audit](docs/ISSUE-AUDIT.md)
 - [Product vision](docs/PRODUCT-VISION.md)
 - [Target architecture](docs/TARGET-ARCHITECTURE.md)
 - [Recovery milestone checklist](docs/IMPLEMENTATION-PLAN.md)

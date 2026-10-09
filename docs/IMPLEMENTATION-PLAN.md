@@ -5,10 +5,10 @@
 > Agents working on ReMem should read those two documents before selecting or implementing work from this checklist.
 
 For bounded coding tasks, use the [executable recovery plan](../plan/feature-memory-recovery-1.md).
-The [issue audit](ISSUE-AUDIT.md) records all open/closed dispositions and proposed GitHub updates.
+The [issue audit](ISSUE-AUDIT.md) preserves the September disposition snapshot; use live GitHub issues for current state.
 Those documents refine execution scope; they do not replace this checklist's full milestone criteria.
 
-The [host evidence integration note](host-evidence-learning.md) describes the first implemented capture/recall slice and its executable gates. It explicitly records remaining verified-procedure, durable-lineage, and full cross-session acceptance work; it does not mark those milestones complete.
+The [current status](current-status.md), [host learning](host-evidence-learning.md), [candidate lineage](candidate-lineage.md), [recovery](learning-recovery.md) and [native acceptance gate](investigation-acceptance.md) record verified work through October 9. The supported deterministic Session A/B slice is complete; broader observation, inference, host parity and default rollout are not. Unchecked broad milestones below can contain shipped subsets and do not authorize reimplementing existing primitives.
 
 ## How to use this document
 
@@ -23,13 +23,13 @@ The [host evidence integration note](host-evidence-learning.md) describes the fi
 
 ## P0 — Establish the source of truth
 
-- [ ] Reconcile `docs/architecture.md` with `TARGET-ARCHITECTURE.md`, clearly separating CURRENT from TARGET behavior.
-- [ ] Reconcile `docs/mvp.md` with actual current implementation; remove stale "not included" claims that are now implemented.
-- [ ] Reconcile `docs/future-roadmap.md` with this plan; either replace it with a pointer here or redefine it as post-closed-loop future work.
-- [ ] Reconcile README publishing/install status with the current released package state.
-- [ ] Add a documentation index that labels documents as normative target, current-state snapshot, ADR, operational guide, or historical plan.
-- [ ] Add contributor/agent guidance stating that `PRODUCT-VISION.md` + `TARGET-ARCHITECTURE.md` outrank stale roadmap/MVP text when selecting architecture work.
-- [ ] Audit open GitHub issues against the target architecture; close/rewrite/deprioritize issues that encode obsolete sequencing or duplicate this plan.
+- [x] Reconcile `docs/architecture.md` with `TARGET-ARCHITECTURE.md`, clearly separating CURRENT from TARGET behavior.
+- [x] Reconcile `docs/mvp.md` with actual current implementation; remove stale "not included" claims that are now implemented.
+- [x] Reconcile `docs/future-roadmap.md` with this plan; either replace it with a pointer here or redefine it as post-closed-loop future work.
+- [x] Reconcile README publishing/install status with the current released package state.
+- [x] Add a documentation index that labels documents as normative target, current-state snapshot, ADR, operational guide, or historical plan.
+- [x] Add contributor/agent guidance stating that `PRODUCT-VISION.md` + `TARGET-ARCHITECTURE.md` outrank stale roadmap/MVP text when selecting architecture work.
+- [x] Audit open GitHub issues against the target architecture; close/rewrite/deprioritize issues that encode obsolete sequencing or duplicate this plan.
 
 **P0 exit:** an agent entering the repo can unambiguously determine what ReMem is supposed to become and what work is currently highest priority.
 
@@ -39,26 +39,26 @@ The [host evidence integration note](host-evidence-learning.md) describes the fi
 
 Build the test before or alongside the implementation so the project stops optimizing proxies.
 
-- [ ] Create a deterministic Session A / Session B fixture matching `PRODUCT-VISION.md`.
-- [ ] Session A includes a nontrivial failure, disproven hypothesis, verified root cause, decision, successful fix/procedure, and unresolved follow-up.
-- [ ] Session A ends without explicit `remember`, `memory_search`, or manual candidate approval for ordinary low-risk facts.
-- [ ] Session B starts with no conversation history.
-- [ ] A natural continuity prompt causes relevant memory injection.
-- [ ] Injected memory contains the current root cause/conclusion.
-- [ ] Injected memory contains the verified procedure/fix.
-- [ ] Injected memory contains the relevant decision.
-- [ ] Injected memory contains the unresolved follow-up.
-- [ ] The disproven hypothesis is not represented as current truth.
-- [ ] Episodic provenance can identify the evidence/session that produced the conclusion.
-- [ ] A safe detail omitted by semantic extraction remains recoverable through bounded episodic recall within the retention window.
-- [ ] An unrelated Session B prompt does not inject detailed Session A memory.
-- [ ] The scenario runs against the host-independent core.
-- [ ] At least one real-host E2E version runs against OpenCode v2.
-- [ ] Add metrics/assertions for latency and injected token budget.
+- [x] Create a deterministic Session A / Session B fixture matching `PRODUCT-VISION.md`.
+- [x] Session A includes a nontrivial failure, disproven hypothesis, verified root cause, decision, successful fix/procedure, and unresolved follow-up.
+- [x] Session A ends without explicit `remember`, `memory_search`, or manual candidate approval for ordinary low-risk facts.
+- [x] Session B starts with no conversation history.
+- [x] A natural continuity prompt causes relevant memory injection.
+- [x] Injected memory contains the current root cause/conclusion.
+- [x] Injected memory contains the verified procedure/fix.
+- [x] Injected memory contains the relevant decision.
+- [x] Injected memory contains the unresolved follow-up.
+- [x] The disproven hypothesis is not represented as current truth.
+- [x] Episodic provenance can identify the evidence/session that produced the conclusion.
+- [x] A safe detail omitted by semantic extraction remains recoverable through bounded episodic recall within the retention window.
+- [x] An unrelated Session B prompt does not inject detailed Session A memory.
+- [x] The scenario runs against the host-independent core.
+- [x] At least one real-host E2E version runs against OpenCode v2.
+- [x] Add metrics/assertions for latency and injected token budget.
 
-**P1 exit:** CI contains a failing-or-passing executable definition of the product rather than only component tests.
+**P1 exit verified for the deterministic supported slice:** PR #105 runs the installed package in native OpenCode v2 against PostgreSQL. Its five fresh sessions recover current conclusions, the full verified shell procedure and an omitted episodic detail, with baseline/quality/latency/byte-budget and negative controls. Core/database host-callback gates complement the native test. The original-user assertion supplies the causal conclusion; tool evidence verifies the missing-file recovery, not general autonomous root-cause inference. See [acceptance](investigation-acceptance.md). This does not mark broader P2–P15 or default rollout complete.
 
-### Initial executable slice
+### Historical initial slice
 
 `tests/postgres-provider.integration.test.ts` now covers multiple ordinary user statements flowing
 through automatic capture/consolidation into PostgreSQL, followed by recall through a new provider
@@ -66,13 +66,13 @@ and orchestrator with a fresh session. It checks re-delivery, persisted provenan
 token budget, unrelated-prompt non-injection, and cross-project isolation. It requires
 `REMEM_TEST_DATABASE_URL`; CI's PostgreSQL-enabled test job must run it rather than accepting a skip.
 
-This is a narrower regression, **not completion of P1**: it uses a topic-rich continuity prompt and
+At that earlier baseline this was a narrower regression, **not completion of P1**: it uses a topic-rich continuity prompt and
 opted-in user-text capture. It does not yet demonstrate tool-verified root causes, episodic evidence,
 cross-turn rationale, or host-runtime Session A/Session B behavior.
 
-- [ ] Fix and cover short continuity prompts after learning. In the regression's hash-embedding setup,
-      `Let's continue the Orion work.` produces a continuity retrieval plan but zero recalled records;
-      the more descriptive prompt succeeds. Do not lower global recognition thresholds merely to
+- [x] Fix and cover short continuity prompts after learning. In the regression's hash-embedding setup,
+      `Let's continue the Orion work.` previously produced a plan but zero recalled records.
+      Existing continuity query recovery and the native Phoenix short-prompt gate now pass; Do not lower global recognition thresholds merely to
       make the fixture pass.
 
 ---
