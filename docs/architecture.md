@@ -352,3 +352,16 @@ Injected memory uses ordinary host context and provider-neutral text. The core d
 Anthropic-specific blocks, OpenAI-only roles, Bedrock-incompatible fields, or OpenCode message types.
 Host and model optimizations remain optional adapters, so PostgreSQL and OpenCode v2 are defaults at
 their respective boundaries rather than definitions of the architecture.
+
+## Retrieval policy boundary
+
+The generic planner, recall engine and orchestrator use the fixed eligibility functions in
+`src/retrieval-policy.ts`. Institutional review/applicability logic lives behind that boundary;
+provider output cannot replace or disable it. Catalog decisions retain the existing expiry,
+invalid-review and deterministic-gate reasons in retrieval traces and `memory_explain`.
+Missing applicability context, malformed metadata or failed policy evaluation denies eligibility.
+
+Recall's shape, scope and supersession validation remains mandatory before policy evaluation.
+Both structured and metadata-carried institutional claims are checked. The boundary does not
+grant persistence, correction approval or cross-project authorization and introduces no plugin
+registry or configurable security callback.

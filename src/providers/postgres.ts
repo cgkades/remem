@@ -2494,39 +2494,40 @@ export class PostgresMemoryProvider
       following_id: string | null
     }
     const matched = await this.pool.query<MatchRow>(
-      `WITH scope AS (
-         SELECT id, session_id, project_id, provider_id, kind, occurred_at, host, role, origin,
-                turn_id, message_id, safe_text, payload, evidence_refs, evidence_id,
-                content_hash, schema_version, search_vector,
-                -- Partition by the full (provider_id, project_id, session_id)
-                -- isolation boundary, not session_id alone. These columns are
-                -- constant across the CTE (pinned by the WHERE below), so this
-                -- does not change the computed neighbors today -- it encodes
-                -- the cross-project/provider isolation invariant explicitly so
-                -- a future edit that broadens the WHERE clause (or reuses this
-                -- window outside the scoped CTE) cannot silently leak a
-                -- neighbor across projects. session_events_evidence_scope_idx
-                -- covers this ordering.
-                LAG(id) OVER (PARTITION BY provider_id, project_id, session_id ORDER BY occurred_at, id) AS preceding_id,
-                LEAD(id) OVER (PARTITION BY provider_id, project_id, session_id ORDER BY occurred_at, id) AS following_id
-         FROM remem.session_events
-         WHERE provider_id = $1 AND project_id = $2 AND evidence_id IS NOT NULL
-       ),
-       query AS (SELECT plainto_tsquery('simple', $3) AS terms)
-       SELECT scope.id, scope.session_id, scope.project_id, scope.provider_id, scope.kind,
-              scope.occurred_at, scope.host, scope.role, scope.origin, scope.turn_id,
-              scope.message_id, scope.safe_text, scope.payload, scope.evidence_refs,
-              scope.evidence_id, scope.content_hash, scope.schema_version,
-              scope.preceding_id, scope.following_id
-       FROM scope, query
-       WHERE scope.search_vector @@ query.terms AND scope.role = ANY($5::text[])
-         AND (NOT $6::boolean OR scope.session_id <> $7::text)
-       ORDER BY ts_rank_cd(scope.search_vector, query.terms) DESC,
-         CASE WHEN $6::boolean AND scope.payload->>'status'='completed'
-           AND (scope.payload->'result'->>'exit' IS NULL OR scope.payload->'result'->>'exit'='0')
-           THEN 0 ELSE 1 END,
-         scope.occurred_at DESC, scope.id
-       LIMIT $4`,
+      `WITH query AS (SELECT plainto_tsquery('simple', $3) AS terms),
+       matched AS MATERIALIZED (
+         SELECT e.*, ts_rank_cd(e.search_vector, query.terms) AS search_rank,
+           CASE WHEN $6::boolean AND e.payload->>'status'='completed'
+             AND (e.payload->'result'->>'exit' IS NULL OR e.payload->'result'->>'exit'='0')
+             THEN 0 ELSE 1 END AS outcome_rank
+         FROM remem.session_events e, query
+         WHERE e.provider_id=$1 AND e.project_id=$2 AND e.evidence_id IS NOT NULL
+           AND e.search_vector @@ query.terms AND e.role=ANY($5::text[])
+           AND (NOT $6::boolean OR e.session_id <> $7::text)
+         ORDER BY search_rank DESC, outcome_rank, e.occurred_at DESC, e.id
+         LIMIT $4
+       )
+       SELECT matched.id, matched.session_id, matched.project_id, matched.provider_id, matched.kind,
+              matched.occurred_at, matched.host, matched.role, matched.origin, matched.turn_id,
+              matched.message_id, matched.safe_text, matched.payload, matched.evidence_refs,
+              matched.evidence_id, matched.content_hash, matched.schema_version,
+              preceding.id AS preceding_id, following.id AS following_id
+       FROM matched
+       LEFT JOIN LATERAL (
+         SELECT e.id FROM remem.session_events e
+         WHERE $8::boolean AND e.provider_id=$1 AND e.project_id=$2
+           AND e.session_id=matched.session_id AND e.evidence_id IS NOT NULL
+           AND (e.occurred_at,e.id) < (matched.occurred_at,matched.id)
+         ORDER BY e.occurred_at DESC,e.id DESC LIMIT 1
+       ) preceding ON true
+       LEFT JOIN LATERAL (
+         SELECT e.id FROM remem.session_events e
+         WHERE $8::boolean AND e.provider_id=$1 AND e.project_id=$2
+           AND e.session_id=matched.session_id AND e.evidence_id IS NOT NULL
+           AND (e.occurred_at,e.id) > (matched.occurred_at,matched.id)
+         ORDER BY e.occurred_at,e.id LIMIT 1
+       ) following ON true
+       ORDER BY matched.search_rank DESC, matched.outcome_rank, matched.occurred_at DESC, matched.id`,
       [
         providerId,
         context.projectId,
@@ -2535,6 +2536,7 @@ export class PostgresMemoryProvider
         roles,
         options.automaticRecall === true,
         context.sessionId ?? "",
+        options.includeNeighbors !== false && options.automaticRecall !== true,
       ],
     )
     if (matched.rows.length === 0) return { matches: [], budgetExhausted: false }
