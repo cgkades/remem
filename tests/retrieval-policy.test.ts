@@ -78,8 +78,9 @@ function provider(records: MemoryRecord[], entries: CatalogEntry[] = [entry()]):
       structuredEntities: false,
       filesystemDocuments: false,
     }),
-    catalog: async () => entries,
-    search: async () => records.map((record) => ({ record, score: 0.9, reasons: ["fixture"] })),
+    catalog: () => Promise.resolve(entries),
+    search: () =>
+      Promise.resolve(records.map((record) => ({ record, score: 0.9, reasons: ["fixture"] }))),
   }
 }
 
