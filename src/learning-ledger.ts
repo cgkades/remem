@@ -28,5 +28,8 @@ export interface CandidateLineage {
   revision: number
   observationIds: string[]
   availableObservationIds: string[]
+  policyVersion?: string
+  policyOutcome?: string
+  policyReason?: string
   audit: { revision: number; state: string; action: string; actor: string }[]
 }

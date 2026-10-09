@@ -3,11 +3,7 @@ import { Pool } from "pg"
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { RememPlugin } from "../src/hosts/opencode/v2.js"
 import { PostgresMemoryProvider } from "../src/providers/postgres.js"
-import {
-  candidateFromRow,
-  DeterministicConsolidationPipeline,
-  type CandidateRow,
-} from "../src/consolidation.js"
+import { candidateFromRow, type CandidateRow } from "../src/consolidation.js"
 import { runMigrations } from "../src/storage/migrations.js"
 import { observationFromResolvedTask, extractProcedureCandidate } from "../src/procedure.js"
 import { parseConfig } from "../src/config.js"
@@ -31,7 +27,7 @@ const config = {
   catalogLimit: 100,
 }
 
-function host() {
+function host(autoPromote = true) {
   const hooks = new Map<string, ((event: unknown) => unknown)[]>()
   const hook = (name: string, callback: (event: unknown) => unknown) => {
     hooks.set(name, [...(hooks.get(name) ?? []), callback])
@@ -43,7 +39,7 @@ function host() {
         providers: [config],
         embedding: { backend: "hash" },
         planner: { semantic: false },
-        capture: { enabled: true, autoPromote: true },
+        capture: { enabled: true, autoPromote },
         evidenceAdmission: { enabled: true },
         providerTimeoutMs: 5000,
         budgets: { catalogTokens: 2000, recallTokens: 5000, perProviderTokens: 4500 },
@@ -91,8 +87,8 @@ integration("host verified procedure learning", () => {
     await pool.end()
   })
 
-  async function start(sessionID: string) {
-    const instance = host()
+  async function start(sessionID: string, autoPromote = true) {
+    const instance = host(autoPromote)
     const dispose = await RememPlugin.setup(instance.context)
     await instance.emit("prompt", {
       sessionID,
@@ -102,7 +98,7 @@ integration("host verified procedure learning", () => {
     return { ...instance, dispose }
   }
 
-  it("recovers stored investigation evidence after restart, captures once and recalls only after review", async () => {
+  it("recovers stored investigation evidence after restart, captures once and recalls without approval", async () => {
     const session = "restart-procedure"
     const first = await start(session)
     await first.emit("tool.execute.after", tool(0, session))
@@ -119,14 +115,14 @@ integration("host verified procedure learning", () => {
     )
     expect(rows.rows).toHaveLength(1)
     const row = rows.rows[0]!
-    expect(row.status).toBe("pending")
+    expect(row.status).toBe("promoted")
     const lineage = await store.candidateLineage(row.id, {
       ...procedureContext,
       sessionId: session,
     })
     expect(lineage?.observationIds).toHaveLength(4)
     expect(lineage?.availableObservationIds).toEqual(lineage?.observationIds)
-    expect(lineage?.revision).toBe(0)
+    expect(lineage?.revision).toBe(1)
     expect(
       (
         await pool.query(
@@ -137,15 +133,7 @@ integration("host verified procedure learning", () => {
     ).toBe(0)
     expect(
       (await pool.query("SELECT id FROM remem.memories WHERE type='procedure'")).rowCount,
-    ).toBe(0)
-
-    // The pending-review boundary is intentional Phase 5 behavior, not the
-    // future Phase 6 ordinary low-risk automatic-promotion acceptance gate.
-    await store.reviewCandidate(row.id, "approved", 0)
-    const result = await new DeterministicConsolidationPipeline(store).consolidate([
-      { ...candidateFromRow(row), status: "approved" },
-    ])
-    expect(result[0]?.status).toBe("promoted")
+    ).toBe(1)
     const fresh = host()
     const disposeFresh = await RememPlugin.setup(fresh.context)
     try {
@@ -175,7 +163,7 @@ integration("host verified procedure learning", () => {
       expect(injected).not.toContain("fixture-secret")
       console.info(
         JSON.stringify({
-          gate: "reviewed-procedure-recall",
+          gate: "automatic-procedure-recall",
           procedureFixtureAccurate: true,
           provenanceSources: 4,
           unsupportedRootCause: false,
@@ -188,6 +176,31 @@ integration("host verified procedure learning", () => {
     } finally {
       await disposeFresh?.()
     }
+  })
+
+  it("keeps low-risk procedures pending when automatic learning is disabled", async () => {
+    const session = "disabled-policy"
+    const instance = await start(session, false)
+    for (let index = 0; index < 3; index++)
+      await instance.emit("tool.execute.after", tool(index, session))
+    await instance.dispose?.()
+    const rows = await pool.query<{
+      status: string
+      policy_outcome: string
+      policy_version: string
+    }>(
+      `SELECT c.status,l.policy_outcome,l.policy_version FROM remem.candidate_memories c
+       JOIN remem.candidate_lineage l ON l.candidate_id=c.id JOIN remem.session_events e ON e.id=c.session_event_id
+       WHERE e.session_id=$1`,
+      [session],
+    )
+    expect(rows.rows).toEqual([
+      {
+        status: "pending",
+        policy_outcome: "require-review",
+        policy_version: "scoped-evidence-learning-v1",
+      },
+    ])
   })
 
   it.each(["failed", "unknown", "secret", "abandoned", "parallel", "new-task"])(

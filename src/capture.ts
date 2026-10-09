@@ -474,43 +474,55 @@ export class CaptureCoordinator {
             (signal) => this.extractor.extract([observation], signal),
             this.shutdown.signal,
           )
+          const usePolicy = Array.isArray(observation.payload.evidenceRefs)
           const promote =
-            this.config.autoPromote && observation.payload.requireReview !== true
+            this.config.autoPromote && (usePolicy || observation.payload.requireReview !== true)
               ? this.promote
               : undefined
+          let promoted = 0
+          let lastReason: string | undefined
           for (const candidate of candidates) {
-            await withTimeout(
+            const receipt = await withTimeout(
               this.config.timeoutMs,
               (signal) =>
                 this.store.persistCandidate(observation, candidate, {
                   timeoutMs: this.config.timeoutMs,
                   signal,
                   autoApprove: Boolean(promote),
+                  ...(usePolicy ? { applyLearningPolicy: true } : {}),
                 }),
               this.shutdown.signal,
             )
-            if (promote) {
+            lastReason = receipt?.decision.reason
+            if (
+              promote &&
+              (!usePolicy ||
+                (receipt?.status === "approved" && receipt.decision.outcome === "auto-promote"))
+            ) {
               const approved = { ...candidate, status: "approved" as const }
               await withTimeout(
                 this.config.timeoutMs,
                 (signal) => promote(approved, signal),
                 this.shutdown.signal,
               )
+              promoted++
             }
           }
           this.finishCapture(
             observation,
-            promote && candidates.length > 0
+            promoted > 0
               ? {
                   outcome: "promoted",
                   kind: observation.kind,
                   confidence: Math.min(...candidates.map((candidate) => candidate.confidence)),
                   reason:
                     candidates.length > 1
-                      ? `captured ${candidates.length} statements`
+                      ? `promoted ${promoted} of ${candidates.length} statements`
                       : (candidates[0]?.reasons[0] ?? "captured statement"),
                 }
-              : undefined,
+              : lastReason
+                ? { outcome: "pending", kind: observation.kind, reason: lastReason }
+                : undefined,
           )
         } catch (error) {
           this.finishCapture(observation, {

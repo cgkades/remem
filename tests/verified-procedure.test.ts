@@ -261,7 +261,7 @@ describe("stored native check recovery", () => {
     expect(verifiedProcedureFromEvidence(evidence, procedureContext)).toBeUndefined()
   })
 
-  it("retains new host procedures pending even with legacy auto-promotion enabled", async () => {
+  it("does not consolidate a new host procedure without a server authorization receipt", async () => {
     const persistCandidate = vi.fn(() => Promise.resolve())
     const promote = vi.fn(() => Promise.resolve())
     const coordinator = new CaptureCoordinator(
@@ -277,7 +277,7 @@ describe("stored native check recovery", () => {
     expect(persistCandidate).toHaveBeenCalledExactlyOnceWith(
       expect.any(Object),
       expect.objectContaining({ status: "pending" }),
-      expect.objectContaining({ autoApprove: false }),
+      expect.objectContaining({ autoApprove: true, applyLearningPolicy: true }),
     )
     expect(promote).not.toHaveBeenCalled()
   })

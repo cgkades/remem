@@ -6,6 +6,7 @@ import type {
 } from "./capacity.js"
 import type { EvidenceEnvelope, EvidenceRole } from "./observation-admission.js"
 import type { MemoryContext, MemoryWrite } from "./types.js"
+import type { CaptureReceipt } from "./learning-policy.js"
 
 export type SessionEventKind =
   | "user-correction"
@@ -65,10 +66,13 @@ export interface ObservationStore {
       signal?: AbortSignal
       /** Trusted capture-policy authorization; never supplied by model text. */
       autoApprove?: boolean
+      /** Apply the store's versioned policy; autoApprove becomes operator
+       * preference, not authorization. Consolidation requires its receipt. */
+      applyLearningPolicy?: boolean
       /** Required to change an existing pending extraction. */
       expectedRevision?: number
     },
-  ): Promise<void>
+  ): Promise<void | CaptureReceipt>
   candidateStatus(context: MemoryContext): Promise<CandidateStatusSummary>
 }
 

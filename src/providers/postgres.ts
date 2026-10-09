@@ -1,5 +1,14 @@
 import { randomUUID } from "node:crypto"
+import { isDeepStrictEqual } from "node:util"
 import type { CandidateLineage } from "../learning-ledger.js"
+import { DeterministicCandidateExtractor } from "../capture.js"
+import {
+  assertionLearningKey,
+  decideLearning,
+  LEARNING_POLICY_VERSION,
+  type CaptureReceipt,
+  type LearningDecision,
+} from "../learning-policy.js"
 import {
   PROCEDURE_WINDOW_LIMIT,
   SHELL_RECOVERY_RULE,
@@ -112,6 +121,21 @@ import type {
 const COMPACTION_BATCH_SIZE = 500
 const HARD_LIMIT_BATCH_SIZE = 1000
 const EVIDENCE_ID_PATTERN = /^[a-f0-9]{64}$/u
+
+function learningComparableMemory(memory: MemoryWrite): MemoryWrite {
+  return {
+    ...memory,
+    ...(memory.metadata
+      ? {
+          metadata: Object.fromEntries(
+            Object.entries(memory.metadata).filter(
+              ([name]) => !["learningPolicy", "learningKey"].includes(name),
+            ),
+          ),
+        }
+      : {}),
+  }
+}
 
 interface MemoryRow extends QueryResultRow {
   id: string
@@ -1033,8 +1057,9 @@ export class PostgresMemoryProvider
         const ledger = await client.query<{
           state: CandidateMemory["status"] | "forgotten"
           memory_id: string | null
+          actor: string
         }>(
-          `SELECT state, memory_id FROM remem.candidate_lineage
+          `SELECT state, memory_id, actor FROM remem.candidate_lineage
            WHERE provider_id=$1 AND scope_kind=$2 AND scope_key=$3 AND candidate_id=$4 FOR UPDATE`,
           [this.id, scope.kind, key, candidate.id],
         )
@@ -1088,6 +1113,78 @@ export class PostgresMemoryProvider
         const durable = row ? { ...candidateFromRow(row), status: "approved" as const } : candidate
         if (row?.metadata.canonicalEvidence === true) {
           await this.assertCanonicalPromotionEvidence(client, durable)
+        }
+        const policy: unknown = row?.metadata.learningPolicy
+        if (
+          policy &&
+          typeof policy === "object" &&
+          "outcome" in policy &&
+          policy.outcome === "auto-promote" &&
+          previous?.actor !== "review"
+        ) {
+          if (!("version" in policy) || policy.version !== LEARNING_POLICY_VERSION)
+            throw new Error("automatic learning policy version is unsupported")
+          const savedObservation: unknown = row?.metadata.learningObservation
+          if (
+            !savedObservation ||
+            typeof savedObservation !== "object" ||
+            !("payload" in savedObservation) ||
+            !savedObservation.payload ||
+            typeof savedObservation.payload !== "object"
+          )
+            throw new Error("automatic learning observation is unavailable")
+          const observation = savedObservation as Omit<SessionObservation, "context">
+          const sources = await client.query<EpisodicEventRow>(
+            "SELECT * FROM remem.session_events WHERE id=ANY($1::uuid[]) AND provider_id=$2",
+            [durable.observationIds, this.id],
+          )
+          const firstSource = sources.rows.find((source) => source.id === durable.observationIds[0])
+          if (!firstSource) throw new Error("automatic learning evidence is unavailable")
+          const context = {
+            directory: key,
+            worktree: key,
+            projectId: firstSource.project_id,
+            sessionId: firstSource.session_id,
+          }
+          const reconstructed: SessionObservation = {
+            ...observation,
+            context,
+            payload: {
+              ...observation.payload,
+              text: observation.payload.verificationRule
+                ? durable.memory.content
+                : firstSource.safe_text,
+            },
+          }
+          await this.canonicalCaptureEvidence(client, reconstructed, durable)
+          const decision = await this.storedLearningDecision(
+            client,
+            reconstructed,
+            durable,
+            durable.observationIds,
+            true,
+          )
+          if (decision.outcome !== "auto-promote") {
+            await client.query(
+              "UPDATE remem.candidate_memories SET status='pending', metadata=jsonb_set(metadata,'{learningPolicy}',$2::jsonb) WHERE id=$1",
+              [candidate.id, JSON.stringify(decision)],
+            )
+            await client.query(
+              `UPDATE remem.candidate_lineage SET state='pending',action='learning-requires-review',actor='learning-policy',
+              policy_version=$5,policy_outcome=$6,policy_reason=$7 WHERE provider_id=$1 AND scope_kind=$2 AND scope_key=$3 AND candidate_id=$4`,
+              [
+                this.id,
+                scope.kind,
+                key,
+                candidate.id,
+                decision.version,
+                decision.outcome,
+                decision.reason,
+              ],
+            )
+            await client.query("COMMIT")
+            return { ...durable, status: "pending", reasons: [...durable.reasons, decision.reason] }
+          }
         }
         const forgotten = await client.query(
           `SELECT 1 FROM remem.forget_tombstones WHERE provider_id=$1 AND project_id=$2
@@ -1184,6 +1281,9 @@ export class PostgresMemoryProvider
       revision: number
       observation_ids: string[]
       available_ids: string[]
+      policy_version: string
+      policy_outcome: string | null
+      policy_reason: string | null
     }>(
       `SELECT l.*, ARRAY(SELECT e.id FROM remem.session_events e
           WHERE e.id=ANY(l.observation_ids) AND e.project_id=$3
@@ -1208,6 +1308,9 @@ export class PostgresMemoryProvider
       ...(row.memory_id ? { memoryId: row.memory_id } : {}),
       observationIds: row.observation_ids,
       availableObservationIds: row.available_ids,
+      policyVersion: row.policy_version,
+      ...(row.policy_outcome ? { policyOutcome: row.policy_outcome } : {}),
+      ...(row.policy_reason ? { policyReason: row.policy_reason } : {}),
       audit: audit.rows,
     }
   }
@@ -1375,6 +1478,7 @@ export class PostgresMemoryProvider
         candidate.id !== extracted.id ||
         candidate.memory.type !== "procedure" ||
         candidate.memory.content !== extracted.memory.content ||
+        !isDeepStrictEqual(learningComparableMemory(candidate.memory), extracted.memory) ||
         candidate.memory.scope.kind !== "project" ||
         candidate.memory.scope.id !== observation.context.projectId ||
         observation.payload.requireReview !== true
@@ -1388,6 +1492,72 @@ export class PostgresMemoryProvider
     return ids
   }
 
+  private async storedLearningDecision(
+    client: PoolClient,
+    observation: SessionObservation,
+    candidate: CandidateMemory,
+    ids: string[],
+    autoPromote: boolean,
+  ): Promise<LearningDecision> {
+    const rows = await client.query<EpisodicEventRow>(
+      "SELECT * FROM remem.session_events WHERE id=ANY($1::uuid[]) AND provider_id=$2 FOR SHARE",
+      [ids, this.id],
+    )
+    const evidence = ids
+      .map((id) => rows.rows.find((row) => row.id === id))
+      .filter((row): row is EpisodicEventRow => Boolean(row))
+      .map(episodicRowToEnvelope)
+    let supportedExtraction = Boolean(observation.payload.verificationRule)
+    if (!supportedExtraction) {
+      const extracted = await new DeterministicCandidateExtractor(
+        parseConfig({ capture: { maxInputCharacters: 20000, maxCandidateCharacters: 10000 } })
+          .config.capture,
+      ).extract([observation])
+      supportedExtraction = extracted.some(
+        (expected) =>
+          expected.id === candidate.id &&
+          expected.memory.content === candidate.memory.content &&
+          expected.memory.title === candidate.memory.title &&
+          expected.memory.type === candidate.memory.type &&
+          isDeepStrictEqual(learningComparableMemory(candidate.memory), expected.memory),
+      )
+    }
+    const input = {
+      candidate,
+      observation,
+      evidence,
+      supportedExtraction,
+      autoPromote,
+      now: Date.now(),
+    }
+    const preliminary = decideLearning(input)
+    if (!preliminary.key || preliminary.outcome !== "auto-promote") return preliminary
+    const existing = await client.query<{
+      title: string
+      content: string
+      metadata: Record<string, unknown>
+    }>(
+      `SELECT title,content,metadata FROM remem.memories WHERE provider_id=$1 AND scope_kind='project'
+       AND scope_id=$2 AND type=$3 AND freshness='current' ORDER BY created_at DESC,id LIMIT 51`,
+      [this.id, observation.context.projectId, candidate.memory.type],
+    )
+    const hasConflict =
+      existing.rows.length > 50 ||
+      existing.rows.some((row) => {
+        const key =
+          row.metadata.learningKey ??
+          (candidate.memory.type === "procedure"
+            ? undefined
+            : assertionLearningKey({ ...candidate.memory, title: row.title, content: row.content }))
+        return (
+          key === preliminary.key &&
+          row.content.replace(/\s+/gu, " ").trim() !==
+            candidate.memory.content.replace(/\s+/gu, " ").trim()
+        )
+      })
+    return hasConflict ? decideLearning({ ...input, hasConflict }) : preliminary
+  }
+
   async persistCandidate(
     observation: SessionObservation,
     candidate: CandidateMemory,
@@ -1395,11 +1565,16 @@ export class PostgresMemoryProvider
       timeoutMs?: number
       signal?: AbortSignal
       autoApprove?: boolean
+      applyLearningPolicy?: boolean
       expectedRevision?: number
     } = {},
-  ): Promise<void> {
+  ): Promise<void | CaptureReceipt> {
     options.signal?.throwIfAborted()
-    if (observation.payload.verificationRule !== undefined && options.autoApprove)
+    if (
+      observation.payload.verificationRule !== undefined &&
+      options.autoApprove &&
+      !options.applyLearningPolicy
+    )
       throw new Error("host-derived procedures require review")
     if (candidate.status !== "pending")
       throw new TypeError("automatic capture may only persist pending candidates")
@@ -1436,6 +1611,35 @@ export class PostgresMemoryProvider
       }
       await this.lockLearningScope(client, scope)
       const canonicalIds = await this.canonicalCaptureEvidence(client, observation, candidate)
+      if (options.applyLearningPolicy && !canonicalIds)
+        throw new Error("learning policy requires canonical evidence")
+      const decision =
+        options.applyLearningPolicy && canonicalIds
+          ? await this.storedLearningDecision(
+              client,
+              observation,
+              candidate,
+              canonicalIds,
+              Boolean(options.autoApprove),
+            )
+          : undefined
+      const approved = decision ? decision.outcome === "auto-promote" : Boolean(options.autoApprove)
+      const receipt: CaptureReceipt | undefined = decision
+        ? {
+            decision,
+            status: approved
+              ? "approved"
+              : decision.outcome === "require-review"
+                ? "pending"
+                : "rejected",
+          }
+        : undefined
+      if (decision)
+        storedMemory.metadata = {
+          ...learningComparableMemory(candidate.memory).metadata,
+          learningPolicy: decision,
+          ...(decision.key ? { learningKey: decision.key } : {}),
+        }
       const observationIds = canonicalIds ?? candidate.observationIds
       const primaryObservationId = canonicalIds?.[0] ?? observation.id
       const prior = await client.query<{
@@ -1484,7 +1688,20 @@ export class PostgresMemoryProvider
         (old && old.status !== "pending")
       ) {
         await client.query("COMMIT")
-        return
+        return receipt &&
+          (tombstone.rowCount ||
+            ["rejected", "expired", "forgotten"].includes(previous?.state ?? "") ||
+            old?.status === "rejected" ||
+            old?.status === "expired")
+          ? {
+              status: "rejected",
+              decision: {
+                ...receipt.decision,
+                outcome: "reject",
+                reason: "processed-candidate-unavailable",
+              },
+            }
+          : receipt
       }
       if (
         old &&
@@ -1493,9 +1710,30 @@ export class PostgresMemoryProvider
           options.expectedRevision !== (previous?.revision ?? 0))
       )
         throw new Error("candidate revision conflict")
-      if (old?.unchanged && !options.autoApprove) {
+      if (old?.unchanged && !approved) {
         await client.query("COMMIT")
-        return
+        return receipt
+      }
+      if (decision && receipt?.status === "rejected") {
+        await client.query(
+          `INSERT INTO remem.candidate_lineage
+           (provider_id,scope_kind,scope_key,candidate_id,state,observation_ids,action,actor,policy_version,extractor_version,policy_outcome,policy_reason)
+           VALUES ($1,$2,$3,$4,'rejected',$5,'learning-declined','learning-policy',$6,$7,$8,$9)
+           ON CONFLICT DO NOTHING`,
+          [
+            this.id,
+            scope.kind,
+            key,
+            candidate.id,
+            observationIds,
+            decision.version,
+            "evidence-linked-v1",
+            decision.outcome,
+            decision.reason,
+          ],
+        )
+        await client.query("COMMIT")
+        return receipt
       }
       options.signal?.throwIfAborted()
       const persistedObservation = canonicalIds
@@ -1561,8 +1799,22 @@ export class PostgresMemoryProvider
             reasons: candidate.reasons,
             observationIds,
             ...(canonicalIds ? { canonicalEvidence: true } : {}),
+            ...(decision
+              ? {
+                  learningPolicy: decision,
+                  learningObservation: {
+                    id: observation.id,
+                    kind: observation.kind,
+                    occurredAt: observation.occurredAt,
+                    source: observation.source,
+                    payload: Object.fromEntries(
+                      Object.entries(observation.payload).filter(([name]) => name !== "text"),
+                    ),
+                  },
+                }
+              : {}),
           }),
-          options.autoApprove ? "approved" : "pending",
+          approved ? "approved" : "pending",
           observation.id,
         ],
       )
@@ -1584,26 +1836,29 @@ export class PostgresMemoryProvider
       }
       await client.query(
         `INSERT INTO remem.candidate_lineage
-        (provider_id,scope_kind,scope_key,candidate_id,state,observation_ids,action,actor)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,'capture')
+        (provider_id,scope_kind,scope_key,candidate_id,state,observation_ids,action,actor,policy_version,extractor_version,policy_outcome,policy_reason)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,'capture',$8,$9,$10,$11)
         ON CONFLICT (provider_id,scope_kind,scope_key,candidate_id) DO UPDATE SET
-          state=EXCLUDED.state, observation_ids=EXCLUDED.observation_ids, action=EXCLUDED.action, actor='capture'`,
+          state=EXCLUDED.state, observation_ids=EXCLUDED.observation_ids, action=EXCLUDED.action, actor='capture',
+          policy_version=EXCLUDED.policy_version,extractor_version=EXCLUDED.extractor_version,
+          policy_outcome=EXCLUDED.policy_outcome,policy_reason=EXCLUDED.policy_reason`,
         [
           this.id,
           scope.kind,
           key,
           candidate.id,
-          options.autoApprove ? "approved" : "pending",
+          approved ? "approved" : "pending",
           observationIds,
-          options.autoApprove
-            ? "capture-auto-approved"
-            : old
-              ? "capture-refreshed"
-              : "capture-persisted",
+          approved ? "capture-auto-approved" : old ? "capture-refreshed" : "capture-persisted",
+          decision?.version ?? "deterministic-consolidation-v1",
+          decision ? "evidence-linked-v1" : "legacy-or-capture-v1",
+          decision?.outcome ?? null,
+          decision?.reason ?? null,
         ],
       )
       options.signal?.throwIfAborted()
       await client.query("COMMIT")
+      return receipt
     } catch (error) {
       await client.query("ROLLBACK")
       throw error
