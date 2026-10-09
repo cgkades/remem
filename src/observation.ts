@@ -60,14 +60,25 @@ export interface ObservationStore {
   persistCandidate(
     observation: SessionObservation,
     candidate: CandidateMemory,
-    options?: { timeoutMs?: number; signal?: AbortSignal },
+    options?: {
+      timeoutMs?: number
+      signal?: AbortSignal
+      /** Trusted capture-policy authorization; never supplied by model text. */
+      autoApprove?: boolean
+      /** Required to change an existing pending extraction. */
+      expectedRevision?: number
+    },
   ): Promise<void>
   candidateStatus(context: MemoryContext): Promise<CandidateStatusSummary>
 }
 
 export interface CandidateReviewStore extends ObservationStore {
   listCandidates(status?: CandidateMemory["status"]): Promise<CandidateReviewItem[]>
-  reviewCandidate(id: string, status: "approved" | "rejected"): Promise<void>
+  reviewCandidate(
+    id: string,
+    status: "approved" | "rejected",
+    expectedRevision?: number,
+  ): Promise<void>
 }
 
 export function isObservationStore(value: unknown): value is ObservationStore {

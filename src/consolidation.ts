@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { isAtomicCandidateStore } from "./learning-ledger.js"
 import type { Pool, QueryResultRow } from "pg"
 import type { CandidateMemory, ConsolidationPipeline } from "./observation.js"
 import { describeError } from "./text.js"
@@ -212,6 +213,17 @@ export class DeterministicConsolidationPipeline implements ConsolidationPipeline
     candidate: CandidateMemory,
     signal?: AbortSignal,
   ): Promise<CandidateMemory> {
+    if (isAtomicCandidateStore(this.provider)) {
+      return this.provider.withCandidateTransaction(
+        candidate,
+        (provider, durableCandidate) =>
+          new DeterministicConsolidationPipeline(provider, {
+            batchSize: this.batchSize,
+            nearDuplicateSimilarity: this.nearDuplicateSimilarity,
+          }).consolidateCandidate(durableCandidate, signal),
+        signal,
+      )
+    }
     if (!this.provider.search || !this.provider.write) {
       throw new Error("provider does not support consolidation reads and writes")
     }
@@ -347,7 +359,7 @@ export class DeterministicConsolidationPipeline implements ConsolidationPipeline
   }
 }
 
-interface CandidateRow extends QueryResultRow {
+export interface CandidateRow extends QueryResultRow {
   id: string
   session_event_id: string | null
   type: string
@@ -360,7 +372,7 @@ interface CandidateRow extends QueryResultRow {
   metadata: Record<string, unknown>
 }
 
-function candidateFromRow(row: CandidateRow): CandidateMemory {
+export function candidateFromRow(row: CandidateRow): CandidateMemory {
   const saved = row.metadata.memory
   const memoryMetadata =
     saved && typeof saved === "object" && !Array.isArray(saved)
@@ -369,7 +381,17 @@ function candidateFromRow(row: CandidateRow): CandidateMemory {
   const type = MEMORY_TYPES.has(row.type as MemoryType) ? (row.type as MemoryType) : "other"
   return {
     id: row.id,
-    observationIds: row.session_event_id ? [row.session_event_id] : [],
+    observationIds: Array.isArray(row.metadata.observationIds)
+      ? row.metadata.observationIds
+          .filter(
+            (id): id is string =>
+              typeof id === "string" &&
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(id),
+          )
+          .slice(0, 16)
+      : row.session_event_id
+        ? [row.session_event_id]
+        : [],
     memory: {
       ...memoryMetadata,
       type,

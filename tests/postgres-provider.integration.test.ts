@@ -725,8 +725,8 @@ integration("PostgreSQL managed provider", () => {
       `INSERT INTO remem.candidate_memories
         (id, type, title, content, scope_kind, scope_id, confidence, status, metadata)
        VALUES
-        ($1, 'preference', 'Prefer concise release notes', 'Keep release notes concise and focused.', 'project', 'phoenix', 0.9, 'approved', '{}'::jsonb),
-        ($2, 'preference', 'Prefer concise release notes', 'Keep release notes concise and focused.', 'project', 'phoenix', 0.9, 'approved', '{}'::jsonb)`,
+        ($1, 'preference', 'Prefer concise release notes', 'Keep release notes concise and focused.', 'project', 'phoenix', 0.9, 'approved', '{"providerId":"remem-local"}'::jsonb),
+        ($2, 'preference', 'Prefer concise release notes', 'Keep release notes concise and focused.', 'project', 'phoenix', 0.9, 'approved', '{"providerId":"remem-local"}'::jsonb)`,
       [firstCandidate, secondCandidate],
     )
     const runner = new PostgresConsolidationRunner(
@@ -776,7 +776,7 @@ integration("PostgreSQL managed provider", () => {
     await pool.query(
       `INSERT INTO remem.candidate_memories
         (id, type, title, content, scope_kind, scope_id, confidence, status, metadata)
-       VALUES ($1, 'procedure', $2, 'This candidate was claimed before the process crashed.', 'project', 'phoenix', 0.9, 'consolidating', '{}'::jsonb)`,
+       VALUES ($1, 'procedure', $2, 'This candidate was claimed before the process crashed.', 'project', 'phoenix', 0.9, 'consolidating', '{"providerId":"remem-local"}'::jsonb)`,
       [candidateId, title],
     )
     await pool.query(
@@ -1095,7 +1095,7 @@ integration("PostgreSQL managed provider", () => {
       },
       reasons: ["updated extraction"],
     }
-    await provider.persistCandidate(observation, updatedCandidate)
+    await provider.persistCandidate(observation, updatedCandidate, { expectedRevision: 0 })
     await expect(
       provider.persistCandidate(
         {
@@ -1111,7 +1111,7 @@ integration("PostgreSQL managed provider", () => {
           },
         },
       ),
-    ).rejects.toThrow("captured observation id belongs to another context")
+    ).rejects.toThrow("captured candidate id belongs to another context")
 
     expect(await provider.candidateStatus(context)).toMatchObject({ pending: 1 })
     const persisted = (

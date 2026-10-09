@@ -496,7 +496,7 @@ describe("CaptureCoordinator", () => {
     })
   })
 
-  it("promotes screened captures without creating a review candidate in automatic mode", async () => {
+  it("persists screened captures before automatic promotion for durable lineage", async () => {
     const store = new RecordingStore()
     const promoted: CandidateMemory[] = []
     const coordinator = new CaptureCoordinator(
@@ -514,7 +514,7 @@ describe("CaptureCoordinator", () => {
 
     expect(promoted).toHaveLength(1)
     expect(promoted[0]?.status).toBe("approved")
-    expect(store.persisted).toHaveLength(0)
+    expect(store.persisted).toHaveLength(1)
   })
 
   it("contains persistence failures so prompt capture remains fail-open", async () => {
