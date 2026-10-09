@@ -1,14 +1,9 @@
 import type { PlannerConfig } from "./config.js"
-import {
-  applicabilityConditionSatisfied,
-  institutionalApplies,
-  institutionalReviewStatus,
-} from "./institutional.js"
+import { catalogPolicyDecision } from "./retrieval-policy.js"
 import { clamp, containsPhrase, overlapRatio, tokenize } from "./text.js"
 import type {
   CatalogEntry,
   CatalogMatch,
-  ApplicabilityDecision,
   MemoryContext,
   ProviderRetrievalRequest,
   RetrievalPlan,
@@ -185,36 +180,8 @@ export class DeterministicRetrievalPlanner {
     context?: MemoryContext,
   ): RetrievalPlan {
     const applicability = entries.flatMap((entry) => {
-      const institutional = entry.institutional
-      if (!institutional || !context) return []
-      const reviewStatus = institutionalReviewStatus(institutional)
-      if (reviewStatus !== "current") {
-        return [
-          {
-            catalogEntryId: entry.id,
-            institutionalId: institutional.id,
-            applicable: false,
-            reason:
-              reviewStatus === "expired"
-                ? "institutional review expired"
-                : "institutional review is invalid",
-          } satisfies ApplicabilityDecision,
-        ]
-      }
-      const applicable = institutionalApplies(institutional, context, prompt)
-      const failed = institutional.applicability.conditions.find(
-        (condition) => !applicabilityConditionSatisfied(condition, context, prompt),
-      )
-      return [
-        {
-          catalogEntryId: entry.id,
-          institutionalId: institutional.id,
-          applicable,
-          reason: applicable
-            ? "deterministic applicability conditions passed"
-            : `failed deterministic gate ${failed?.id ?? "none"}`,
-        } satisfies ApplicabilityDecision,
-      ]
+      const decision = catalogPolicyDecision(entry, context, prompt)
+      return decision ? [decision] : []
     })
     const blocked = new Set(
       applicability

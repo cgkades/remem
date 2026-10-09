@@ -7,7 +7,7 @@ import type {
   CorrectionReviewQueue,
 } from "./correction.js"
 import { MemoryDiagnostics } from "./diagnostics.js"
-import { institutionalApplies, institutionalReviewStatus } from "./institutional.js"
+import { catalogPolicyAllows } from "./retrieval-policy.js"
 import { isCapacityStore, isObservationStore } from "./observation.js"
 import { DeterministicRetrievalPlanner } from "./planner.js"
 import { SemanticCatalogRecognizer, type SemanticRecognitionResult } from "./planning/semantic.js"
@@ -196,9 +196,7 @@ export class RememOrchestrator {
       catalog.entries.filter(
         (entry) =>
           !blockedCatalogIds.has(entry.id) &&
-          (!entry.institutional ||
-            (institutionalReviewStatus(entry.institutional) === "current" &&
-              institutionalApplies(entry.institutional, context, prompt))),
+          catalogPolicyAllows(entry, context, prompt),
       ),
       this.config.budgets.catalogTokens,
       catalog.providers,
