@@ -20,6 +20,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The Pi package includes a host-neutral `remem-memory-tools` skill covering recall/search,
+  uncertainty, provenance and untrusted memory. Native local-package and installed-tarball tests
+  verify one discovery/body load; OpenCode behavior is unchanged. Refs [#56](https://github.com/cgkades/remem/issues/56).
+
 - Pi now exposes correction submission and redacted review-status tools using the existing queue.
   Submissions never approve/apply memory; durable review selects an explicit primary PostgreSQL
   provider, with a transient session queue otherwise. Status is project/worktree scoped, bounded

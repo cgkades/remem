@@ -194,6 +194,15 @@ see below) to configure providers, capture, and compaction, then restart Pi.
 
 ## Installing the Extension
 
+The package also declares `pi.skills: ["./skills"]` and ships the host-neutral
+`remem-memory-tools` skill. Pi discovers it through the same local package registration; no extra
+extension hook or duplicate skill injection is needed. Its brief catalog description is available
+when a file-reading tool is enabled, and Pi loads its body on demand. It explains automatic versus
+explicit search, empty/stale results, source uncertainty, untrusted evidence and the human correction
+boundary. It does not broaden capture or claim `memory_search` searches every transcript/episode.
+Use Pi's `--no-skills` or resource filters to disable discovery. Other hosts can read the same
+guidance, but OpenCode behavior is unchanged.
+
 `agentic-remem` declares itself as a [Pi package](https://github.com/earendil-works/pi-coding-agent/blob/main/docs/packages.md)
 via `package.json#pi.extensions`, pointing at the built `dist/hosts/pi/index.js`. `remem init --pi`
 adds this package's own installed root directory as a local-path entry to Pi's global `packages`
@@ -226,6 +235,12 @@ Restart Pi (or run `/reload`) after changing its settings for the extension chan
 
 Unit tests (`tests/pi-integration.test.ts`, run via `npm run test:pi`) exercise the adapter against a
 hand-rolled fake `ExtensionAPI`/`ExtensionContext`.
+
+After `npm run build`, `npm run test:pi:guidance` drives native Pi package discovery with an explicit
+duplicate skill path: the system prompt must list the skill once, its body stays absent until the
+native `read` tool loads it, and the package extension's real `memory_status` works. `npm run
+pack:smoke` repeats this against an installed tarball outside the repository, verifying both manifest
+discovery and shipped skill content. CI runs local and installed cases with deterministic mock models.
 
 An end-to-end test (`tests/pi.e2e.mjs`, run via `npm run test:pi:e2e`) drives the real `pi` CLI binary
 against a local, deterministic OpenAI-compatible mock model server -- no real provider credentials

@@ -90,6 +90,14 @@ try {
     cwd: application,
     stdio: "inherit",
   })
+  execFileSync(process.execPath, [path.join(repository, "tests/pi-guidance.e2e.mjs")], {
+    cwd: application,
+    env: {
+      ...npmEnvironment,
+      REMEM_E2E_PI_PACKAGE_ROOT: path.join(application, "node_modules", "agentic-remem"),
+    },
+    stdio: "inherit",
+  })
 } finally {
   await rm(temporary, { recursive: true, force: true })
 }
