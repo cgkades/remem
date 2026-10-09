@@ -67,6 +67,8 @@ export interface RememAppConfig {
   }
   pi?: {
     configured: boolean
+    /** Optional terminal-only advisory counts; disabled by default. */
+    memoryStatusUI?: boolean
     settingsPath?: string
   }
 }

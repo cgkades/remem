@@ -131,11 +131,19 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:pi
+      - run: npx prettier --check src/hosts/pi/index.ts tests/pi-integration.test.ts src/storage/config-file.ts
       - run: npx prettier --check tests/pi-guidance.e2e.mjs
       - run: npm run build
       - run: npm run test:pi:guidance
       - if: failure()
         run: npx prettier tests/pi-guidance.e2e.mjs
+
+      - if: failure()
+        run: npx prettier src/hosts/pi/index.ts
+      - if: failure()
+        run: npx prettier tests/pi-integration.test.ts
+      - if: failure()
+        run: npx prettier src/storage/config-file.ts
 
   pi-e2e:
     name: Pi host E2E (Docker, mock model)

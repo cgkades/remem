@@ -57,6 +57,11 @@ interface PiSessionState {
    * so this counter is naturally scoped to one session's lifetime.
    */
   dispatchCount: number
+  statusUI: boolean
+  statusPending?: boolean
+  lastStatusAt?: number
+  statusAbort?: AbortController
+  clearStatus?: () => void
 }
 
 /**
@@ -246,7 +251,16 @@ async function buildSessionState(
   logger: RememLogger,
 ): Promise<PiSessionState | undefined> {
   try {
-    const parsed = parseConfig(await loadInstalledPluginOptions(undefined))
+    const options = await loadInstalledPluginOptions(undefined)
+    const parsed = parseConfig(options)
+    const statusUI =
+      typeof options === "object" &&
+      options !== null &&
+      "pi" in options &&
+      typeof options.pi === "object" &&
+      options.pi !== null &&
+      "memoryStatusUI" in options.pi &&
+      options.pi.memoryStatusUI === true
     for (const diagnostic of parsed.diagnostics) {
       safeLoggerCall(logger, diagnostic.level, "config.invalid", { message: diagnostic.message })
     }
@@ -290,6 +304,7 @@ async function buildSessionState(
       capture,
       primaryPostgres,
       dispatchCount: 0,
+      statusUI,
     }
   } catch (error) {
     safeLoggerCall(logger, "error", "extension.initialization_failed", {
@@ -301,7 +316,85 @@ async function buildSessionState(
 
 async function teardownSessionState(state: PiSessionState | undefined): Promise<void> {
   if (!state) return
+  state.statusAbort?.abort()
+  state.clearStatus?.()
   await Promise.allSettled([state.capture?.dispose(), disposeProviders(state.providers)])
+}
+
+// Advisory UI only: no raw provider IDs, prompts, bodies or diagnostics are rendered.
+function queueHealthStatus(
+  state: PiSessionState,
+  ctx: ExtensionContext,
+  getState: () => PiSessionState | undefined,
+): void {
+  try {
+    if (
+      !state.statusUI ||
+      ctx.mode !== "tui" ||
+      !ctx.hasUI ||
+      typeof ctx.ui?.setStatus !== "function" ||
+      state.statusPending ||
+      Date.now() - (state.lastStatusAt ?? 0) < 10_000
+    )
+      return
+    const sessionId = ctx.sessionManager.getSessionId()
+    const controller = new AbortController()
+    state.statusAbort = controller
+    state.statusPending = true
+    state.lastStatusAt = Date.now()
+    state.clearStatus = () => {
+      try {
+        ctx.ui.setStatus("remem", undefined)
+      } catch {
+        /* Advisory UI cannot fail teardown. */
+      }
+    }
+    const publish = (text: string) => {
+      try {
+        if (
+          controller.signal.aborted ||
+          getState() !== state ||
+          ctx.sessionManager.getSessionId() !== sessionId
+        )
+          return
+        ctx.ui.setStatus("remem", text)
+      } catch {
+        /* Host UI failures remain isolated. */
+      }
+    }
+    void withTimeout(
+      250,
+      () => state.orchestrator.status(contextFor(state, ctx)),
+      controller.signal,
+    )
+      .then((status) => {
+        const providers: unknown[] = Array.isArray(status.providers) ? status.providers : []
+        const healthy = providers.filter((provider) => {
+          const health =
+            typeof provider === "object" && provider !== null && "health" in provider
+              ? provider.health
+              : undefined
+          return (
+            typeof health === "object" &&
+            health !== null &&
+            "status" in health &&
+            health.status === "healthy"
+          )
+        }).length
+        const trace = state.orchestrator.explain(sessionId)
+        const recalled =
+          "status" in trace || !Number.isFinite(trace.selectedResults)
+            ? "pending"
+            : String(Math.max(0, Math.min(999, trace.selectedResults)))
+        publish("ReMem: " + healthy + "/" + providers.length + " providers; recall " + recalled)
+      })
+      .catch(() => publish("ReMem: unavailable"))
+      .finally(() => {
+        state.statusPending = false
+      })
+  } catch {
+    // Unsupported/throwing UI APIs must never affect host initialization or dispatch.
+  }
 }
 
 function registerTools(pi: ExtensionAPI, getState: () => PiSessionState | undefined): void {
@@ -547,6 +640,7 @@ export default function remem(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     state = await buildSessionState(ctx, logger)
+    if (state) queueHealthStatus(state, ctx, () => state)
   })
 
   pi.on("session_shutdown", async () => {
@@ -557,6 +651,7 @@ export default function remem(pi: ExtensionAPI): void {
 
   pi.on("before_agent_start", async (event, ctx) => {
     if (!state) return
+    queueHealthStatus(state, ctx, () => state)
     try {
       state.dispatchCount++
       const injection = await recallForDispatch(
