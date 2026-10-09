@@ -14,6 +14,10 @@ import process from "node:process"
 import { fileURLToPath, URL } from "node:url"
 
 const RELATED_PROMPT = "Let's continue the Phoenix database work. Then call memory_status."
+const CORRECTION_PROMPT =
+  "Correct the prior Phoenix answer: rollback plans are required. Call memory_submit_correction."
+const REVIEW_PROMPT = "Show the pending correction review status with memory_review_status."
+const CORRECTION_TEXT = "Rollback plans are required for Phoenix."
 const SENTINEL = "use logical replication"
 const repository = fileURLToPath(new URL("..", import.meta.url))
 const fixtureDirectory = path.join(repository, "tests", "fixtures", "memory")
@@ -43,7 +47,31 @@ function startMockModelServer() {
         connection: "keep-alive",
       })
 
-      const hasToolResult = body.messages.some((message) => message.role === "tool")
+      const reviewIndex = body.messages.findLastIndex(
+        (message) =>
+          message.role === "user" && JSON.stringify(message.content).includes(REVIEW_PROMPT),
+      )
+      const correctionIndex = body.messages.findLastIndex(
+        (message) =>
+          message.role === "user" && JSON.stringify(message.content).includes(CORRECTION_PROMPT),
+      )
+      const name =
+        reviewIndex >= 0
+          ? "memory_review_status"
+          : correctionIndex >= 0
+            ? "memory_submit_correction"
+            : "memory_status"
+      const turnIndex = Math.max(reviewIndex, correctionIndex, 0)
+      const hasToolResult = body.messages
+        .slice(turnIndex + 1)
+        .some((message) => message.role === "tool")
+      const args =
+        name === "memory_submit_correction"
+          ? {
+              correctionText: CORRECTION_TEXT,
+              expectedOutcome: "Include an approved rollback plan.",
+            }
+          : {}
       const id = `chatcmpl-${requests.length}`
       const created = Math.floor(Date.now() / 1000)
       const base = { id, object: "chat.completion.chunk", created, model: body.model }
@@ -60,9 +88,9 @@ function startMockModelServer() {
                   tool_calls: [
                     {
                       index: 0,
-                      id: "call_memory_status",
+                      id: `call_${name}`,
                       type: "function",
-                      function: { name: "memory_status", arguments: "" },
+                      function: { name, arguments: "" },
                     },
                   ],
                 },
@@ -77,7 +105,9 @@ function startMockModelServer() {
             choices: [
               {
                 index: 0,
-                delta: { tool_calls: [{ index: 0, function: { arguments: "{}" } }] },
+                delta: {
+                  tool_calls: [{ index: 0, function: { arguments: JSON.stringify(args) } }],
+                },
                 finish_reason: null,
               },
             ],
@@ -202,10 +232,12 @@ async function run() {
         "--no-themes",
         "--no-session",
         "--tools",
-        "memory_status",
+        "memory_status,memory_submit_correction,memory_review_status",
         "--no-builtin-tools",
         "-p",
         RELATED_PROMPT,
+        CORRECTION_PROMPT,
+        REVIEW_PROMPT,
       ],
       {
         env: {
@@ -260,8 +292,34 @@ async function run() {
       )
     }
 
+    const tools = mock.requests
+      .flatMap((request) => request.messages.filter((message) => message.role === "tool"))
+      .map((message) => JSON.parse(message.content))
+    const submitted = tools.find(
+      (result) => typeof result?.id === "string" && typeof result?.state === "string",
+    )
+    if (!submitted || !["validated", "needs_changes"].includes(submitted.state))
+      throw new Error("native correction submission did not produce a review candidate")
+    if (submitted.audit.some((entry) => ["approved", "applied"].includes(entry.event)))
+      throw new Error("native submission crossed human approval boundary")
+    const status = tools.find(
+      (result) =>
+        Array.isArray(result) && result.some((candidate) => candidate.id === submitted.id),
+    )
+    if (!status) throw new Error("native review status did not recover submitted candidate")
+    if (
+      JSON.stringify([submitted, status]).includes(CORRECTION_TEXT) ||
+      JSON.stringify([submitted, status]).includes("Include an approved rollback plan.")
+    )
+      throw new Error("native correction tools leaked free-text content")
+    const advertised = mock.requests[0].tools.map((tool) => tool.function.name)
+    for (const name of ["memory_submit_correction", "memory_review_status"])
+      if (!advertised.includes(name)) throw new Error(`native tool missing: ${name}`)
+    if (advertised.some((name) => /approve|apply|reject/.test(name)))
+      throw new Error("native agent was offered review authority")
+
     process.stdout.write(
-      `ok - pi e2e: ${mock.requests.length} model request(s), injection + tool call verified\n`,
+      `ok - pi e2e: ${mock.requests.length} model request(s), injection, correction submission/status, redaction and approval boundary verified\n`,
     )
   } finally {
     await mock.close()

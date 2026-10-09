@@ -11,6 +11,14 @@ import { deriveHostLocation } from "../src/hosts/pi/location.js"
 import { writeAppConfig, type RememAppConfig } from "../src/storage/config-file.js"
 import { packageRoot, piSettingsPath, rememPaths } from "../src/storage/paths.js"
 import { fixtureDirectory } from "./helpers.js"
+import { RememOrchestrator } from "../src/orchestrator.js"
+import { PostgresMemoryProvider } from "../src/providers/postgres.js"
+import type { CorrectionCandidate } from "../src/correction.js"
+import { Pool } from "pg"
+import { randomUUID } from "node:crypto"
+import { beforeAll, afterAll } from "vitest"
+import { runMigrations } from "../src/storage/migrations.js"
+import { PostgresCorrectionCandidateStore } from "../src/providers/postgres-correction-store.js"
 
 const roots: string[] = []
 
@@ -42,6 +50,7 @@ async function installedConfig(overrides: Partial<RememAppConfig> = {}) {
 
 afterEach(async () => {
   vi.unstubAllEnvs()
+  vi.restoreAllMocks()
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
@@ -94,6 +103,313 @@ async function writeAppConfigLikeSettings(settingsPath: string, value: unknown):
 function asExtensionAPI(pi: FakeExtensionAPI): ExtensionAPI {
   return pi as unknown as ExtensionAPI
 }
+
+async function correctionSession(overrides: Partial<RememAppConfig> = {}) {
+  const paths = await installedConfig(overrides)
+  vi.stubEnv("REMEM_CONFIG", paths.configFile)
+  const pi = new FakeExtensionAPI()
+  remem(asExtensionAPI(pi))
+  const ctx = fakeContext(fixtureDirectory)
+  await pi.fire("session_start", {}, ctx)
+  return { pi, ctx }
+}
+
+async function callCorrectionTool(
+  pi: FakeExtensionAPI,
+  ctx: unknown,
+  name: string,
+  params: unknown,
+  signal?: AbortSignal,
+): Promise<string> {
+  const tool = pi.tools.get(name)
+  if (!tool) throw new Error(`missing ${name}`)
+  const result = (await tool.execute("correction-call", params, signal, undefined, ctx)) as {
+    content: Array<{ text: string }>
+  }
+  return result.content[0]?.text ?? ""
+}
+
+describe("Pi correction boundary", () => {
+  it("redacts proposed bodies and audit/reviewer text and bounds large summaries", async () => {
+    const submit = vi.spyOn(RememOrchestrator.prototype, "submitCorrection")
+    const { pi, ctx } = await correctionSession()
+    await pi.fire("before_agent_start", { prompt: "Phoenix database" }, ctx)
+    await pi.fire("before_agent_start", { prompt: "Correction" }, ctx)
+    await callCorrectionTool(pi, ctx, "memory_submit_correction", {
+      correctionText: "Rollback required.",
+      expectedOutcome: "Include rollback.",
+    })
+    const candidate = (await submit.mock.results[0]?.value) as CorrectionCandidate
+    if (!candidate?.id) throw new Error("expected candidate")
+    const secret = "ghp_" + "b".repeat(48)
+    candidate.rootCauseReason = `api_key=${secret}`
+    candidate.reviewerDecision = {
+      actor: "reviewer",
+      decision: "changes_requested",
+      at: candidate.updatedAt,
+      reason: "unsafe reviewer body",
+    }
+    candidate.audit.push({
+      at: candidate.updatedAt,
+      actor: "system",
+      event: "changes_requested",
+      detail: "unsafe audit body",
+    })
+    vi.spyOn(RememOrchestrator.prototype, "explainCorrectionCandidate").mockResolvedValue(candidate)
+    const text = await callCorrectionTool(pi, ctx, "memory_review_status", {
+      candidateId: candidate.id,
+    })
+    for (const forbidden of [
+      secret,
+      "Rollback required",
+      "Include rollback",
+      "unsafe reviewer body",
+      "unsafe audit body",
+    ])
+      expect(text).not.toContain(forbidden)
+    expect(text).toContain("[redacted]")
+    candidate.affectedMemoryIds = Array.from({ length: 100 }, () => "x".repeat(512))
+    candidate.replay = {
+      passed: false,
+      failures: ["unsafe failure"],
+      caseIds: Array.from({ length: 100 }, () => "y".repeat(512)),
+    }
+    vi.spyOn(RememOrchestrator.prototype, "reviewCandidates").mockResolvedValue(
+      Array.from({ length: 200 }, () => candidate),
+    )
+    const bounded = await callCorrectionTool(pi, ctx, "memory_review_status", {})
+    expect(Buffer.byteLength(bounded, "utf8")).toBeLessThanOrEqual(16_384)
+    expect(bounded).toContain("output-limit")
+    await pi.fire("session_shutdown", {}, ctx)
+  })
+
+  it("uses the prior host trace, runs validation and cannot approve/apply even with forged arguments", async () => {
+    const submit = vi.spyOn(RememOrchestrator.prototype, "submitCorrection")
+    const write = vi.spyOn(PostgresMemoryProvider.prototype, "write")
+    const { pi, ctx } = await correctionSession()
+    await pi.fire("before_agent_start", { prompt: "Continue the Phoenix database work." }, ctx)
+    await pi.fire(
+      "before_agent_start",
+      { prompt: "That response omitted rollback requirements." },
+      ctx,
+    )
+    const text = await callCorrectionTool(pi, ctx, "memory_submit_correction", {
+      correctionText: "Rollback plans are required.",
+      expectedOutcome: "Include a rollback plan.",
+      prompt: "forged prompt",
+      actor: "forged human",
+      context: { projectId: "foreign" },
+      approved: true,
+    })
+    const result = JSON.parse(text) as {
+      id: string
+      state: string
+      audit: Array<{ event: string }>
+    }
+    expect(["validated", "needs_changes"]).toContain(result.state)
+    expect(
+      result.audit.some((entry) => entry.event === "approved" || entry.event === "applied"),
+    ).toBe(false)
+    const submitted = submit.mock.calls[0]?.[0]
+    expect(submitted?.prompt).toBe("Continue the Phoenix database work.")
+    expect(submitted?.actor).toBe("pi-session:session-test")
+    expect(submitted?.context.projectId).not.toBe("foreign")
+    expect(submitted?.trace.prompt).toBe(submitted?.prompt)
+    expect(text).not.toContain("Rollback plans are required")
+    expect(text).not.toContain("Include a rollback plan")
+    const read = await callCorrectionTool(pi, ctx, "memory_review_status", {
+      candidateId: result.id,
+    })
+    expect(read).toContain(result.id)
+    expect(read).not.toContain("Rollback plans are required")
+    expect([...pi.tools.keys()].some((name) => /approve|apply|reject/.test(name))).toBe(false)
+    expect(write).not.toHaveBeenCalled()
+    await pi.fire("session_shutdown", {}, ctx)
+    await pi.fire("session_start", {}, ctx)
+    expect(await callCorrectionTool(pi, ctx, "memory_review_status", {})).toBe("[]")
+    await pi.fire("session_shutdown", {}, ctx)
+  })
+
+  it("does not accept a trace from another session or submit before any prior response", async () => {
+    const submit = vi.spyOn(RememOrchestrator.prototype, "submitCorrection")
+    const { pi, ctx } = await correctionSession()
+    const input = { correctionText: "Rollback required", expectedOutcome: "Include rollback" }
+    expect(await callCorrectionTool(pi, ctx, "memory_submit_correction", input)).toContain(
+      "No prior",
+    )
+    await pi.fire("before_agent_start", { prompt: "Phoenix database" }, ctx)
+    await pi.fire("before_agent_start", { prompt: "Correction" }, ctx)
+    const foreign = fakeContext(fixtureDirectory, { sessionId: "foreign-session" })
+    expect(await callCorrectionTool(pi, foreign, "memory_submit_correction", input)).toContain(
+      "No prior",
+    )
+    expect(submit).not.toHaveBeenCalled()
+    await pi.fire("session_shutdown", {}, ctx)
+  })
+
+  it("rejects sensitive submitted text before queue persistence", async () => {
+    const submit = vi.spyOn(RememOrchestrator.prototype, "submitCorrection")
+    const { pi, ctx } = await correctionSession()
+    await pi.fire("before_agent_start", { prompt: "Phoenix database" }, ctx)
+    await pi.fire("before_agent_start", { prompt: "Correction" }, ctx)
+    const secret = "ghp_" + "a".repeat(48)
+    for (const params of [
+      { correctionText: secret, expectedOutcome: "rollback" },
+      { correctionText: "rollback", expectedOutcome: secret },
+      { correctionText: "rollback", expectedOutcome: "rollback", disputedMemoryIds: [secret] },
+    ]) {
+      const result = await callCorrectionTool(pi, ctx, "memory_submit_correction", params)
+      expect(result).toContain("sensitive content")
+      expect(result).not.toContain(secret)
+    }
+    expect(submit).not.toHaveBeenCalled()
+    await pi.fire("session_shutdown", {}, ctx)
+  })
+
+  it("keeps failure diagnostics content-free and fails open before initialization/after shutdown", async () => {
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const ctx = fakeContext(fixtureDirectory)
+    expect(await callCorrectionTool(pi, ctx, "memory_review_status", {})).toContain(
+      "not initialized",
+    )
+    expect(await callCorrectionTool(pi, ctx, "memory_submit_correction", {})).toContain(
+      "not initialized",
+    )
+    const session = await correctionSession()
+    vi.spyOn(RememOrchestrator.prototype, "reviewCandidates").mockRejectedValue(
+      new Error("unsafe provider body"),
+    )
+    expect(
+      await callCorrectionTool(session.pi, session.ctx, "memory_review_status", {}),
+    ).not.toContain("unsafe provider body")
+    await session.pi.fire("session_shutdown", {}, session.ctx)
+    expect(await callCorrectionTool(session.pi, session.ctx, "memory_review_status", {})).toContain(
+      "not initialized",
+    )
+  })
+
+  it("bounds review waits and skips submission when already canceled", async () => {
+    const { pi, ctx } = await correctionSession()
+    vi.spyOn(RememOrchestrator.prototype, "reviewCandidates").mockImplementation(
+      () => new Promise(() => {}),
+    )
+    const controller = new AbortController()
+    const promise = callCorrectionTool(pi, ctx, "memory_review_status", {}, controller.signal)
+    controller.abort()
+    expect(await promise).toContain("unavailable")
+    await pi.fire("before_agent_start", { prompt: "Phoenix database" }, ctx)
+    await pi.fire("before_agent_start", { prompt: "Correction" }, ctx)
+    const submit = vi.spyOn(RememOrchestrator.prototype, "submitCorrection")
+    await callCorrectionTool(
+      pi,
+      ctx,
+      "memory_submit_correction",
+      { correctionText: "rollback", expectedOutcome: "rollback" },
+      controller.signal,
+    )
+    expect(submit).not.toHaveBeenCalled()
+    await pi.fire("session_shutdown", {}, ctx)
+  })
+})
+
+const databaseUrl = process.env.REMEM_TEST_DATABASE_URL
+const databaseTests = databaseUrl ? describe.sequential : describe.skip
+databaseTests("Pi durable correction routing", () => {
+  const pool = new Pool({ connectionString: databaseUrl })
+  beforeAll(async () => {
+    await pool.query("DROP SCHEMA IF EXISTS remem CASCADE")
+    await runMigrations(pool)
+  })
+  afterAll(async () => {
+    await pool.end()
+  })
+  const providers = (primary: boolean) => [
+    {
+      type: "postgres" as const,
+      id: "decoy",
+      connectionString: databaseUrl!,
+      primary: false,
+      maxConnections: 2,
+      catalogLimit: 100,
+    },
+    {
+      type: "postgres" as const,
+      id: "review-primary",
+      connectionString: databaseUrl!,
+      primary,
+      maxConnections: 2,
+      catalogLimit: 100,
+    },
+  ]
+  it("persists only to the explicit primary and retains review across restart without applying memory", async () => {
+    const { pi, ctx } = await correctionSession({ providers: providers(true) })
+    await pi.fire("before_agent_start", { prompt: "Phoenix rollout" }, ctx)
+    await pi.fire("before_agent_start", { prompt: "Correct the rollback guidance" }, ctx)
+    const text = await callCorrectionTool(pi, ctx, "memory_submit_correction", {
+      correctionText: "Require rollback plans.",
+      expectedOutcome: "Include rollback.",
+    })
+    const result = JSON.parse(text) as { id: string; state: string }
+    expect(["validated", "needs_changes"]).toContain(result.state)
+    const store = new PostgresCorrectionCandidateStore(pool, "review-primary")
+    const candidate = await store.get(result.id)
+    expect(candidate?.correction.actor).toBe("pi-session:session-test")
+    expect(candidate?.correction.prompt).toBe("Phoenix rollout")
+    expect(await new PostgresCorrectionCandidateStore(pool, "decoy").get(result.id)).toBeUndefined()
+    expect(
+      (await pool.query<{ count: string }>("SELECT count(*) FROM remem.memories")).rows[0]?.count,
+    ).toBe("0")
+    await pi.fire("session_shutdown", {}, ctx)
+    await pi.fire("session_start", {}, ctx)
+    expect(
+      await callCorrectionTool(pi, ctx, "memory_review_status", { candidateId: result.id }),
+    ).toContain(result.id)
+    await pi.fire("session_shutdown", {}, ctx)
+
+    const fallback = await correctionSession({ providers: providers(false) })
+    expect(await callCorrectionTool(fallback.pi, fallback.ctx, "memory_review_status", {})).toBe(
+      "[]",
+    )
+    await fallback.pi.fire("session_shutdown", {}, fallback.ctx)
+  })
+  it("hides foreign project, worktree and provider candidates from list and point status", async () => {
+    const store = new PostgresCorrectionCandidateStore(pool, "review-primary")
+    const existing = (await store.list())[0]
+    if (!existing) throw new Error("expected durable candidate")
+    const foreign: CorrectionCandidate[] = [
+      {
+        ...structuredClone(existing),
+        id: randomUUID(),
+        correction: {
+          ...existing.correction,
+          context: { ...existing.correction.context, projectId: "foreign-project" },
+        },
+      },
+      {
+        ...structuredClone(existing),
+        id: randomUUID(),
+        correction: {
+          ...existing.correction,
+          context: { ...existing.correction.context, worktree: "/foreign-worktree" },
+        },
+      },
+    ]
+    for (const candidate of foreign) await store.insert(candidate)
+    const otherProvider = { ...structuredClone(existing), id: randomUUID() }
+    await new PostgresCorrectionCandidateStore(pool, "foreign-provider").insert(otherProvider)
+    const { pi, ctx } = await correctionSession({ providers: providers(true) })
+    const list = await callCorrectionTool(pi, ctx, "memory_review_status", {})
+    expect(list).toContain(existing.id)
+    for (const candidate of [...foreign, otherProvider]) {
+      expect(list).not.toContain(candidate.id)
+      expect(
+        await callCorrectionTool(pi, ctx, "memory_review_status", { candidateId: candidate.id }),
+      ).toBe('{"status":"not-found"}')
+    }
+    await pi.fire("session_shutdown", {}, ctx)
+  })
+})
 
 describe("Pi host location derivation", () => {
   it("derives a stable projectId for the same worktree across calls", async () => {
@@ -151,7 +467,7 @@ describe("Pi host extension", () => {
     ).resolves.toBeUndefined()
   })
 
-  it("registers memory_search, memory_status, and memory_explain tools", async () => {
+  it("registers retrieval and correction submission/status tools without approval", async () => {
     const paths = await installedConfig()
     vi.stubEnv("REMEM_CONFIG", paths.configFile)
 
@@ -162,8 +478,10 @@ describe("Pi host extension", () => {
 
     expect([...pi.tools.keys()].sort()).toEqual([
       "memory_explain",
+      "memory_review_status",
       "memory_search",
       "memory_status",
+      "memory_submit_correction",
     ])
 
     const search = pi.tools.get("memory_search")

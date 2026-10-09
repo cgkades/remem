@@ -8,10 +8,10 @@ import {
 } from "../../evidence-capture.js"
 import {
   InMemoryCorrectionCandidateStore,
-  type CorrectionCandidate,
   type CorrectionCandidateStore,
 } from "../../correction.js"
 import { CORRECTION_INPUT_LIMITS } from "../../correction.js"
+import { redactCandidateSummary } from "../correction-summary.js"
 import { createCorrectionReviewQueue } from "../../correction-wiring.js"
 import { RememOrchestrator } from "../../orchestrator.js"
 import { PostgresMemoryProvider } from "../../providers/postgres.js"
@@ -85,46 +85,6 @@ function consoleLogger(): RememLogger {
 // directly callable functions, making them unreachable by bare name (see
 // https://github.com/cgkades/remem/issues/11). Applied to every tool below.
 const BARE_CALLABLE_TOOL_OPTIONS = { codemode: false }
-
-/**
- * Projects a CorrectionCandidate down to state/diagnosis metadata only.
- * Deliberately omits `correction.correctionText`/`expectedOutcome`/`prompt`
- * (untrusted free text), `mutation.proposed` (the full candidate memory
- * body), and free-text audit/reviewer `detail`/`reason` fields, since an
- * agent reading this tool's output should learn what state a candidate is
- * in without absorbing the untrusted content the correction workflow is
- * built to keep inert.
- */
-function redactCandidateSummary(candidate: CorrectionCandidate) {
-  return {
-    id: candidate.id,
-    state: candidate.state,
-    rootCause: candidate.rootCause,
-    rootCauseReason: candidate.rootCauseReason,
-    affectedMemoryIds: candidate.affectedMemoryIds,
-    mutationKind: candidate.mutation?.kind,
-    structuralValidation: candidate.structuralValidation
-      ? {
-          valid: candidate.structuralValidation.valid,
-          issueCodes: candidate.structuralValidation.issues.map((issue) => issue.code),
-        }
-      : undefined,
-    replay: candidate.replay
-      ? { passed: candidate.replay.passed, caseIds: candidate.replay.caseIds }
-      : undefined,
-    audit: candidate.audit.map((entry) => ({
-      at: entry.at,
-      actor: entry.actor,
-      event: entry.event,
-    })),
-    reviewerDecision: candidate.reviewerDecision
-      ? { actor: candidate.reviewerDecision.actor, decision: candidate.reviewerDecision.decision }
-      : undefined,
-    appliedMemoryId: candidate.appliedMemoryId,
-    createdAt: candidate.createdAt,
-    updatedAt: candidate.updatedAt,
-  }
-}
 
 /**
  * Selects durable storage for a live CorrectionReviewQueue. Durable,
