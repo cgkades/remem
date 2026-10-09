@@ -1181,12 +1181,12 @@ async function main() {
           throw new Error("Session B retained Session A's transcript")
       }
       if (recallRequests.length === 0) throw new Error("fresh session never reached model dispatch")
-      // #96 / Phase 5: ordinary native failure/action/recheck callbacks
-      // create a pending procedure from stored evidence. No memory tool,
+      // #96 / Phase 6: ordinary native failure/action/recheck callbacks
+      // create an automatically promoted low-risk procedure. No memory tool,
       // fabricated resolution callback or model success flag is involved.
       const procedureSession = await createSession(serverURL, learningWorkspace)
       await prompt(serverURL, procedureSession, PROCEDURE_PROMPT)
-      await pollUntil("native verified pending procedure", async () => {
+      await pollUntil("native verified automatically promoted procedure", async () => {
         const rows = await hooksPool.query(
           `SELECT c.status,c.content,l.observation_ids FROM remem.candidate_memories c
            JOIN remem.candidate_lineage l ON l.candidate_id=c.id
@@ -1195,9 +1195,11 @@ async function main() {
           [procedureSession],
         )
         if (!rows.rows.length) return false
+        if (rows.rows.length === 1 && ["approved", "consolidating"].includes(rows.rows[0].status))
+          return false
         if (
           rows.rows.length !== 1 ||
-          rows.rows[0].status !== "pending" ||
+          rows.rows[0].status !== "promoted" ||
           rows.rows[0].observation_ids.length !== 4 ||
           !rows.rows[0].content.includes(PROCEDURE_ACTION)
         )
@@ -1207,13 +1209,43 @@ async function main() {
       const procedures = await hooksPool.query(
         "SELECT id FROM remem.memories WHERE provider_id='hooks-postgres' AND type='procedure'",
       )
-      if (procedures.rowCount !== 0) throw new Error("new host procedure bypassed pending review")
+      if (procedures.rowCount !== 1)
+        throw new Error("low-risk native procedure did not automatically promote")
+      const procedureFresh = await createSession(serverURL, learningWorkspace)
+      const beforeProcedureRecall = model.requests.length
+      await prompt(
+        serverURL,
+        procedureFresh,
+        "Let's continue the Phoenix recovery checkpoint work.",
+      )
+      const procedureRequests = model.requests
+        .slice(beforeProcedureRecall)
+        .filter((body) => body.tools?.some((tool) => tool.function?.name === "shell"))
+      if (
+        !procedureRequests.length ||
+        procedureRequests.some((body) => {
+          const memory = body.messages.filter((message) =>
+            JSON.stringify(message.content).includes("<memory-context>"),
+          )
+          const text = JSON.stringify(memory)
+          return (
+            !text.includes("same check subsequently completed with exit 0") ||
+            !text.includes("phoenix-recovery.txt") ||
+            !text.includes("Evidence: hooks-postgres:") ||
+            JSON.stringify(body.messages).includes(PROCEDURE_PROMPT)
+          )
+        })
+      )
+        throw new Error(
+          "fresh native session did not recall the complete procedure without its transcript",
+        )
       process.stdout.write(
         JSON.stringify({
           gate: "host-verified-procedure",
-          pendingCandidates: 1,
+          promotedCandidates: 1,
           canonicalSources: 4,
-          automaticPromotions: 0,
+          automaticPromotions: 1,
+          freshSessionRecall: true,
           rule: "native-shell-recovery-v1",
           procedureQuality: "observed recovery sequence; root-cause/model quality not evaluated",
         }) + "\n",
