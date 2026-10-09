@@ -3,6 +3,16 @@ import type { ExtensionAPI, ExtensionContext, InputSource } from "@earendil-work
 import { Type } from "typebox"
 import { createCaptureCoordinator, type CaptureCoordinator } from "../../capture.js"
 import { parseConfig, type RememConfig } from "../../config.js"
+import {
+  CORRECTION_INPUT_LIMITS,
+  InMemoryCorrectionCandidateStore,
+  type CorrectionCandidate,
+} from "../../correction.js"
+import { createCorrectionReviewQueue } from "../../correction-wiring.js"
+import { PostgresCorrectionCandidateStore } from "../../providers/postgres-correction-store.js"
+import { containsSensitiveCredential } from "../../sensitive-data.js"
+import { withTimeout } from "../../timeout.js"
+import { redactCandidateSummary } from "../correction-summary.js"
 import { RememOrchestrator } from "../../orchestrator.js"
 import { PostgresMemoryProvider } from "../../providers/postgres.js"
 import { createProviders } from "../../providers/factory.js"
@@ -30,7 +40,7 @@ import { deriveHostLocation } from "./location.js"
  */
 interface PiSessionState {
   location: HostLocation
-  config: Pick<RememConfig, "compaction" | "reembedCooldownMs">
+  config: Pick<RememConfig, "compaction" | "reembedCooldownMs" | "providerTimeoutMs">
   orchestrator: RememOrchestrator
   providers: MemoryProvider[]
   capture?: CaptureCoordinator | undefined
@@ -250,11 +260,25 @@ async function buildSessionState(
     for (const diagnostic of created.diagnostics) {
       safeLoggerCall(logger, "warn", "provider.initialization_failed", { message: diagnostic })
     }
+    const primaryId = parsed.config.providers.find(
+      (provider) => provider.type === "postgres" && provider.primary,
+    )?.id
     const primaryPostgres = created.providers.find(
-      (provider): provider is PostgresMemoryProvider => provider instanceof PostgresMemoryProvider,
+      (provider): provider is PostgresMemoryProvider =>
+        provider.id === primaryId && provider instanceof PostgresMemoryProvider,
+    )
+    const correctionStore = primaryPostgres
+      ? new PostgresCorrectionCandidateStore(primaryPostgres.connectionPool, primaryPostgres.id)
+      : new InMemoryCorrectionCandidateStore()
+    const reviewQueue = createCorrectionReviewQueue(
+      correctionStore,
+      created.providers,
+      parsed.config,
+      embeddingModel,
     )
     const orchestrator = new RememOrchestrator(created.providers, parsed.config, logger, {
       embeddingModel,
+      reviewQueue,
     })
     const capture = createCaptureCoordinator(created.providers, parsed.config, logger)
     await capture?.recover(location)
@@ -281,6 +305,131 @@ async function teardownSessionState(state: PiSessionState | undefined): Promise<
 }
 
 function registerTools(pi: ExtensionAPI, getState: () => PiSessionState | undefined): void {
+  const reply = (text: string) => ({
+    content: [
+      {
+        type: "text" as const,
+        text:
+          Buffer.byteLength(text, "utf8") <= 16_384
+            ? text
+            : JSON.stringify({ status: "output-limit" }),
+      },
+    ],
+    details: {},
+  })
+  pi.registerTool({
+    name: "memory_review_status",
+    label: "Memory Review Status",
+    description:
+      "Show bounded redacted correction-candidate status for this project/worktree. Read-only; cannot approve or apply memory. Without an explicit primary PostgreSQL provider, review is session-local and transient.",
+    parameters: Type.Object(
+      {
+        candidateId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+      },
+      { additionalProperties: false },
+    ),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const state = getState()
+      if (!state) return reply("Correction review unavailable: extension not initialized.")
+      const context = contextFor(state, ctx)
+      try {
+        const result = await withTimeout<
+          CorrectionCandidate | CorrectionCandidate[] | { status: "unavailable" | "not-found" }
+        >(
+          state.config.providerTimeoutMs,
+          () =>
+            params.candidateId
+              ? state.orchestrator.explainCorrectionCandidate(params.candidateId)
+              : state.orchestrator.reviewCandidates(),
+          signal,
+        )
+        const visible = (candidate: CorrectionCandidate) =>
+          !!context.projectId &&
+          candidate.correction.context.projectId === context.projectId &&
+          candidate.correction.context.worktree === context.worktree
+        if (Array.isArray(result))
+          return reply(
+            JSON.stringify(result.filter(visible).slice(0, 20).map(redactCandidateSummary)),
+          )
+        if (!("id" in result)) return reply(JSON.stringify(result))
+        return reply(
+          JSON.stringify(
+            visible(result) ? redactCandidateSummary(result) : { status: "not-found" },
+          ),
+        )
+      } catch {
+        return reply("Correction review unavailable. Pi can continue without memory.")
+      }
+    },
+  })
+  pi.registerTool({
+    name: "memory_submit_correction",
+    label: "Submit Memory Correction",
+    description:
+      "Submit a correction about the prior response to the existing diagnosis/validation/replay queue. Never approves or applies memory; an authorized human must review elsewhere. Without an explicit primary PostgreSQL provider the queue is session-local and transient.",
+    parameters: Type.Object(
+      {
+        correctionText: Type.String({
+          minLength: 1,
+          maxLength: CORRECTION_INPUT_LIMITS.maxTextLength,
+        }),
+        expectedOutcome: Type.String({
+          minLength: 1,
+          maxLength: CORRECTION_INPUT_LIMITS.maxTextLength,
+        }),
+        disputedMemoryIds: Type.Optional(
+          Type.Array(
+            Type.String({ minLength: 1, maxLength: CORRECTION_INPUT_LIMITS.maxMemoryIdLength }),
+            { maxItems: CORRECTION_INPUT_LIMITS.maxDisputedMemoryIds },
+          ),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const state = getState()
+      if (!state) return reply("Correction review unavailable: extension not initialized.")
+      const context = contextFor(state, ctx)
+      const trace = state.orchestrator.explainPreviousTurn(ctx.sessionManager.getSessionId())
+      if ("status" in trace)
+        return reply(
+          "No prior retrieval trace is available for this session; ask a question first, then submit a correction about that response.",
+        )
+      // Neither identity, prompt, trace nor approval is accepted from tool arguments.
+      if (
+        [
+          trace.prompt,
+          params.correctionText,
+          params.expectedOutcome,
+          ...(params.disputedMemoryIds ?? []),
+        ].some(containsSensitiveCredential)
+      )
+        return reply("Correction was not accepted: sensitive content.")
+      try {
+        const submitted = await withTimeout(
+          state.config.providerTimeoutMs,
+          () =>
+            state.orchestrator.submitCorrection({
+              sessionId: ctx.sessionManager.getSessionId(),
+              prompt: trace.prompt,
+              correctionText: params.correctionText,
+              expectedOutcome: params.expectedOutcome,
+              actor: `pi-session:${ctx.sessionManager.getSessionId()}`,
+              context,
+              trace,
+              ...(params.disputedMemoryIds ? { disputedMemoryIds: params.disputedMemoryIds } : {}),
+            }),
+          signal,
+        )
+        return reply(
+          JSON.stringify("status" in submitted ? submitted : redactCandidateSummary(submitted)),
+        )
+      } catch {
+        // Validation/storage errors can contain provider or submitted free text.
+        return reply("Correction was not accepted. Pi can continue without memory.")
+      }
+    },
+  })
   pi.registerTool({
     name: "memory_search",
     label: "Memory Search",

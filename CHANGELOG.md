@@ -20,6 +20,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Pi now exposes correction submission and redacted review-status tools using the existing queue.
+  Submissions never approve/apply memory; durable review selects an explicit primary PostgreSQL
+  provider, with a transient session queue otherwise. Status is project/worktree scoped, bounded
+  and shares summary redaction with OpenCode. See [#53](https://github.com/cgkades/remem/issues/53).
+
 - Hosts can submit a normalized resolved-task episode after a verified success; Remem records one bounded `procedure` with session provenance, redaction, and no raw transcript. Failed or unverified investigations are dropped. Resolves [#75](https://github.com/cgkades/remem/issues/75).
 
 - OpenCode `memory_search`, `memory_status`, and `memory_explain` now describe natural-language save/search/explain workflows, and `memory_explain` returns a bounded, redacted miss diagnosis (no matching memory, scope mismatch, capture exclusion, or ranking). Resolves [#76](https://github.com/cgkades/remem/issues/76).

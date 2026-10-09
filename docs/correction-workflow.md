@@ -118,7 +118,7 @@ rejected — there is nothing for a provider to write.
 
 ## Surfaces
 
-- **`memory_submit_correction`** (OpenCode v2 tool, agent-facing): submits a
+- **`memory_submit_correction`** (OpenCode v2 and Pi tool, agent-facing): submits a
   correction for the current session, then immediately runs
   diagnosis/mutation-proposal/structural-validation/replay via
   `RememOrchestrator.submitCorrection`, since validation is a fully automatic
@@ -157,10 +157,15 @@ rejected — there is nothing for a provider to write.
   or `needs_changes` -- e.g. after a human fixes whatever caused
   `needs_changes` -- and is not needed after a plain submission, which
   already validates once.
-- **`memory_review_status`** (OpenCode v2 tool, agent-facing, read-only):
+- **`memory_review_status`** (OpenCode v2 and Pi tool, agent-facing, read-only):
   returns a _redacted_ summary (state, root cause, pass/fail flags, audit
   events without free-text detail) — never the untrusted correction text or
   the full proposed memory body.
+  Both hosts reuse bounded, credential-redacted summary projection. Pi status additionally limits
+  reads to the current project/worktree, caps responses at 16 KiB, and uses provider deadlines.
+  Pi derives turns from `before_agent_start` and binds submission to its prior dispatch trace.
+  Its durable review store requires an explicitly primary PostgreSQL provider; otherwise its queue
+  is transient for the session and not visible to the CLI. See [Pi integration](pi-integration.md).
 - **`remem correction-candidates [--state STATE]`** (CLI): lists candidates
   with full detail, for a human operator. Deliberately more permissive than
   `memory_review_status`: a human operator via CLI is a different trust

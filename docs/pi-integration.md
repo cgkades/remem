@@ -55,9 +55,22 @@ The adapter registers, via `pi.registerTool(...)` with `typebox` parameter schem
   latest trace;
 - `memory_explain`: no args -> the latest sanitized retrieval decision for the current session.
 
-These are the same three tools and behavior as the OpenCode adapters' `memory_search`,
-`memory_status`, and `memory_explain` (OpenCode v2 additionally exposes correction-review tools not
-yet part of the Pi adapter). They are read-only; `MemoryManager` CRUD is not exposed to Pi.
+Pi also registers `memory_submit_correction` (`correctionText`, `expectedOutcome`, optional
+`disputedMemoryIds`) and `memory_review_status` (optional `candidateId`). These reuse OpenCode's
+existing correction queue, validation/replay pipeline and redacted summary. Submission binds to the
+prior user turn's host trace, session, project/worktree and host-derived actor; tool arguments cannot
+replace those fields or grant approval. Sensitive submitted content is rejected before persistence.
+Validation can create a proposed mutation but never applies it. Neither tool can approve/reject or
+write active memory; authorized human review remains outside the host tools.
+
+Durable correction storage uses an explicitly configured primary PostgreSQL provider, not the first
+provider. Without one, review is a bounded in-memory queue for the current session, lost on restart
+and unavailable to the CLI. Status lists/point reads exclude other projects/worktrees and the store
+isolates providers. Output omits correction/prompt/expected text, proposed memory bodies and free-text
+audit/reviewer reasons, bounds diagnostic strings/arrays, and caps the response at 16 KiB. A large
+response returns `output-limit` instead of partial JSON. Operations use the provider deadline and
+fail open with content-free diagnostics. A timed-out submission may leave an inert pending candidate;
+it cannot apply memory. See [correction review](correction-workflow.md).
 
 Unlike OpenCode's plugin-registered tools (see
 [issue #11](https://github.com/cgkades/remem/issues/11) and `BARE_CALLABLE_TOOL_OPTIONS` in
@@ -223,6 +236,8 @@ never reads or writes an operator's real `~/.pi/agent` state (settings, sessions
   `before_agent_start` hook fired and the untrusted-evidence framing is present);
 - a subsequent request contains a real `memory_status` tool result from the actual orchestrator
   (`pi.registerTool` round-tripped through Pi's tool-execution path, not a stub).
+- subsequent native turns submit a correction about the prior response, read the same candidate's
+  redacted status, and verify that no approval/application tool or free-text body is exposed.
 
 Run it in a Linux container (`npm run test:pi:e2e:docker`, `docker/pi-e2e.Dockerfile`) for full
 isolation from the host, including from any `pi` CLI version already installed locally -- the
