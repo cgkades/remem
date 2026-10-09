@@ -22,11 +22,11 @@ tradeoffs will be recorded after the comparison runs. No new index migration is 
 
 CI run 37987793309 compared all four plans. For 50,000 scoped plus 2,000 foreign synthetic events:
 
-| Query | Original window p95 ms | Window + composite index | Search first, existing indexes | Search first + composite index |
-| --- | ---: | ---: | ---: | ---: |
-| Sparse | 147.58 | 71.26 | 3.01 | 3.28 |
-| Dense | 236.88 | 174.97 | 119.51 | 99.24 |
-| Absent | 146.76 | 75.52 | 2.70 | 2.84 |
+| Query  | Original window p95 ms | Window + composite index | Search first, existing indexes | Search first + composite index |
+| ------ | ---------------------: | -----------------------: | -----------------------------: | -----------------------------: |
+| Sparse |                 147.58 |                    71.26 |                           3.01 |                           3.28 |
+| Dense  |                 236.88 |                   174.97 |                         119.51 |                          99.24 |
+| Absent |                 146.76 |                    75.52 |                           2.70 |                           2.84 |
 
 The original plan used Seq Scan, Sort and WindowAgg, spilling 2,933 read / 2,939 written
 temporary blocks. The composite index removed that window sort/spill but still visited the scoped
@@ -46,3 +46,9 @@ These are 20 warmed client samples on one CI runner with temporary synthetic tab
 installed-memory p95. At 5,000 scoped events the sparse comparison was 16.31 to 2.05 ms. Full plans
 and index size/build costs are retained in the artifact; rerun on representative installations
 before claiming a production SLO. No model-dependent memory quality claim follows from this result.
+
+For the same temporary fixture, the composite index added 557,056 bytes and took 14.82 ms to build
+at 5,000 scoped events, versus 4,046,848 bytes and 123.06 ms at 50,000 (run 37988200522).
+Existing table/index sizes were 3,588,096 / 1,638,400 bytes and 26,624,000 / 11,665,408 bytes.
+Build timings use ordinary creation on a connection-local temporary table; they are not a concurrent
+deployment estimate. Index maintenance/write amplification is a qualitative cost, not measured here.
