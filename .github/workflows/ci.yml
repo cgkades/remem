@@ -183,3 +183,42 @@ jobs:
           path: artifacts/neural-evaluation.json
           if-no-files-found: error
           retention-days: 14
+
+  episodic-benchmark:
+    name: Episodic query benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.1-pg16
+        env:
+          POSTGRES_DB: remem_test
+          POSTGRES_USER: remem
+          POSTGRES_PASSWORD: remem-ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U remem -d remem_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node scripts/benchmark-episodes.mjs
+        env:
+          REMEM_TEST_DATABASE_URL: postgres://remem:remem-ci-password@127.0.0.1:5432/remem_test
+      - run: npx prettier --check scripts/benchmark-episodes.mjs
+      - if: failure()
+        run: npx prettier scripts/benchmark-episodes.mjs
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: episode-query-benchmark
+          path: artifacts/episode-query-benchmark.json
+          if-no-files-found: warn
+          retention-days: 14
