@@ -27,6 +27,8 @@ With capture and evidence admission enabled, OpenCode v2's production evidence-p
 
 `native-shell-recovery-v1` is a server-checked evidence rule, not promotion authorization. Persistence re-derives the bounded episode and validates its body and canonical references in the capture transaction. These new procedures remain pending even when legacy user-text auto-promotion is enabled. Existing review and consolidation can promote them; automatic low-risk procedure policy remains Phase 6 work. The reviewed fresh-session test therefore is not the full approval-free #96/#97 acceptance gate.
 
+Semantic recall includes complete procedures within the existing provider/context budgets, or omits them when they cannot fit. The previous short excerpt could lose prerequisites or the final verification step. Recognition catalog summaries remain compact indexes for selecting full recall.
+
 The window is reconstructed from durable evidence after restart. Duplicate final callbacks recover interrupted downstream capture without duplicating candidates. Asynchronous verification has a deadline and abort check before enqueueing; provider failure or shutdown does not fail an agent turn. This does not guarantee recovery of callbacks lost before persistence or introduce an outbox. Pi and OpenCode v1 have no mapping for this rule yet.
 
 New user-assertion candidates now link to their validated canonical episode rows in both candidate storage and the ledger; capture no longer creates separate legacy observations for those events. Forget previews include secondary ledger associations while preserving existing confirmation boundaries. See [candidate lineage](candidate-lineage.md) for validation, retention, replay and legacy limitations.

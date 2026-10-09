@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { CaptureCoordinator } from "../src/capture.js"
+import { DeterministicSynthesizer } from "../src/synthesizer.js"
+import type { RankedMemory } from "../src/types.js"
 import { parseConfig } from "../src/config.js"
 import {
   admitEvidence,
@@ -7,6 +9,7 @@ import {
   type EvidenceEnvelope,
 } from "../src/observation-admission.js"
 import { observationFromResolvedTask } from "../src/procedure.js"
+import { extractProcedureCandidate } from "../src/procedure.js"
 import { verifiedProcedureFromEvidence, SHELL_RECOVERY_RULE } from "../src/verified-procedure.js"
 import {
   procedureAction,
@@ -32,6 +35,50 @@ function replace(
 }
 
 describe("stored native check recovery", () => {
+  it("refuses a candidate budget that would remove part of the verified procedure", () => {
+    const episode = verifiedProcedureFromEvidence(procedureEvidence(), procedureContext)!
+    const observation = observationFromResolvedTask(episode)!
+    expect(
+      extractProcedureCandidate(observation, {
+        ...parseConfig({}).config.capture,
+        maxCandidateCharacters: 128,
+      }),
+    ).toBeUndefined()
+  })
+  it("recalls a complete procedure with verification or omits it when the budget cannot fit it", () => {
+    const content = `Prerequisite: reproduce failure. ${"Recorded step. ".repeat(30)} Verification: repeat the failing check and require exit 0.`
+    const memory: RankedMemory = {
+      record: {
+        id: "procedure",
+        providerId: "local",
+        title: "Recovery",
+        content,
+        source: "remem://fixture",
+        scope: { kind: "project", id: "phoenix" },
+        type: "procedure",
+        freshness: "current",
+      },
+      score: 1,
+      rank: 1,
+      reasons: [],
+      duplicateSources: [],
+    }
+    const budgets = parseConfig({}).config.budgets
+    const enough = new DeterministicSynthesizer({
+      ...budgets,
+      recallTokens: 3000,
+      perProviderTokens: 3000,
+    }).synthesize([], [memory])
+    expect(enough.text).toContain(content.replace(/\s+/gu, " "))
+    expect(enough.text).toContain("require exit 0")
+    const small = new DeterministicSynthesizer({
+      ...budgets,
+      recallTokens: 400,
+      perProviderTokens: 400,
+    }).synthesize([], [memory])
+    expect(small.selectedCount).toBe(0)
+    expect(small.text).toBe("")
+  })
   it("derives deterministic bounded evidence-backed recovery without inventing a root cause", () => {
     const evidence = procedureEvidence()
     const episode = verifiedProcedureFromEvidence(evidence, procedureContext)

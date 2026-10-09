@@ -376,7 +376,9 @@ export class CaptureCoordinator {
       outcome: "pending",
       kind: "task-resolved",
       confidence: PROCEDURE_CONFIDENCE,
-      reason: "verified successful investigation",
+      reason: episode.verification
+        ? "stored native check recovery; procedure requires review"
+        : "verified successful investigation",
     })
     if (!this.drainPromise) this.drainPromise = this.drain()
   }

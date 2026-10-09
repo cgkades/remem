@@ -160,6 +160,8 @@ export function extractProcedureCandidate(
   if (!text || text.length > config.maxInputCharacters || containsSensitiveCredential(text)) {
     return undefined
   }
+  if (observation.payload.verificationRule && text.length > config.maxCandidateCharacters)
+    return undefined
   const content = text.slice(0, config.maxCandidateCharacters)
   const goal =
     typeof observation.payload.goal === "string" &&

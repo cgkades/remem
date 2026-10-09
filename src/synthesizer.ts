@@ -90,8 +90,15 @@ export class DeterministicSynthesizer implements SynthesisStrategy {
       const fixedTokens = estimateTokens([titleLine, ...provenance].join("\n"))
       if (remaining <= fixedTokens + 8) continue
 
-      const excerptBudget = Math.min(280, remaining - fixedTokens)
-      const excerpt = truncateToTokens(compactWhitespace(memory.record.content), excerptBudget).text
+      const excerptBudget =
+        memory.record.type === "procedure"
+          ? remaining - fixedTokens
+          : Math.min(280, remaining - fixedTokens)
+      const fitted = truncateToTokens(compactWhitespace(memory.record.content), excerptBudget)
+      // Partial procedures can lose prerequisites or the verification step.
+      // Preserve the full bounded procedure or omit it within existing budgets.
+      if (memory.record.type === "procedure" && fitted.truncated) continue
+      const excerpt = fitted.text
       const item = [titleLine, `  ${escapeXml(excerpt)}`, ...provenance]
       const itemTokens = estimateTokens(item.join("\n"))
       if (itemTokens > remaining) continue

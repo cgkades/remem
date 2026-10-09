@@ -159,15 +159,32 @@ integration("host verified procedure learning", () => {
           },
         ],
       }
+      const started = performance.now()
       await fresh.emit("context", event)
-      const injected = JSON.stringify(event.messages.slice(1))
-      expect(injected).toContain(procedureAction)
+      const callbackMs = performance.now() - started
+      const injected = event.messages
+        .slice(1)
+        .flatMap((message) => message.content.map((part) => part.text))
+        .join("\n")
+      expect(injected).toContain(procedureAction.replaceAll(">", "&gt;"))
       expect(injected).toContain("same check subsequently")
       const refs = candidateFromRow(row).memory.provenance?.[0]?.source.metadata?.evidenceRefs
       expect(refs).toHaveLength(4)
       for (const ref of refs as { eventId: string }[]) expect(injected).toContain(ref.eventId)
       expect(injected).not.toContain("root cause")
       expect(injected).not.toContain("fixture-secret")
+      console.info(
+        JSON.stringify({
+          gate: "reviewed-procedure-recall",
+          procedureFixtureAccurate: true,
+          provenanceSources: 4,
+          unsupportedRootCause: false,
+          callbackMs,
+          contextBytes: Buffer.byteLength(injected, "utf8"),
+          contextMeasurement: "conservative UTF-8 bytes, not model tokenizer tokens",
+          modelQuality: "not evaluated; deterministic fixture",
+        }),
+      )
     } finally {
       await disposeFresh?.()
     }

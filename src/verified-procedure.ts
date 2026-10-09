@@ -45,9 +45,15 @@ function shell(envelope: EvidenceEnvelope) {
     typeof command !== "string" ||
     !command.trim() ||
     command.length > 240 ||
-    (input as Record<string, unknown>).background === true ||
-    (result as Record<string, unknown>).timeout === true ||
-    (result as Record<string, unknown>).truncated === true ||
+    command !== command.replace(/\s+/gu, " ").trim() ||
+    command.includes("\n") ||
+    command.includes("\r") ||
+    command.includes("\u0000") ||
+    [
+      (input as Record<string, unknown>).background,
+      (result as Record<string, unknown>).timeout,
+      (result as Record<string, unknown>).truncated,
+    ].some((value) => value !== undefined && value !== false) ||
     typeof exit !== "number" ||
     !Number.isInteger(exit) ||
     exit < 0 ||
