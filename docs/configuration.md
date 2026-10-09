@@ -79,7 +79,7 @@ from the plugin-options `embedding` shape described in
 
 Config format `version: 1` is not the database schema version. The database schema version is
 defined by the migration files under `migrations/` and the installed `remem.schema_migrations`
-ledger (currently version 7 at this baseline); run `remem doctor` or `remem status` for the live
+ledger (version 14 in this source snapshot); run `remem doctor` or `remem status` for the live
 value rather than assuming a fixed number.
 
 The config and managed `.env` contain credentials. On POSIX platforms Remem writes config, `.env`,
@@ -115,9 +115,11 @@ credentials, reported quoted/retrieved text, recognized source-attributed text (
 the ticket"), or tool output are excluded. Capture never reads model or tool
 responses as user assertions. Hosts may also submit a normalized resolved-task episode after a
 _verified_ success; that path records a bounded `procedure` with session provenance, not a user
-assertion, and still redacts credentials. Failed or unverified investigations are dropped. With
-`autoPromote: true`, screened statements are immediately consolidated into durable
-memory using the same duplicate/conflict handling as the manual flow. With the default `false`, capture
+assertion, and still redacts credentials. Failed or unverified investigations produce no successful
+procedure. With canonical evidence admission enabled, `autoPromote: true` permits the server policy
+to approve supported low-risk claims, not every screened statement. Sensitive corrections, ambiguous
+or conflicting claims, unknown procedures and old evidence still require review. Legacy capture
+without canonical evidence retains its existing automatic behavior. With the default `false`, capture
 creates pending candidates; inspect them with `remem candidates`, approve or reject each with
 `remem review <ID> --approve|--reject`, and promote approved candidates with `remem consolidate`.
 
@@ -134,8 +136,9 @@ understanding or cross-turn rationale extraction. Candidate scope remains the cu
 
 Each candidate records an extractor version and `statementStart`/`statementEnd` offsets under
 `metadata.capture`. These are UTF-16 offsets into the captured prompt text, with an exclusive end.
-They locate the extracted claim; they do not imply that the original prompt is durably retained as an
-episode. Multi-candidate persistence/promotion is not all-or-nothing: an error reports capture failure
+They locate the extracted claim. With canonical evidence admission enabled, the screened original
+message is persisted independently as evidence before extraction. Legacy capture alone does not
+retain a full episode. Multi-candidate persistence/promotion is not all-or-nothing: an error reports capture failure
 even if earlier statements were already saved. Re-delivery uses stable candidate identities and the
 existing consolidation duplicate handling. Re-extraction refreshes a pending candidate only within
 the same observation, scope, and provider; reviewed candidates are left unchanged and mismatched
@@ -145,10 +148,43 @@ For PostgreSQL, consolidation also checks retained candidate-ID associations bef
 processed identity reuses its result without rewriting that memory, even after manual edits or
 supersession. A replay is not authorization to replace current knowledge or revive a historical fact;
 changing promoted content requires an explicit memory update/review, not automatic wrapper cleanup.
-Duplicate merges preserve the originating candidate ID alongside the latest merged ID. This is not a
-complete historical identity ledger: intermediate merged IDs and associations already lost in older
-metadata cannot be reconstructed. Providers without `findByConsolidationCandidateId` retain ordinary
-duplicate/conflict handling rather than this additional replay check.
+Migration 0013 adds a durable scoped ledger preserving every newly processed association and a
+body-free revision audit. Known legacy originating/latest associations are backfilled where
+unambiguous; missing older intermediate history cannot be reconstructed. Managed promotion is
+atomic across semantic records, lineage and projections. Other providers retain their advertised
+transaction/replay guarantees. See [candidate lineage](candidate-lineage.md).
+
+### Canonical evidence and automatic learning
+
+This separately configured OpenCode v2 path requires an explicitly primary PostgreSQL provider:
+
+```json
+{
+  "capture": { "enabled": true, "autoPromote": true },
+  "evidenceAdmission": {
+    "enabled": true,
+    "enabledOrigins": ["direct-user", "host-observed"],
+    "maxPayloadBytes": 8192,
+    "maxEvidenceRefs": 16,
+    "maxQueuedEvents": 32
+  }
+}
+```
+
+Evidence admission is disabled by default. Enabling it permits screened original unmarked user
+messages and native tool results, including safe failures, to persist independently of semantic
+significance. Retrieved context, metadata-bearing generated prompts and memory-tool feedback do
+not become original-user claims. Pi and v1 do not yet emit this stream. Failed admission or evidence
+persistence cannot fall back to legacy assertion capture.
+
+The current `scoped-evidence-learning-v1` policy records reject, episodic-only, auto-promote or
+require-review outcomes. Automatic procedures are limited to an observed workspace-relative
+missing-file check, literal file creation and identical successful recheck. The rule executes no
+stored command and does not infer general causal success. Evidence integrity, scope, conflicts and
+age are checked again at first promotion. Human-sensitive corrections keep their existing approval
+boundary. At startup, one bounded batch of at most eight interrupted approved canonical candidates
+is recovered within the capture deadline. See [host learning](host-evidence-learning.md),
+[recovery](learning-recovery.md) and [privacy/forgetting](candidate-lineage.md) before enabling it.
 
 ## OpenCode v2 Plugin Options
 

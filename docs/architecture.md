@@ -1,5 +1,9 @@
 # Architecture
 
+**CURRENT implementation guide.** Intended architecture is defined by
+[TARGET-ARCHITECTURE](TARGET-ARCHITECTURE.md), [PRODUCT-VISION](PRODUCT-VISION.md) and accepted ADRs.
+See [current status](current-status.md) for tested capabilities and remaining gaps.
+
 ## Purpose
 
 Remem is a local-first memory control plane between agent hosts and heterogeneous long-term memory
@@ -25,17 +29,25 @@ It is deliberately not `prompt -> vector search -> nearest-neighbor dump`.
 
 The implementation includes the host-independent core, Markdown and PostgreSQL providers, managed
 and external database modes, checksum-verified ordered schema migrations (currently through version
-7; see [Storage architecture](storage-architecture.md) or run `remem doctor`/`remem status` for the
+14; see [Storage architecture](storage-architecture.md) or run `remem doctor`/`remem status` for the
 live value), deterministic and local semantic recognition, provider/topic awareness, bounded
 extractive synthesis, explicit CRUD/supersession APIs, logical backup/restore commands, the primary
 OpenCode v2 adapter, and the isolated v1 adapter.
 
-Capture observes only screened user text, not unrestricted model/tool output. It excludes sensitive,
-reported quoted speech, tool, and retrieved text. Plain, v2, and Pi initialization leave capture off
-by default; `remem init --opencode-v1` enables capture and automatic promotion of screened explicit
-user decisions, preferences, and corrections. `remem init --capture` (or `capture.enabled: true`)
-enables capture without automatic promotion, so written candidates require explicit review before
-consolidation. A general neural embedding model (`bge-small-en-v1.5`, via `@huggingface/transformers`)
+Legacy assertion capture observes screened user text. OpenCode v2 additionally admits canonical
+original-user and native tool evidence under a separate opt-in, independently of candidate extraction.
+Source authority, project isolation, secret screening and evidence hashes precede persistence.
+Stored episodes remain historical evidence, distinct from consolidated semantic knowledge.
+The current server policy permits supported project assertions and narrowly verified shell recovery
+to promote automatically; unknown actions, corrections, sensitive claims, conflicts and old evidence
+require review. A model success claim cannot authorize promotion. Atomic candidate lineage/audit and
+bounded startup recovery are implemented in PostgreSQL. Pi and v1 do not yet emit the canonical
+evidence stream. See [host learning](host-evidence-learning.md) and [recovery](learning-recovery.md).
+
+Plain, v2 and Pi initialization leave capture off; `remem init --opencode-v1` enables legacy
+capture and automatic promotion. `remem init --capture` enables review-based capture. Canonical
+evidence admission stays separately disabled until configured. A general neural embedding model
+(`bge-small-en-v1.5`, via `@huggingface/transformers`)
 is implemented and is the `remem init` default for both managed and external modes, with the
 deterministic hash model as fallback; see [Embeddings](embeddings.md). Arbitrary-depth topic
 population and branch rendering, model planning/synthesis, scheduled backup and retention, and
@@ -249,7 +261,7 @@ memory by default, diagnostics are sanitized, SQL is parameterized, and provider
 before normalization. Suspicious content may be labeled or omitted, but filtering is not treated as
 a complete prompt-injection defense.
 
-## Future Learning
+## Learning: current subset and target expansion
 
 Learning remains separate from recall. Host observations become candidates through a normalized
 event interface; they are not durable facts until policy and, where configured, user review approve
@@ -273,11 +285,18 @@ flowchart TD
     K --> L[Available to Future Recognition]
 ```
 
-The target learning path updates records, catalog relationships, and index state transactionally or
-through an idempotent work queue. Current explicit managed writes create a record, catalog entry, and
-optional embedding, but do not populate arbitrary topic relationships. External writes use
-advertised provider capabilities and retain their provider's consistency semantics. Future learning
-failures must never interrupt the active host request.
+This diagram describes the general target flow. The current canonical path persists screened
+episodes before extraction, resolves supporting sources, records a versioned policy receipt and
+consolidates approved candidates in an atomic PostgreSQL transaction. Candidate ledger, semantic
+memory, provenance, catalog and embeddings commit together. Rejecting a semantic proposal does not
+erase safe evidence. Replay is non-mutating after edits/supersession; unavailable evidence stays
+explicitly unavailable. [Candidate lineage](candidate-lineage.md) defines retention and forgetting.
+
+The native [Session A/B gate](investigation-acceptance.md) verifies the supported shell recovery
+and original-user conclusions. Arbitrary-depth topic population, broad causal extraction, optional
+model quality and general background reflection remain target work. External writes retain their
+provider's advertised consistency semantics. Learning failure never interrupts an active host turn;
+events lost before evidence persistence have no durable outbox guarantee.
 
 ## State and Concurrency
 

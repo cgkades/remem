@@ -4,12 +4,20 @@ version: 1.0
 date_created: 2026-09-09
 last_updated: 2026-09-09
 owner: ReMem maintainers
-status: Planned
+status: Historical execution baseline; verify current status before selecting tasks
 tags: [feature, architecture, memory, recovery, agent-handoff]
 baseline: 683ba5011fb82d29196b1153ec8246902c889b24
 ---
 
 # Introduction
+
+> **HISTORICAL execution baseline.** Requirements and recorded maintainer decisions remain useful,
+> but task readiness, absence claims and old issue references predate the October 8 reconciliation
+> and October 9 learning-loop merges. Read [current status](../docs/current-status.md), the
+> [documentation index](../docs/index.md), live issues and actual source before choosing work.
+> Canonical evidence, lineage, native verified recovery, server policy, bounded startup recovery and
+> the deterministic Session A/B gate are implemented. Broad inference/default rollout are not.
+> This preserves the original plan and approval history without presenting it as a live backlog.
 
 ![Status: Planned](https://img.shields.io/badge/status-Planned-blue)
 

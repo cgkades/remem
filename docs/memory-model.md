@@ -1,6 +1,6 @@
 # Memory Model
 
-## Two Memory Planes
+## Recognition and recall views
 
 Remem separates recognition memory from recall memory.
 
@@ -10,6 +10,12 @@ memory remains in provider-owned records and answers, "What are the relevant det
 The catalog is not evidence that a fact is true, and absence from the rendered catalog is not
 evidence that no long-term memory exists. This separation implements
 [ADR 0003](adr/0003-separate-recognition-from-recall.md).
+
+This index/detail split is separate from the semantic/episodic distinction in
+[TARGET-ARCHITECTURE](TARGET-ARCHITECTURE.md). Consolidated records represent current claims;
+canonical episodes retain screened historical events with source identity, hash and project/session
+authority. Episodes can exist without a semantic candidate, and supersession does not rewrite
+history. Both classes can contribute attributed recall, with historical uncertainty preserved.
 
 ## Provider and Topic Awareness
 
@@ -150,7 +156,7 @@ operation and scope before invoking them. No OpenCode event automatically calls 
 
 The database schema version is defined by the migration files under `migrations/` and the
 installed `remem.schema_migrations` ledger; run `remem doctor` or `remem status` for the live value
-(currently version 7 at this baseline). Notable migrations:
+(version 14 in this source snapshot). Notable migrations:
 
 - version 1 creates providers, sources, memories, provenance, tags, aliases, topics, entities,
   relationships, catalog entries, full-text indexes, and 384-dimensional pgvector embeddings;
@@ -159,13 +165,19 @@ installed `remem.schema_migrations` ledger; run `remem doctor` or `remem status`
 - version 4 adds the `consolidating` candidate status used for restart-safe review and consolidation;
 - version 5 adds durable embedding-model/dimension settings;
 - version 6 adds re-embedding claim tracking on memory embeddings; and
-- version 7 adds correction-candidate storage, revisions, and audit state.
+- version 7 adds correction-candidate storage, revisions, and audit state;
+- versions 8-11 add canonical episodic evidence, capacity/compaction warnings and explicit forgetting;
+- version 12 adds evidence/entity links;
+- version 13 adds durable candidate associations and append-only revision audit; and
+- version 14 records server learning-policy outcomes and indexes bounded evidence windows.
 
-Version 2 tables support an opt-in, reviewable observation pipeline. Automatic capture persists only
-eligible explicit user statements as pending candidates, or a bounded agent-derived `procedure` after
-a verified successful investigation. It never persists raw transcripts. User assertions use `user`
-provenance; learned procedures use `session` provenance with `origin: agent-investigation`. Failed,
-abandoned, or secret-bearing investigations are dropped. Migration mechanics are documented in
+Legacy observation tables and canonical evidence share the existing provider contract. Opt-in
+OpenCode v2 capture persists admitted original-user and native tool events before semantic
+extraction, including safe failed attempts. Secret-bearing evidence is rejected. A failed attempt
+alone is never a successful semantic procedure. User assertions retain original-user provenance;
+the narrow failure/action/recheck procedure retains session evidence and its verification rule.
+Server policy separately decides automatic approval or review. See [host learning](host-evidence-learning.md).
+Migration mechanics are documented in
 [Storage architecture](storage-architecture.md) and
 [ADR 0016](adr/0016-use-ordered-transactional-checksum-migrations.md).
 
@@ -176,9 +188,12 @@ provider record -> catalog recognition -> query result -> synthesized working me
 ```
 
 Working memory is dispatch-scoped in OpenCode v2 and is not automatically persisted. With capture
-enabled, host adapters write eligible user statements as pending candidates. Operators review them with
-`remem candidates` and `remem review`, then run `remem consolidate`; durable promoted memory remains
-traceable to its source observation.
+enabled, host adapters write eligible user statements as candidates. Review-based capture uses
+`remem candidates`, `remem review` and `remem consolidate`. Configured automatic canonical capture
+uses the server policy and atomic consolidation; supported ordinary capture needs no manual memory
+command. Native v2 tool callbacks also learn supported procedures. Durable promoted memory remains
+traceable to its source observations; source expiry is reported honestly. Interrupted approved
+capture is recovered in a bounded startup batch. See [current status](current-status.md).
 
 ## Growth Control
 

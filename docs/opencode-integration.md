@@ -71,13 +71,15 @@ The v2 adapter registers:
 
 ### Practical memory workflow
 
-Users can speak naturally: say **“remember that …”**, **“save this …”**, or
-**“keep this in mind …”** to submit a durable statement to the configured
-capture pipeline. Capture remains subject to the configured review or
-promotion policy and never bypasses credential and untrusted-content filters.
-After a verified successful investigation, hosts may also submit a compact
-resolved-task episode (`enqueueResolvedTask`) so Remem can store a reusable
-procedure without persisting transcripts or failed attempts.
+Ordinary original-user facts, decisions and follow-ups can reach configured capture without a
+memory command; remember/save phrasing is optional. Review and promotion remain subject to
+credential, source and policy checks. With canonical evidence admission and automatic capture
+enabled, production v2 callbacks persist screened user/tool evidence and wire the narrow native
+shell failure/action/identical-successful-recheck sequence into `enqueueResolvedTask`. Safe failed
+attempts remain historical evidence; they cannot become a successful procedure alone. The server
+policy can automatically approve the supported missing-file recovery, while arbitrary shell success
+or an assistant success assertion cannot authorize trusted learning. See
+[host learning](host-evidence-learning.md) and [native Session A/B acceptance](investigation-acceptance.md).
 
 For a stored item that automatic recall did not surface, ask **“search memory
 for …”** or **“what do you remember about …”**; OpenCode can call
@@ -97,8 +99,9 @@ for how a human reviews and approves a correction out of band (currently the
 ## v2 Configuration
 
 The v2 key is `plugins`, plural. An entry can be a package string or an object with `package` and
-`options`. Because `agentic-remem` is not published yet, source installations must point to the
-built package-root entry:
+`options`. Source installations point to the built package-root entry below. Package installations
+use `agentic-remem` as configured by `remem init --opencode`; see [installation](installation.md).
+Newly merged source is not automatically a new registry release.
 
 ```json
 {

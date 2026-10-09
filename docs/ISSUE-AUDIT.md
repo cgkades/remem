@@ -3,10 +3,17 @@ title: ReMem GitHub Issue Audit
 date: 2026-09-09
 baseline: 683ba5011fb82d29196b1153ec8246902c889b24
 repository: https://github.com/cgkades/remem
-status: Reviewed; GitHub changes proposed, not applied
+status: Historical September snapshot; not live issue state
 ---
 
 # ReMem Issue Audit
+
+> **HISTORICAL September 9 baseline.** Issue bodies were reconciled on October 8 and later work
+> merged through #105/#106. Counts, proposed actions and source-level gaps below apply to the named
+> September commit, not current `main`. Use [live issues](https://github.com/cgkades/remem/issues),
+> [current status](current-status.md) and [implementation checklist](IMPLEMENTATION-PLAN.md).
+> #43 was closed after evidence work; #49/#96/#97 are now verified and merged. Do not reopen or
+> reimplement them from these older recommendations.
 
 ## Scope and Authority
 

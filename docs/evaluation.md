@@ -1,5 +1,22 @@
 # Evaluation
 
+## Native cross-session release gate
+
+[Cross-session acceptance](investigation-acceptance.md) describes the installed-package native
+OpenCode v2 investigation against PostgreSQL: failed hypothesis/attempt, verified shell recovery,
+original-user root cause/decision/follow-up and five fresh transcript-free sessions. It asserts
+episodic omitted-detail recall, complete procedure and provenance, obsolete/secret/poison exclusion,
+unrelated/foreign-project controls and pre-learning baseline. The deterministic model answers from
+actual injected memory; optional generative quality is not inferred from it.
+
+[Current status](current-status.md) records the merged CI proof at its named commit: 717 tests on
+each Node version, all seven jobs passed, recall@5 1, zero unsupported assertions/false injection,
+4,201 recalled UTF-8 bytes and 65.19 ms fresh dispatch p95. Bytes are a conservative token upper
+bound; dispatch time includes retrieval and mock model work. Re-run rather than treating this
+fixture result as production latency or general reasoning accuracy. Scorer negative controls are
+in `tests/investigation-quality.test.mjs`; interrupted learning is separately covered by lineage,
+policy and host-procedure database tests.
+
 ## Executable Corpus
 
 The repository contains a real, checked-in evaluation corpus at
@@ -107,7 +124,7 @@ Separate tests cover:
 - untrusted instruction-like memory rendering;
 - v2 system-policy/user-data separation and the v1 compatibility path;
 - migration clean install, sequential upgrade through the current migration set (version 1 through
-  version 7 at this baseline), and repeated no-op migration;
+  version 14 in the October 9 source snapshot), and repeated no-op migration;
 - PostgreSQL CRUD, scope filtering, provenance, full-text/vector search, supersession, and embedding
   failure fallback;
 - managed loopback Compose generation and protected files; and

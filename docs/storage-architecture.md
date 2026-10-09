@@ -20,7 +20,7 @@ Relevant decisions:
 
 ```mermaid
 flowchart LR
-    OC[OpenCode v2 or v1 adapter] --> Core[Remem orchestration core]
+    OC[OpenCode v2, v1 or Pi adapter] --> Core[Remem orchestration core]
     Core --> Router[Provider router]
     Router --> PG[PostgresMemoryProvider]
     Router --> MD[MarkdownMemoryProvider]
@@ -63,7 +63,7 @@ enforce a broader server-version matrix.
 
 Both modes instantiate the same `PostgresMemoryProvider` after connection establishment.
 
-## Migrations 0001-0007
+## Migrations 0001-0014
 
 Migration `0001_initial_schema.sql` creates:
 
@@ -79,9 +79,10 @@ Migration `0001_initial_schema.sql` creates:
 - GIN, scope/freshness, HNSW cosine, and catalog-provider indexes.
 
 Migration `0002_consolidation_observation.sql` adds session events, candidate memories, and
-consolidation records. Opt-in OpenCode capture writes only metadata/provenance to session events and
-keeps candidate text in the candidate row. Candidates begin pending, are explicitly approved or
-rejected, and approved batches can be consolidated.
+consolidation records. The legacy assertion path writes metadata/provenance to session events and
+keeps candidate text in the candidate row. Canonical evidence introduced in 0008 separately stores
+screened text independently of candidate creation. Candidates are pending, server-policy approved,
+or explicitly reviewed before consolidation; caller-provided approval is not authorization.
 
 Migration `0003_scoped_entities_catalog_embeddings.sql` splits legacy entities by provider and scope,
 then adds metadata-only catalog embeddings. Migration `0001` remains immutable so databases created
@@ -93,9 +94,25 @@ embedding model/dimension settings row. Migration `0006_reembed_claims.sql` adds
 tracking on memory embeddings. Migration `0007_correction_candidates.sql` adds correction-candidate
 storage with revisions, state, and audit fields.
 
+| Migration                        | Implemented addition                                                                              |
+| -------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `0008_episodic_evidence.sql`     | Canonical screened evidence text, identity/hash/source fields and bounded episodic search indexes |
+| `0009_capacity_compaction.sql`   | Capacity policy and compacted evidence summaries                                                  |
+| `0010_hard_limit_warning.sql`    | Durable content-free hard-limit warning                                                           |
+| `0011_explicit_forget.sql`       | Explicit forgetting tombstones and audit metadata                                                 |
+| `0012_evidence_entity_links.sql` | Evidence-to-entity lookup links                                                                   |
+| `0013_candidate_lineage.sql`     | Scoped body-free candidate ledger and append-only revision audit                                  |
+| `0014_learning_policy.sql`       | Candidate policy outcome/reason and bounded investigation-window index                            |
+
+Managed canonical promotion resolves and revalidates supporting evidence. Semantic memory,
+provenance, catalog, embeddings, ledger and audit commit atomically under existing scope locks.
+Legacy missing history is not invented. Retention/forgetting can make evidence unavailable without
+automatically deleting independently supported semantic memory. See [lineage](candidate-lineage.md),
+[host learning](host-evidence-learning.md) and [startup recovery](learning-recovery.md).
+
 The application config has `version: 1`; that is the config-file format and is independent of the
 database schema version, which is defined by the migration set above and the installed
-`remem.schema_migrations` ledger (currently version 7 at this baseline). Run `remem doctor` or
+`remem.schema_migrations` ledger (version 14 in this source snapshot). Run `remem doctor` or
 `remem status` for the live value rather than assuming a fixed number.
 
 ## Migration Integrity
@@ -132,8 +149,9 @@ Lexical and vector top-K candidates are selected separately, then unioned and re
 vectors are compared only when their model ID and dimensions match the active embedding model.
 
 Embedding failure does not discard a write. The record remains searchable lexically. The default
-vector is deterministic feature hashing with small concept groups, not a neural embedding; see
-[Retrieval pipeline](retrieval-pipeline.md).
+model depends on configuration: `remem init` selects local BGE neural embeddings; plugin-only
+configuration defaults to deterministic feature hashing. Hash is also the fail-open fallback.
+See [Embeddings](embeddings.md) and [Retrieval pipeline](retrieval-pipeline.md).
 
 ## Catalog Shape
 
@@ -144,15 +162,15 @@ arbitrary topic branches and rendering does not traverse them. This is the imple
 
 ## Lifecycle Ownership
 
-| Command         | Managed mode                                | External mode                              |
-| --------------- | ------------------------------------------- | ------------------------------------------ |
-| `remem start`   | Starts Compose, then migrates               | Does not start PostgreSQL; runs migrations |
-| `remem stop`    | Runs Compose `down`                         | Makes no server change                     |
-| `remem status`  | Runs the same checks as `doctor`            | Runs the same checks as `doctor`           |
-| `remem migrate` | Applies verified migrations                 | Applies verified migrations                |
-| `remem backup`  | Uses `pg_dump` inside the container         | Uses host `pg_dump`                        |
-| `remem restore` | Uses `pg_restore` inside the container      | Uses host `pg_restore`                     |
-| `remem reset`   | Deletes the Compose volume and recreates v2 | Refuses                                    |
+| Command         | Managed mode                                            | External mode                              |
+| --------------- | ------------------------------------------------------- | ------------------------------------------ |
+| `remem start`   | Starts Compose, then migrates                           | Does not start PostgreSQL; runs migrations |
+| `remem stop`    | Runs Compose `down`                                     | Makes no server change                     |
+| `remem status`  | Runs the same checks as `doctor`                        | Runs the same checks as `doctor`           |
+| `remem migrate` | Applies verified migrations                             | Applies verified migrations                |
+| `remem backup`  | Uses `pg_dump` inside the container                     | Uses host `pg_dump`                        |
+| `remem restore` | Uses `pg_restore` inside the container                  | Uses host `pg_restore`                     |
+| `remem reset`   | Deletes the Compose volume and reapplies all migrations | Refuses                                    |
 
 `REMEM_DATABASE_URL` overrides the stored connection string in external mode. Managed mode ignores
 it so provider traffic, migrations, lifecycle, and backup cannot target different databases.
