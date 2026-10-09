@@ -23,6 +23,7 @@ import { createEmbeddingModel } from "../../storage/embedding-neural.js"
 import type { MemoryContext, MemoryProvider, RememLogger } from "../../types.js"
 import { formatMemoryExplain, MEMORY_TOOL_DESCRIPTIONS } from "./memory-ux.js"
 import { V2EvidenceAdapter } from "./evidence.js"
+import { verifiedProcedureFromEvidence } from "../../verified-procedure.js"
 import {
   TRUSTED_REMEM_INSTRUCTION,
   currentTurnId,
@@ -389,7 +390,31 @@ export const RememPlugin = Plugin.define({
         parsed.config,
         { host: "opencode-v2", projectId: location.projectId },
         logger,
-        (envelope) => {
+        async (envelope, signal) => {
+          if (coordinator && envelope.role === "tool" && envelope.host === "opencode-v2") {
+            const primary = created.providers.find(
+              (provider) => provider.id === envelope.providerId,
+            )
+            if (primary instanceof PostgresMemoryProvider) {
+              const window = await primary.readProcedureEvidenceWindow(
+                envelope.providerId,
+                envelope.id,
+                {
+                  ...envelope.context,
+                  directory: location.directory,
+                  worktree: location.worktree,
+                },
+              )
+              signal.throwIfAborted()
+              const episode = verifiedProcedureFromEvidence(window, {
+                ...envelope.context,
+                directory: location.directory,
+                worktree: location.worktree,
+              })
+              if (episode) coordinator.enqueueResolvedTask(episode)
+            }
+          }
+          signal.throwIfAborted()
           if (
             envelope.role !== "user" ||
             envelope.origin !== "direct-user" ||

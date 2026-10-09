@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto"
 import type { CandidateLineage } from "../learning-ledger.js"
+import {
+  PROCEDURE_WINDOW_LIMIT,
+  SHELL_RECOVERY_RULE,
+  verifiedProcedureFromEvidence,
+} from "../verified-procedure.js"
+import { extractProcedureCandidate, observationFromResolvedTask } from "../procedure.js"
+import { parseConfig } from "../config.js"
 import { Pool, type PoolClient, type QueryResultRow } from "pg"
 import type { PostgresProviderConfig } from "../config.js"
 import {
@@ -1275,7 +1282,11 @@ export class PostgresMemoryProvider
       if (!Array.isArray(refs)) throw new Error("candidate evidence is unavailable")
       return refs as unknown[]
     })
-    if (raw === undefined && provenanceRefs.length === 0) return undefined
+    if (raw === undefined && provenanceRefs.length === 0) {
+      if (observation.payload.verificationRule !== undefined)
+        throw new Error("candidate evidence is unavailable")
+      return undefined
+    }
     if (!Array.isArray(raw) || raw.length === 0 || raw.length > 16 || provenanceRefs.length > 16)
       throw new Error("candidate evidence is unavailable")
     const refs = raw.map((value: unknown) => {
@@ -1343,6 +1354,37 @@ export class PostgresMemoryProvider
         throw new Error("candidate evidence does not support this capture")
       ids.push(row.id)
     }
+    if (observation.payload.verificationRule !== undefined) {
+      const window = await this.procedureEvidenceWindow(
+        client,
+        this.id,
+        refs.at(-1)!,
+        observation.context,
+      )
+      const episode = verifiedProcedureFromEvidence(window, observation.context)
+      const expected = episode && observationFromResolvedTask(episode)
+      const extracted =
+        expected && extractProcedureCandidate(expected, parseConfig({}).config.capture)
+      if (
+        !expected ||
+        !extracted ||
+        observation.payload.verificationRule !== SHELL_RECOVERY_RULE ||
+        observation.id !== expected.id ||
+        observation.payload.text !== expected.payload.text ||
+        JSON.stringify(raw) !== JSON.stringify(expected.payload.evidenceRefs) ||
+        candidate.id !== extracted.id ||
+        candidate.memory.type !== "procedure" ||
+        candidate.memory.content !== extracted.memory.content ||
+        candidate.memory.scope.kind !== "project" ||
+        candidate.memory.scope.id !== observation.context.projectId ||
+        observation.payload.requireReview !== true
+      )
+        throw new Error("candidate evidence does not verify this procedure")
+    } else if (observation.kind === "task-resolved") {
+      // Declaring canonical tool evidence opts into the new source contract.
+      // The legacy trusted helper without references retains its old behavior.
+      throw new Error("candidate evidence does not verify this procedure")
+    }
     return ids
   }
 
@@ -1357,6 +1399,8 @@ export class PostgresMemoryProvider
     } = {},
   ): Promise<void> {
     options.signal?.throwIfAborted()
+    if (observation.payload.verificationRule !== undefined && options.autoApprove)
+      throw new Error("host-derived procedures require review")
     if (candidate.status !== "pending")
       throw new TypeError("automatic capture may only persist pending candidates")
     const sessionId = observation.context.sessionId
@@ -2066,6 +2110,50 @@ export class PostgresMemoryProvider
     const row = result.rows[0]
     if (!row) return undefined
     return episodicRowToEnvelope(row)
+  }
+
+  async readProcedureEvidenceWindow(
+    providerId: string,
+    triggerId: string,
+    context: MemoryContext,
+  ): Promise<EvidenceEnvelope[]> {
+    return this.procedureEvidenceWindow(this.pool, providerId, triggerId, context)
+  }
+
+  /** Bounded original-task window, ordered by PostgreSQL ingestion time,
+   * not the host's absent timestamp or lexical evidence hash. Equal times
+   * and a missing original prompt are unsupported, never guessed. */
+  private async procedureEvidenceWindow(
+    queryable: Pool | PoolClient,
+    providerId: string,
+    triggerId: string,
+    context: MemoryContext,
+  ): Promise<EvidenceEnvelope[]> {
+    if (providerId !== this.id || !context.sessionId) return []
+    const result = await queryable.query<EpisodicEventRow & { evidence_order: string }>(
+      `WITH trigger AS (
+         SELECT created_at FROM remem.session_events
+         WHERE provider_id=$1 AND evidence_id=$2 AND project_id=$3 AND session_id=$4
+           AND host='opencode-v2'
+       )
+       SELECT e.*, e.created_at::text AS evidence_order FROM remem.session_events e, trigger t
+       WHERE e.provider_id=$1 AND e.project_id=$3 AND e.session_id=$4
+         AND e.host='opencode-v2' AND e.evidence_id IS NOT NULL AND e.created_at<=t.created_at
+       ORDER BY e.created_at DESC, e.id DESC LIMIT $5`,
+      [providerId, triggerId, context.projectId, context.sessionId, PROCEDURE_WINDOW_LIMIT + 1],
+    )
+    const rows = result.rows
+    if (rows[0]?.evidence_id !== triggerId) return []
+    const prompt = rows.findIndex((row) => row.role === "user")
+    if (prompt < 0 || prompt >= PROCEDURE_WINDOW_LIMIT) return []
+    const selected = rows.slice(0, prompt + 1)
+    if (
+      selected.some(
+        (row, index) => index > 0 && row.evidence_order === selected[index - 1]?.evidence_order,
+      )
+    )
+      return []
+    return selected.reverse().map(episodicRowToEnvelope)
   }
 
   /**

@@ -472,7 +472,10 @@ export class CaptureCoordinator {
             (signal) => this.extractor.extract([observation], signal),
             this.shutdown.signal,
           )
-          const promote = this.config.autoPromote ? this.promote : undefined
+          const promote =
+            this.config.autoPromote && observation.payload.requireReview !== true
+              ? this.promote
+              : undefined
           for (const candidate of candidates) {
             await withTimeout(
               this.config.timeoutMs,

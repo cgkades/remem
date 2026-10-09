@@ -22,6 +22,27 @@ const OUTAGE_PROMPT = "Continue even if long-term memory is unavailable."
 const LEARNING_PROMPT = "Investigate the Phoenix checkpoint failure."
 const LEARNING_QUERY = "Let's continue the Phoenix work."
 const LEARNING_DETAIL = "Phoenix checkpoint lookup root: workspace cwd."
+const PROCEDURE_PROMPT = "Investigate the missing Phoenix recovery checkpoint."
+const PROCEDURE_CHECK =
+  "test -f phoenix-recovery.txt || { printf 'Phoenix checkpoint missing\\n'; exit 1; }"
+const PROCEDURE_ACTION = "printf 'checkpoint ready\\n' > phoenix-recovery.txt"
+const PROCEDURE_STEPS = [
+  {
+    id: "call_procedure_fail",
+    name: "shell",
+    arguments: JSON.stringify({ command: PROCEDURE_CHECK }),
+  },
+  {
+    id: "call_procedure_action",
+    name: "shell",
+    arguments: JSON.stringify({ command: PROCEDURE_ACTION }),
+  },
+  {
+    id: "call_procedure_verify",
+    name: "shell",
+    arguments: JSON.stringify({ command: PROCEDURE_CHECK }),
+  },
+]
 const LEARNING_STATEMENTS =
   "Phoenix worker uses cwd-relative checkpoint paths. We decided to use isolated checkpoint directories for Phoenix. Phoenix crash recovery is blocked on interruption tests."
 const LEARNING_STEPS = [
@@ -284,9 +305,10 @@ async function handleModelRequest(incoming, response, state) {
       .map((message) => message.tool_call_id),
   )
   const learning = messages.includes(LEARNING_PROMPT)
-  const steps = learning ? LEARNING_STEPS : TOOL_CALL_STEPS
+  const procedure = messages.includes(PROCEDURE_PROMPT)
+  const steps = procedure ? PROCEDURE_STEPS : learning ? LEARNING_STEPS : TOOL_CALL_STEPS
   const nextStep =
-    isRelated || learning
+    isRelated || learning || procedure
       ? steps.find(
           (step, index) =>
             !resultIds.has(step.id) &&
@@ -1159,6 +1181,43 @@ async function main() {
           throw new Error("Session B retained Session A's transcript")
       }
       if (recallRequests.length === 0) throw new Error("fresh session never reached model dispatch")
+      // #96 / Phase 5: ordinary native failure/action/recheck callbacks
+      // create a pending procedure from stored evidence. No memory tool,
+      // fabricated resolution callback or model success flag is involved.
+      const procedureSession = await createSession(serverURL, learningWorkspace)
+      await prompt(serverURL, procedureSession, PROCEDURE_PROMPT)
+      await pollUntil("native verified pending procedure", async () => {
+        const rows = await hooksPool.query(
+          `SELECT c.status,c.content,l.observation_ids FROM remem.candidate_memories c
+           JOIN remem.candidate_lineage l ON l.candidate_id=c.id
+           JOIN remem.session_events e ON e.id=c.session_event_id
+           WHERE e.session_id=$1 AND c.type='procedure' AND l.provider_id='hooks-postgres'`,
+          [procedureSession],
+        )
+        if (!rows.rows.length) return false
+        if (
+          rows.rows.length !== 1 ||
+          rows.rows[0].status !== "pending" ||
+          rows.rows[0].observation_ids.length !== 4 ||
+          !rows.rows[0].content.includes(PROCEDURE_ACTION)
+        )
+          throw new Error(`native procedure contract changed: ${JSON.stringify(rows.rows)}`)
+        return true
+      })
+      const procedures = await hooksPool.query(
+        "SELECT id FROM remem.memories WHERE provider_id='hooks-postgres' AND type='procedure'",
+      )
+      if (procedures.rowCount !== 0) throw new Error("new host procedure bypassed pending review")
+      process.stdout.write(
+        JSON.stringify({
+          gate: "host-verified-procedure",
+          pendingCandidates: 1,
+          canonicalSources: 4,
+          automaticPromotions: 0,
+          rule: "native-shell-recovery-v1",
+          procedureQuality: "observed recovery sequence; root-cause/model quality not evaluated",
+        }) + "\n",
+      )
       const unrelatedLearningSession = await createSession(serverURL, learningWorkspace)
       await prompt(serverURL, unrelatedLearningSession, UNRELATED_PROMPT)
       const unrelatedLearningRequests = model.requests.filter((body) =>

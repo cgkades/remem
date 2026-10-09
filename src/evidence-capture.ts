@@ -24,7 +24,10 @@ export class EvidenceCaptureCoordinator {
     private readonly config: EvidenceAdmissionConfig,
     private readonly timeoutMs: number,
     private readonly logger: RememLogger,
-    private readonly onPersisted?: (envelope: EvidenceEnvelope) => void,
+    private readonly onPersisted?: (
+      envelope: EvidenceEnvelope,
+      signal: AbortSignal,
+    ) => void | Promise<void>,
   ) {}
 
   private diagnostic(reason: string): void {
@@ -140,7 +143,11 @@ export class EvidenceCaptureCoordinator {
             this.shutdown.signal,
           )
           if (persistedEnvelope && !this.shutdown.signal.aborted)
-            this.onPersisted?.(persistedEnvelope)
+            await withTimeout(
+              this.timeoutMs,
+              async (signal) => this.onPersisted?.(persistedEnvelope, signal),
+              this.shutdown.signal,
+            )
         } catch {
           this.diagnostic("persistence-failed")
         }
@@ -167,7 +174,7 @@ export function createEvidenceCaptureCoordinator(
   config: RememConfig,
   authority: Omit<AdmissionAuthority, "providerId">,
   logger: RememLogger,
-  onPersisted?: (envelope: EvidenceEnvelope) => void,
+  onPersisted?: (envelope: EvidenceEnvelope, signal: AbortSignal) => void | Promise<void>,
 ): EvidenceCaptureCoordinator | undefined {
   if (!config.evidenceAdmission.enabled) return undefined
   const primary = config.providers.find(
