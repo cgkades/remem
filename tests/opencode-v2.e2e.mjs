@@ -1191,17 +1191,20 @@ async function main() {
         freshness: "superseded",
       })
       const freshSession = await createSession(serverURL, learningWorkspace)
+      const beforeFreshRecall = model.requests.length
       const started = performance.now()
       await prompt(serverURL, freshSession, LEARNING_QUERY)
       const dispatchRoundTripMs = performance.now() - started
       // The runtime also sends title-generation requests containing the
       // user's prompt. Only agent dispatch advertises native tools and runs
       // the session context hook; a title request is not a recall failure.
-      const recallRequests = model.requests.filter(
-        (body) =>
-          JSON.stringify(body.messages).includes(LEARNING_QUERY) &&
-          body.tools?.some((tool) => tool.function?.name === "read"),
-      )
+      const recallRequests = model.requests
+        .slice(beforeFreshRecall)
+        .filter(
+          (body) =>
+            JSON.stringify(body.messages).includes(LEARNING_QUERY) &&
+            body.tools?.some((tool) => tool.function?.name === "read"),
+        )
       const expected = [
         ROOT_CAUSE,
         "cwd-relative checkpoint paths",
