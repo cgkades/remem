@@ -811,8 +811,8 @@ export class PostgresMemoryProvider
            (NOT EXISTS (SELECT 1 FROM remem.candidate_lineage l
              WHERE l.provider_id = $2 AND l.scope_kind = $3 AND l.scope_key = COALESCE($4, '')
                AND l.candidate_id = $1::uuid) AND
-             (m.metadata->'consolidation'->>'candidateId' = $1 OR
-              m.metadata->'consolidation'->>'lastCandidateId' = $1))
+             (m.metadata->'consolidation'->>'candidateId' = $1::text OR
+              m.metadata->'consolidation'->>'lastCandidateId' = $1::text))
          )
          AND m.scope_kind = $3
          AND m.scope_id IS NOT DISTINCT FROM $4
@@ -3017,6 +3017,35 @@ export class PostgresMemoryProvider
 
   private async insertSource(client: PoolClient, source: MemorySource): Promise<string> {
     const id = source.id && UUID_PATTERN.test(source.id) ? source.id : randomUUID()
+    // A retrieved source can have a UUID without an external ID. PostgreSQL's
+    // external-ID upsert cannot handle that primary-key replay. Reuse only the
+    // same provider and immutable identity, never a caller's foreign UUID.
+    if (source.id && UUID_PATTERN.test(source.id)) {
+      const existing = await client.query<{ id: string }>(
+        "SELECT id FROM remem.sources WHERE id=$1 FOR UPDATE",
+        [id],
+      )
+      if (existing.rowCount) {
+        const reused = await client.query<{ id: string }>(
+          `UPDATE remem.sources SET
+            observed_at=COALESCE($6,observed_at), metadata=metadata || $7::jsonb
+           WHERE id=$1 AND provider_id=$2 AND kind=$3
+             AND uri IS NOT DISTINCT FROM $4 AND external_id IS NOT DISTINCT FROM $5
+           RETURNING id`,
+          [
+            id,
+            this.id,
+            source.kind,
+            source.uri ?? null,
+            source.externalId ?? null,
+            source.observedAt ?? null,
+            JSON.stringify(source.metadata ?? {}),
+          ],
+        )
+        if (!reused.rows[0]) throw new Error("source identity does not match this provider")
+        return reused.rows[0].id
+      }
+    }
     const result = await client.query<{ id: string }>(
       `INSERT INTO remem.sources
          (id, provider_id, kind, uri, external_id, observed_at, metadata)

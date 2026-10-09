@@ -68,6 +68,7 @@ integration("durable managed candidate lineage", () => {
   const legacyFirst = randomUUID()
   const legacyMiddle = randomUUID()
   const legacyLast = randomUUID()
+  const legacyObservation = randomUUID()
   beforeAll(async () => {
     await pool.query("DROP SCHEMA IF EXISTS remem CASCADE")
     const directory = await mkdtemp(path.join(os.tmpdir(), "remem-old-lineage-"))
@@ -81,6 +82,17 @@ integration("durable managed candidate lineage", () => {
         ...candidate("Retained legacy fixture").memory,
         metadata: { consolidation: { candidateId: legacyFirst, lastCandidateId: legacyLast } },
       })
+      await pool.query(
+        `INSERT INTO remem.session_events (id,session_id,project_id,kind,occurred_at,payload)
+        VALUES ($1,$2,$3,'fact-discovered',now(),'{}')`,
+        [legacyObservation, context.sessionId, context.projectId],
+      )
+      await pool.query(
+        `INSERT INTO remem.candidate_memories
+        (id,session_event_id,type,title,content,scope_kind,scope_id,confidence,status,metadata)
+        VALUES ($1,$2,'semantic','Legacy capture','Legacy body','project',$3,0.9,'promoted',$4)`,
+        [legacyFirst, legacyObservation, context.projectId, { providerId: config.id }],
+      )
       await runMigrations(pool)
     } finally {
       await rm(directory, { recursive: true, force: true })
@@ -95,7 +107,8 @@ integration("durable managed candidate lineage", () => {
     const last = await provider().candidateLineage(legacyLast, context)
     expect(first).toMatchObject({ state: "promoted" })
     expect(last?.memoryId).toBe(first?.memoryId)
-    expect(first?.audit[0]?.action).toBe("legacy-retained-association")
+    expect(first?.audit.some((row) => row.action === "legacy-retained-association")).toBe(true)
+    expect(first?.observationIds).toEqual([legacyObservation])
     expect(await provider().candidateLineage(legacyMiddle, context)).toBeUndefined()
   })
 
@@ -139,6 +152,28 @@ integration("durable managed candidate lineage", () => {
         await store.candidateLineage(input.id, { ...context, projectId: "foreign" }),
       ).toBeUndefined()
     }
+  })
+
+  it("reuses provenance IDs only for the same source identity and provider", async () => {
+    const store = provider()
+    const written = await store.write(candidate("Source identity fixture").memory)
+    const source = (await store.get(written.id, context))?.provenance?.[0]?.source
+    if (!source?.id) throw new Error("missing durable source identity")
+    const provenance = [{ source, capturedAt: "2026-10-01T12:00:00.000Z", original: true }]
+    await expect(store.write({ ...candidate().memory, provenance })).resolves.toBeDefined()
+    await expect(
+      store.write({
+        ...candidate().memory,
+        provenance: [{ ...provenance[0]!, source: { ...source, uri: "remem://forged-source" } }],
+      }),
+    ).rejects.toThrow("source identity")
+    const foreign = new PostgresMemoryProvider(
+      { ...config, id: "foreign-source-provider" },
+      { pool },
+    )
+    await expect(foreign.write({ ...candidate().memory, provenance })).rejects.toThrow(
+      "source identity",
+    )
   })
 
   it("serializes concurrent first delivery across independent providers", async () => {
@@ -252,6 +287,22 @@ integration("durable managed candidate lineage", () => {
       "rejected",
     )
     expect((await store.candidateLineage(input.id, context))?.state).toBe("rejected")
+  })
+
+  it("uses the reviewed durable body instead of a caller's replacement text", async () => {
+    const store = provider()
+    const event = observation()
+    const input = { ...candidate(), status: "pending" as const, observationIds: [event.id] }
+    await store.persistCandidate(event, input)
+    await store.reviewCandidate(input.id, "approved", 0)
+    const forged = {
+      ...input,
+      status: "approved" as const,
+      memory: { ...input.memory, content: "Caller supplied unsupported replacement." },
+    }
+    const result = (await new DeterministicConsolidationPipeline(store).consolidate([forged]))[0]
+    expect(result?.status).toBe("promoted")
+    expect((await store.get(memoryId(result), context))?.content).toBe(input.memory.content)
   })
 
   it("retains a body-free expired decision and suppresses later approval replay", async () => {
