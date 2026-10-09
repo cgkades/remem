@@ -20,6 +20,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Optional Pi terminal memory status shows only bounded provider/recall counts. It is off by default,
+  nonblocking, deadline-limited and disabled outside interactive terminal mode. Refs [#55](https://github.com/cgkades/remem/issues/55).
+
 - The Pi package includes a host-neutral `remem-memory-tools` skill covering recall/search,
   uncertainty, provenance and untrusted memory. Native local-package and installed-tarball tests
   verify one discovery/body load; OpenCode behavior is unchanged. Refs [#56](https://github.com/cgkades/remem/issues/56).

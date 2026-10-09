@@ -1083,3 +1083,92 @@ describe("Pi CLI and doctor wiring", () => {
     expect(result.status).toBe("warn")
   })
 })
+
+describe("Pi optional health status", () => {
+  async function start(enabled = true, mode = "tui", hasUI = true, setStatus = vi.fn()) {
+    const paths = await installedConfig({ pi: { configured: true, memoryStatusUI: enabled } })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const ctx = { ...fakeContext(fixtureDirectory), mode, hasUI, ui: { setStatus } }
+    await pi.fire("session_start", {}, ctx)
+    return { pi, ctx, setStatus }
+  }
+  const settle = () => new Promise(resolve => setTimeout(resolve, 5))
+
+  it("shows only bounded counts and clears interactive UI on shutdown", async () => {
+    vi.spyOn(RememOrchestrator.prototype, "status").mockResolvedValue({
+      providers: [{ id: "unsafe provider body", health: { status: "healthy" } },
+        { id: "api_key=unsafe-secret", health: { status: "unavailable", message: "unsafe message" } }],
+      lastTrace: { prompt: "unsafe prompt", content: "unsafe memory" },
+    })
+    const { pi, ctx, setStatus } = await start()
+    await settle()
+    expect(setStatus).toHaveBeenCalledWith("remem", "ReMem: 1/2 providers; recall pending")
+    const text = String(setStatus.mock.calls[0]?.[1])
+    expect(text.length).toBeLessThanOrEqual(100)
+    expect(text).not.toMatch(/unsafe|secret|api_key/)
+    await pi.fire("session_shutdown", {}, ctx)
+    expect(setStatus).toHaveBeenLastCalledWith("remem", undefined)
+  })
+
+  it.each(["rpc", "print", "json"])("does no UI work in %s mode even when hasUI is true", async mode => {
+    const status = vi.spyOn(RememOrchestrator.prototype, "status")
+    const { pi, ctx, setStatus } = await start(true, mode, true)
+    await pi.fire("before_agent_start", { prompt: "Phoenix database" }, ctx)
+    expect(status).not.toHaveBeenCalled()
+    expect(setStatus).not.toHaveBeenCalled()
+    await pi.fire("session_shutdown", {}, ctx)
+  })
+
+  it("stays disabled by default and no-ops without a supported UI", async () => {
+    const status = vi.spyOn(RememOrchestrator.prototype, "status")
+    for (const [enabled, hasUI] of [[false, true], [true, false]]) {
+      const { pi, ctx, setStatus } = await start(enabled, "tui", hasUI)
+      await settle()
+      expect(status).not.toHaveBeenCalled()
+      expect(setStatus).not.toHaveBeenCalled()
+      await pi.fire("session_shutdown", {}, ctx)
+    }
+    const paths = await installedConfig({ pi: { configured: true, memoryStatusUI: true } })
+    vi.stubEnv("REMEM_CONFIG", paths.configFile)
+    const pi = new FakeExtensionAPI()
+    remem(asExtensionAPI(pi))
+    const ctx = { ...fakeContext(fixtureDirectory), mode: "tui", hasUI: true, ui: {} }
+    await pi.fire("session_start", {}, ctx)
+    expect(status).not.toHaveBeenCalled()
+    await pi.fire("session_shutdown", {}, ctx)
+  })
+
+  it("does not block recall on pending health or publish a late result after shutdown", async () => {
+    let finish: ((value: Record<string, unknown>) => void) | undefined
+    const status = vi.spyOn(RememOrchestrator.prototype, "status").mockReturnValue(
+      new Promise(resolve => { finish = resolve }),
+    )
+    const { pi, ctx, setStatus } = await start()
+    const result = await pi.fire("before_agent_start", { prompt: "Phoenix database" }, ctx)
+    expect(JSON.stringify(result)).toContain("use logical replication")
+    expect(status).toHaveBeenCalledTimes(1)
+    await pi.fire("session_shutdown", {}, ctx)
+    finish?.({ providers: [] })
+    await settle()
+    expect(setStatus.mock.calls).toEqual([["remem", undefined]])
+  })
+
+  it("contains throwing UI failures without affecting memory injection", async () => {
+    vi.spyOn(RememOrchestrator.prototype, "status").mockResolvedValue({ providers: [] })
+    const setStatus = vi.fn(() => { throw new Error("unsafe UI body") })
+    const { pi, ctx } = await start(true, "tui", true, setStatus)
+    await settle()
+    expect(JSON.stringify(await pi.fire("before_agent_start", { prompt: "Phoenix database" }, ctx))).toContain("use logical replication")
+    await expect(pi.fire("session_shutdown", {}, ctx)).resolves.toBeUndefined()
+  })
+
+  it("bounds a hung advisory check to 250ms and reports only unavailability", async () => {
+    vi.spyOn(RememOrchestrator.prototype, "status").mockReturnValue(new Promise(() => {}))
+    const { pi, ctx, setStatus } = await start()
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(setStatus).toHaveBeenCalledWith("remem", "ReMem: unavailable")
+    await pi.fire("session_shutdown", {}, ctx)
+  })
+})

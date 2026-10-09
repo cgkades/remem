@@ -192,6 +192,21 @@ is currently no way to pass inline provider configuration to the Pi adapter the 
 plugin `options.providers` allows -- run `remem init` (with `--pi` to also register the extension;
 see below) to configure providers, capture, and compaction, then restart Pi.
 
+## Optional terminal status
+
+Set `pi.memoryStatusUI: true` in the installed application config to show a small footer status
+in Pi's interactive terminal mode. It is disabled by default. The text contains only healthy/total
+provider counts and the last selected recall count (or `pending`), never names, memory bodies,
+diagnostics, credentials or prompts. Counts describe the sampled session; they are not an audit
+of all stored knowledge.
+
+The adapter schedules a read-only check at session start and eligible agent starts, at most once
+per ten seconds, with a 250 ms display deadline. Agent turns do not await it. Failed checks display
+`ReMem: unavailable`; UI exceptions are contained. Shutdown aborts publication and clears the
+status, and late results cannot update a replacement session. RPC, print, JSON and unsupported UI
+contexts perform no status work, even when `hasUI` is true. Capture permissions and recall
+decisions are unchanged.
+
 ## Installing the Extension
 
 The package also declares `pi.skills: ["./skills"]` and ships the host-neutral

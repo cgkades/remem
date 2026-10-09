@@ -324,3 +324,10 @@ memory bodies, but titles and query terms may still be sensitive. Keep debug dis
 
 Run `remem doctor` after changing application configuration. Inline OpenCode options are validated
 only when the plugin starts.
+
+## Pi Terminal Status
+
+The application-only `pi.memoryStatusUI` boolean enables the optional bounded terminal status
+described in [Pi integration](pi-integration.md#optional-terminal-status). It defaults to disabled
+and applies only to supported interactive terminal contexts; RPC and print modes do no UI work.
+It does not enable capture, authorize persistence or change retrieval.
