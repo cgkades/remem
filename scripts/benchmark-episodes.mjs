@@ -1,7 +1,7 @@
 // Query-plan comparison over temporary synthetic histories; never reads or alters installed memory.
 import assert from "node:assert/strict"
 import { readFile, mkdir, writeFile } from "node:fs/promises"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, URL } from "node:url"
 import path from "node:path"
 import process from "node:process"
 import { performance } from "node:perf_hooks"
