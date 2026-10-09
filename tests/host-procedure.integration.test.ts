@@ -117,9 +117,10 @@ integration("host verified procedure learning", () => {
     const row = rows.rows[0]!
     expect(row.status).toBe("promoted")
     // JSONB can reorder object keys; reference array order stays significant.
-    expect(row.metadata.learningObservation).toMatchObject({
-      payload: { evidenceRefs: expect.any(Array) },
-    })
+    const savedObservation = row.metadata.learningObservation as {
+      payload: { evidenceRefs: unknown }
+    }
+    expect(Array.isArray(savedObservation.payload.evidenceRefs)).toBe(true)
     const lineage = await store.candidateLineage(row.id, {
       ...procedureContext,
       sessionId: session,
