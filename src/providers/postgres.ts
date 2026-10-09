@@ -1474,7 +1474,7 @@ export class PostgresMemoryProvider
         observation.payload.verificationRule !== SHELL_RECOVERY_RULE ||
         observation.id !== expected.id ||
         observation.payload.text !== expected.payload.text ||
-        JSON.stringify(raw) !== JSON.stringify(expected.payload.evidenceRefs) ||
+        !isDeepStrictEqual(raw, expected.payload.evidenceRefs) ||
         candidate.id !== extracted.id ||
         candidate.memory.type !== "procedure" ||
         candidate.memory.content !== extracted.memory.content ||
