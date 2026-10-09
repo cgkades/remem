@@ -35,7 +35,7 @@ integration("search-first episodic query correctness", () => {
       ["query-provider", "query-project"],
       ["foreign-provider", "query-project"],
       ["query-provider", "foreign-project"],
-    ]) {
+    ] as const) {
       for (let i = 0; i < 5; i++) {
         const role = i % 2 === 0 ? ("user" as const) : ("assistant" as const)
         const admitted = admitEvidence(
