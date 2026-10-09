@@ -257,6 +257,7 @@ async function buildSessionState(
       embeddingModel,
     })
     const capture = createCaptureCoordinator(created.providers, parsed.config, logger)
+    await capture?.recover(location)
     return {
       location,
       config: parsed.config,

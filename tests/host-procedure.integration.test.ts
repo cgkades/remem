@@ -262,6 +262,60 @@ integration("host verified procedure learning", () => {
     ).toBe(0)
   })
 
+  it("recovers interrupted approved capture on host restart without replay or human approval", async () => {
+    const session = "startup-interruption"
+    const crash = vi
+      .spyOn(PostgresMemoryProvider.prototype, "withCandidateTransaction")
+      .mockRejectedValue(new Error("fixture interruption after approval persistence"))
+    const first = await start(session)
+    try {
+      for (let index = 0; index < 3; index++)
+        await first.emit("tool.execute.after", tool(index, session))
+      await first.dispose?.()
+    } finally {
+      crash.mockRestore()
+    }
+    const lookup = async () =>
+      (
+        await pool.query<CandidateRow>(
+          "SELECT * FROM remem.candidate_memories WHERE type='procedure' AND session_event_id IN (SELECT id FROM remem.session_events WHERE session_id=$1)",
+          [session],
+        )
+      ).rows[0]!
+    expect((await lookup()).status).toBe("approved")
+    const before = await pool.query("SELECT id FROM remem.session_events WHERE session_id=$1", [
+      session,
+    ])
+    const disabled = host(false)
+    const disposeDisabled = await RememPlugin.setup(disabled.context)
+    await disposeDisabled?.()
+    expect((await lookup()).status).toBe("approved")
+    const restarted = host()
+    const disposeRestarted = await RememPlugin.setup(restarted.context)
+    await disposeRestarted?.()
+    const row = await lookup()
+    expect(row.status).toBe("promoted")
+    expect((await store.candidateLineage(row.id, procedureContext))?.state).toBe("promoted")
+    expect(
+      (await pool.query("SELECT id FROM remem.session_events WHERE session_id=$1", [session]))
+        .rowCount,
+    ).toBe(before.rowCount)
+  })
+
+  it("keeps host setup usable when startup recovery is unavailable", async () => {
+    const unavailable = vi
+      .spyOn(PostgresMemoryProvider.prototype, "recoverLearningCandidates")
+      .mockRejectedValue(new Error("fixture unavailable"))
+    const instance = host()
+    try {
+      const dispose = await RememPlugin.setup(instance.context)
+      expect(dispose).toBeTypeOf("function")
+      await dispose?.()
+    } finally {
+      unavailable.mockRestore()
+    }
+  })
+
   it("independently verifies stored native evidence and refuses forged bodies, rules and auto-approval", async () => {
     const evidence = procedureEvidence(providerId)
     for (const envelope of evidence) await store.appendEvidence(envelope)

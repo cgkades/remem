@@ -74,6 +74,12 @@ export interface ObservationStore {
     },
   ): Promise<void | CaptureReceipt>
   candidateStatus(context: MemoryContext): Promise<CandidateStatusSummary>
+  /** Bounded recovery of already authorized canonical learning, scoped to
+   * the current project. Never approves pending or legacy candidates. */
+  recoverLearningCandidates?(
+    context: MemoryContext,
+    options?: { signal?: AbortSignal },
+  ): Promise<{ selected: number; promoted: number; pending: number; failed: number }>
 }
 
 export interface CandidateReviewStore extends ObservationStore {
