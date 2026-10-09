@@ -3,6 +3,7 @@ import type { CaptureConfig } from "./config.js"
 import type { CandidateMemory, SessionObservation } from "./observation.js"
 import { containsSensitiveCredential, redactSensitiveText } from "./sensitive-data.js"
 import type { MemoryContext } from "./types.js"
+import type { EvidenceReference } from "./observation-admission.js"
 
 export type InvestigationHost = "opencode-v1" | "opencode-v2" | "pi"
 
@@ -23,6 +24,9 @@ export interface ResolvedTaskEpisode {
   outcome: "succeeded" | "failed" | "abandoned"
   steps: readonly ResolvedTaskStep[]
   occurredAt?: string
+  /** Only the stored-evidence verifier supplies this new host source. The
+   * persistence boundary independently checks it; a rule name is not trust. */
+  verification?: { rule: string; evidenceRefs: readonly EvidenceReference[] }
 }
 
 const MAX_STEPS = 8
@@ -135,6 +139,13 @@ export function observationFromResolvedTask(
       origin: "agent-investigation",
       goal: boundField(episode.goal),
       text: lines.join("\n"),
+      ...(episode.verification
+        ? {
+            verificationRule: episode.verification.rule,
+            evidenceRefs: episode.verification.evidenceRefs,
+            requireReview: true,
+          }
+        : {}),
       ...(episode.messageId ? { messageId: episode.messageId } : {}),
     },
   }
@@ -149,6 +160,8 @@ export function extractProcedureCandidate(
   if (!text || text.length > config.maxInputCharacters || containsSensitiveCredential(text)) {
     return undefined
   }
+  if (observation.payload.verificationRule && text.length > config.maxCandidateCharacters)
+    return undefined
   const content = text.slice(0, config.maxCandidateCharacters)
   const goal =
     typeof observation.payload.goal === "string" &&
@@ -180,6 +193,12 @@ export function extractProcedureCandidate(
               host: observation.payload.host,
               sessionId: observation.context.sessionId,
               origin: "agent-investigation",
+              ...(observation.payload.evidenceRefs
+                ? { evidenceRefs: observation.payload.evidenceRefs }
+                : {}),
+              ...(observation.payload.verificationRule
+                ? { verificationRule: observation.payload.verificationRule }
+                : {}),
             },
           },
           capturedAt: observation.occurredAt,
@@ -192,11 +211,18 @@ export function extractProcedureCandidate(
           observationId: observation.id,
           host: observation.payload.host,
           origin: "agent-investigation",
+          ...(observation.payload.verificationRule
+            ? { verificationRule: observation.payload.verificationRule, requireReview: true }
+            : {}),
         },
       },
     },
     confidence: PROCEDURE_CONFIDENCE,
     status: "pending",
-    reasons: ["verified successful investigation"],
+    reasons: [
+      observation.payload.verificationRule
+        ? "stored native check recovery; procedure requires review"
+        : "verified successful investigation",
+    ],
   }
 }

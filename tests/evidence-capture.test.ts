@@ -33,7 +33,8 @@ function fixture(options: { limit?: number; timeout?: number } = {}) {
   })
   const store: EpisodicStore = { readEvidence, appendEvidence }
   const log = vi.fn()
-  const onPersisted = vi.fn<(envelope: EvidenceEnvelope) => void>()
+  const onPersisted =
+    vi.fn<(envelope: EvidenceEnvelope, signal: AbortSignal) => void | Promise<void>>()
   const coordinator = new EvidenceCaptureCoordinator(
     store,
     authority,
@@ -118,7 +119,10 @@ describe("host evidence capture", () => {
     expect(f.onPersisted).not.toHaveBeenCalled()
     release()
     await f.coordinator.idle()
-    expect(f.onPersisted).toHaveBeenCalledExactlyOnceWith([...f.records.values()][0])
+    expect(f.onPersisted).toHaveBeenCalledExactlyOnceWith(
+      [...f.records.values()][0],
+      expect.any(AbortSignal),
+    )
   })
 
   it("recovers interrupted downstream capture on evidence re-delivery", async () => {
@@ -224,7 +228,10 @@ describe("host evidence capture", () => {
     expect(f.records.size).toBe(1)
     expect(f.appendEvidence).toHaveBeenCalledTimes(2)
     expect([...f.records.values()][0]?.occurredAt).toBe("2026-10-01T00:00:00.000Z")
-    expect(f.onPersisted).toHaveBeenCalledExactlyOnceWith([...f.records.values()][0])
+    expect(f.onPersisted).toHaveBeenCalledExactlyOnceWith(
+      [...f.records.values()][0],
+      expect.any(AbortSignal),
+    )
     expect(f.log).not.toHaveBeenCalled()
   })
 
@@ -361,7 +368,10 @@ describe("host evidence capture", () => {
     f.adapter.tool({ ...tool, id: "call-2" })
     await f.coordinator.idle()
     expect(f.records.size).toBe(1)
-    expect(f.onPersisted).toHaveBeenCalledExactlyOnceWith([...f.records.values()][0])
+    expect(f.onPersisted).toHaveBeenCalledExactlyOnceWith(
+      [...f.records.values()][0],
+      expect.any(AbortSignal),
+    )
     expect(JSON.stringify(f.log.mock.calls)).not.toContain("secret provider body")
   })
 
@@ -391,5 +401,27 @@ describe("host evidence capture", () => {
     expect(f.records.size).toBe(0)
     expect(f.onPersisted).not.toHaveBeenCalled()
     expect(f.log).toHaveBeenCalled()
+  })
+
+  it("cancels asynchronous downstream authorization when shutdown interrupts an evidence read", async () => {
+    const f = fixture({ timeout: 10 })
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const authorized = vi.fn()
+    f.onPersisted.mockImplementationOnce(async (_envelope, signal) => {
+      await blocked
+      signal.throwIfAborted()
+      authorized()
+    })
+    f.adapter.tool(tool)
+    await f.coordinator.dispose()
+    release()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(f.records.size).toBe(1)
+    expect(authorized).not.toHaveBeenCalled()
+    expect(f.onPersisted.mock.calls[0]?.[1].aborted).toBe(true)
   })
 })
