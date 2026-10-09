@@ -1195,6 +1195,8 @@ async function main() {
           [procedureSession],
         )
         if (!rows.rows.length) return false
+        if (rows.rows.length === 1 && ["approved", "consolidating"].includes(rows.rows[0].status))
+          return false
         if (
           rows.rows.length !== 1 ||
           rows.rows[0].status !== "promoted" ||

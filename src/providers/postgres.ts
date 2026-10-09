@@ -1634,12 +1634,16 @@ export class PostgresMemoryProvider
                 : "rejected",
           }
         : undefined
-      if (decision)
+      if (decision) {
+        // Policy revalidation compares the complete authorized extraction.
+        // Legacy storage omitted this derived field; retain it for this path.
+        storedMemory.summary = candidate.memory.summary
         storedMemory.metadata = {
           ...learningComparableMemory(candidate.memory).metadata,
           learningPolicy: decision,
           ...(decision.key ? { learningKey: decision.key } : {}),
         }
+      }
       const observationIds = canonicalIds ?? candidate.observationIds
       const primaryObservationId = canonicalIds?.[0] ?? observation.id
       const prior = await client.query<{

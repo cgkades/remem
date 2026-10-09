@@ -88,6 +88,11 @@ integration("server learning authorization and audit", () => {
         status: "approved",
         decision: { outcome: "auto-promote", rule: "original-user-assertion-v1" },
       })
+      const saved = await pool.query<{ metadata: { memory: { summary: string } } }>(
+        "SELECT metadata FROM remem.candidate_memories WHERE id=$1",
+        [candidate.id],
+      )
+      expect(saved.rows[0]?.metadata.memory.summary).toBe(candidate.memory.summary)
       expect((await pipeline.consolidate([{ ...candidate, status: "approved" }]))[0]?.status).toBe(
         "promoted",
       )
