@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
+import { episodeResults } from "../episodic-recall.js"
 import type { CandidateLineage } from "../learning-ledger.js"
 import { DeterministicCandidateExtractor } from "../capture.js"
 import {
@@ -2519,14 +2520,27 @@ export class PostgresMemoryProvider
               scope.preceding_id, scope.following_id
        FROM scope, query
        WHERE scope.search_vector @@ query.terms AND scope.role = ANY($5::text[])
-       ORDER BY ts_rank_cd(scope.search_vector, query.terms) DESC, scope.occurred_at DESC, scope.id
+         AND (NOT $6::boolean OR scope.session_id <> $7::text)
+       ORDER BY ts_rank_cd(scope.search_vector, query.terms) DESC,
+         CASE WHEN $6::boolean AND scope.payload->>'status'='completed'
+           AND (scope.payload->'result'->>'exit' IS NULL OR scope.payload->'result'->>'exit'='0')
+           THEN 0 ELSE 1 END,
+         scope.occurred_at DESC, scope.id
        LIMIT $4`,
-      [providerId, context.projectId, boundedQuery, limit, roles],
+      [
+        providerId,
+        context.projectId,
+        boundedQuery,
+        limit,
+        roles,
+        options.automaticRecall === true,
+        context.sessionId ?? "",
+      ],
     )
     if (matched.rows.length === 0) return { matches: [], budgetExhausted: false }
 
     const neighborIds =
-      options.includeNeighbors === false
+      options.includeNeighbors === false || options.automaticRecall === true
         ? []
         : [
             ...new Set(
@@ -2556,7 +2570,21 @@ export class PostgresMemoryProvider
         budgetExhausted = true
         break
       }
-      const fittedMatch = fitEnvelopeToBudget(episodicRowToEnvelope(row), remainingTokens)
+      const envelope = episodicRowToEnvelope(row)
+      if (
+        options.automaticRecall &&
+        episodeResults(
+          { matches: [{ envelope, truncated: false, neighbors: [] }], budgetExhausted: false },
+          providerId,
+          context,
+        ).length === 0
+      )
+        continue
+      const fittedMatch = fitEnvelopeToBudget(envelope, remainingTokens)
+      if (options.automaticRecall && (!fittedMatch.fits || fittedMatch.truncated)) {
+        budgetExhausted = true
+        continue
+      }
       if (!fittedMatch.fits) {
         // This ranked match (and, by the rank-descending order, every
         // match after it) cannot be brought under the remaining budget even
@@ -2572,7 +2600,7 @@ export class PostgresMemoryProvider
         ["preceding", row.preceding_id],
         ["following", row.following_id],
       ] as const) {
-        if (!neighborId || options.includeNeighbors === false) continue
+        if (!neighborId || options.includeNeighbors === false || options.automaticRecall) continue
         if (remainingTokens <= 0) {
           budgetExhausted = true
           break
@@ -2608,7 +2636,7 @@ export class PostgresMemoryProvider
       }
       matches.push({ envelope: fittedMatch.envelope, truncated: fittedMatch.truncated, neighbors })
     }
-    if (matches.length < matched.rows.length) budgetExhausted = true
+    if (!options.automaticRecall && matches.length < matched.rows.length) budgetExhausted = true
 
     return { matches, budgetExhausted }
   }

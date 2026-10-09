@@ -10,6 +10,12 @@ export function memoryContext(messages) {
           ),
     )
     .filter((text) => text.includes("<memory-context>"))
+    .map((text) =>
+      text.slice(
+        text.indexOf("<memory-context>"),
+        text.indexOf("</memory-context>") + "</memory-context>".length,
+      ),
+    )
     .join("\n")
 }
 

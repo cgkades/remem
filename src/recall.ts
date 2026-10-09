@@ -266,6 +266,7 @@ export class RecallEngine {
                         maxOutputTokens: this.config.budgets.perProviderTokens,
                         roles: ["tool"],
                         includeNeighbors: false,
+                        automaticRecall: true,
                       },
                     )
                     signal.throwIfAborted()

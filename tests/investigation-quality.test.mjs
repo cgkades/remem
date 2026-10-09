@@ -88,6 +88,13 @@ describe("investigation quality gate measures the dispatched evidence", () => {
       { content: [{ text: context }] },
     ])
     expect(text).toBe(context)
+    expect(
+      memoryContext([
+        {
+          content: `<memory-catalog>Unrelated global recognition hint</memory-catalog>\n${context}`,
+        },
+      ]),
+    ).toBe(context)
     expect(measure(text).contextTokenUpperBound).toBeGreaterThan(0)
   })
   it("reports p95 of actual samples without mutating the measurements", () => {
