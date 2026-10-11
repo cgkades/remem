@@ -198,68 +198,82 @@ describe("CLI provisioning", () => {
     expect(errors.join("\n")).not.toContain("secret")
   })
 
-  it("requires an explicit project before creating a privacy-forget preview", async () => {
-    const paths = await temporaryPaths()
-    const config: RememAppConfig = {
-      version: 1,
-      storage: { mode: "external", connectionString: "postgres://user:secret@localhost/remem" },
-      providers: [
+  it.each([false, true])(
+    "requires an explicit project for a privacy-forget preview (semantic=%s)",
+    async (semantic) => {
+      const paths = await temporaryPaths()
+      const config: RememAppConfig = {
+        version: 1,
+        storage: { mode: "external", connectionString: "postgres://user:secret@localhost/remem" },
+        providers: [
+          {
+            type: "postgres",
+            id: "primary",
+            connectionString: "postgres://user:secret@localhost/remem",
+            primary: true,
+            maxConnections: 1,
+            catalogLimit: 10,
+          },
+        ],
+        embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
+      }
+      await writeAppConfig(config, paths)
+      const errors: string[] = []
+
+      const code = await runCli(["forget", "a".repeat(64), ...(semantic ? ["--semantic"] : [])], {
+        paths,
+        stdout: () => undefined,
+        stderr: (line) => errors.push(line),
+      })
+
+      expect(code).toBe(1)
+      expect(errors.join("\n")).toContain("requires a non-empty, NUL-free --project")
+      expect(errors.join("\n")).not.toContain("secret")
+    },
+  )
+
+  it.each([false, true])(
+    "requires human confirmation for privacy forget (semantic=%s)",
+    async (semantic) => {
+      const paths = await temporaryPaths()
+      const config: RememAppConfig = {
+        version: 1,
+        storage: { mode: "external", connectionString: "postgres://user:secret@localhost/remem" },
+        providers: [
+          {
+            type: "postgres",
+            id: "primary",
+            connectionString: "postgres://user:secret@localhost/remem",
+            primary: true,
+            maxConnections: 1,
+            catalogLimit: 10,
+          },
+        ],
+        embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
+      }
+      await writeAppConfig(config, paths)
+      const errors: string[] = []
+
+      const code = await runCli(
+        [
+          "forget",
+          "00000000-0000-4000-8000-000000000000",
+          "--confirm",
+          ...(semantic ? ["--semantic"] : []),
+        ],
         {
-          type: "postgres",
-          id: "primary",
-          connectionString: "postgres://user:secret@localhost/remem",
-          primary: true,
-          maxConnections: 1,
-          catalogLimit: 10,
+          paths,
+          confirmForget: () => Promise.resolve(false),
+          stdout: () => undefined,
+          stderr: (line) => errors.push(line),
         },
-      ],
-      embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
-    }
-    await writeAppConfig(config, paths)
-    const errors: string[] = []
+      )
 
-    const code = await runCli(["forget", "a".repeat(64)], {
-      paths,
-      stdout: () => undefined,
-      stderr: (line) => errors.push(line),
-    })
-
-    expect(code).toBe(1)
-    expect(errors.join("\n")).toContain("requires a non-empty, NUL-free --project")
-    expect(errors.join("\n")).not.toContain("secret")
-  })
-
-  it("requires human confirmation before executing a privacy forget", async () => {
-    const paths = await temporaryPaths()
-    const config: RememAppConfig = {
-      version: 1,
-      storage: { mode: "external", connectionString: "postgres://user:secret@localhost/remem" },
-      providers: [
-        {
-          type: "postgres",
-          id: "primary",
-          connectionString: "postgres://user:secret@localhost/remem",
-          primary: true,
-          maxConnections: 1,
-          catalogLimit: 10,
-        },
-      ],
-      embedding: { provider: "local-hash", model: "remem-local-hash-v1", dimensions: 384 },
-    }
-    await writeAppConfig(config, paths)
-    const errors: string[] = []
-
-    const code = await runCli(["forget", "00000000-0000-4000-8000-000000000000", "--confirm"], {
-      paths,
-      confirmForget: () => Promise.resolve(false),
-      stdout: () => undefined,
-      stderr: (line) => errors.push(line),
-    })
-
-    expect(code).toBe(1)
-    expect(errors.join("\n")).toContain("confirmation was declined")
-    expect(errors.join("\n")).not.toContain("secret")
-  })
+      expect(code).toBe(1)
+      expect(errors.join("\n")).toContain("confirmation was declined")
+      expect(errors.join("\n")).not.toContain("secret")
+    },
+  )
 
   it("requires an explicit project before listing supersession candidates", async () => {
     const paths = await temporaryPaths()

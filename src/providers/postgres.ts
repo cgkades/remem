@@ -5,6 +5,9 @@ import {
   EVIDENCE_REFLECTION_VERSION,
   type EvidenceExtractionClaim,
 } from "../evidence-reflection.js"
+
+import { semanticForgetSnapshot, type SemanticForgetPreview } from "../semantic-forget.js"
+
 import { embedQuery, embedDocument, modelFingerprint } from "../storage/embedding-space.js"
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
@@ -919,6 +922,7 @@ export class PostgresMemoryProvider
     const client = await this.pool.connect()
     try {
       await client.query("BEGIN")
+      await client.query("SELECT pg_advisory_xact_lock_shared($1)", [FORGET_RESTORE_ADVISORY_LOCK])
       const record = await this.writeWithClient(client, memory, options)
       await client.query("COMMIT")
       return record
@@ -1075,6 +1079,7 @@ export class PostgresMemoryProvider
     const client = await this.pool.connect()
     try {
       await client.query("BEGIN")
+      await client.query("SELECT pg_advisory_xact_lock_shared($1)", [FORGET_RESTORE_ADVISORY_LOCK])
       const result = await operation(client)
       await client.query("COMMIT")
       return result
@@ -2467,6 +2472,167 @@ export class PostgresMemoryProvider
    * content. The same identity lock used by forgetting/replay makes a link
    * impossible to add to an episode after that episode is forgotten.
    */
+  private async semanticForgetTransaction<T>(
+    operation: (client: PoolClient) => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    signal?.throwIfAborted()
+    const client = await this.pool.connect()
+    try {
+      await client.query("BEGIN")
+      await client.query("SET LOCAL statement_timeout='2000ms'")
+      await client.query("SELECT pg_advisory_xact_lock($1)", [FORGET_RESTORE_ADVISORY_LOCK])
+      signal?.throwIfAborted()
+      const result = await operation(client)
+      signal?.throwIfAborted()
+      await client.query("COMMIT")
+      return result
+    } catch (error) {
+      await client.query("ROLLBACK")
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
+  async previewSemanticForget(
+    providerId: string,
+    memoryId: string,
+    projectId: string,
+    signal?: AbortSignal,
+  ): Promise<SemanticForgetPreview | undefined> {
+    if (
+      providerId !== this.id ||
+      !UUID_PATTERN.test(memoryId) ||
+      !projectId ||
+      projectId.length > 256 ||
+      projectId.includes("\u0000")
+    )
+      return undefined
+    return this.semanticForgetTransaction(async (client) => {
+      await this.lockLearningScope(client, { kind: "project", id: projectId })
+      const snapshot = await semanticForgetSnapshot(client, this.id, projectId, memoryId)
+      if (!snapshot) return undefined
+      await client.query("DELETE FROM remem.semantic_forget_previews WHERE expires_at<=now()")
+      const id = randomUUID()
+      const result = await client.query<{ created_at: Date; expires_at: Date }>(
+        `INSERT INTO remem.semantic_forget_previews
+        (id,provider_id,project_id,memory_id,signature,candidate_count,source_count,retained_shared_source_count,evidence_count,retained_evidence_count,embedding_count,catalog_count,expires_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now()+interval '15 minutes') RETURNING created_at,expires_at`,
+        [
+          id,
+          this.id,
+          projectId,
+          memoryId,
+          snapshot.signature,
+          snapshot.candidateIds.length,
+          snapshot.sourceIds.length,
+          snapshot.sharedSourceIds.length,
+          snapshot.evidenceTargets.length,
+          snapshot.retainedEvidenceCount,
+          snapshot.embeddingCount,
+          snapshot.catalogCount,
+        ],
+      )
+      const row = result.rows[0]!
+      return {
+        id,
+        target: "semantic-memory",
+        providerId: this.id,
+        projectId,
+        memoryId,
+        semanticMemoryCount: 1,
+        candidateCount: snapshot.candidateIds.length,
+        sourceCount: snapshot.sourceIds.length,
+        retainedSharedSourceCount: snapshot.sharedSourceIds.length,
+        evidenceCount: snapshot.evidenceTargets.length,
+        retainedEvidenceCount: snapshot.retainedEvidenceCount,
+        embeddingCount: snapshot.embeddingCount,
+        catalogCount: snapshot.catalogCount,
+        createdAt: row.created_at.toISOString(),
+        expiresAt: row.expires_at.toISOString(),
+      }
+    }, signal)
+  }
+
+  async confirmSemanticForget(
+    previewId: string,
+    signal?: AbortSignal,
+  ): Promise<{
+    previewId: string
+    memoriesDeleted: number
+    candidatesDeleted: number
+    sourcesDeleted: number
+    evidenceDeleted: number
+  }> {
+    if (!UUID_PATTERN.test(previewId))
+      throw new TypeError("semantic forget preview id must be a UUID")
+    return this.semanticForgetTransaction(async (client) => {
+      const preview = await client.query<{
+        provider_id: string
+        project_id: string
+        memory_id: string
+        signature: string
+      }>(
+        `SELECT provider_id,project_id,memory_id,signature FROM remem.semantic_forget_previews
+        WHERE id=$1 AND confirmed_at IS NULL AND expires_at>now() FOR UPDATE`,
+        [previewId],
+      )
+      const row = preview.rows[0]
+      if (!row || row.provider_id !== this.id)
+        throw new Error("semantic forget preview is unavailable or expired")
+      await this.lockLearningScope(client, { kind: "project", id: row.project_id })
+      const snapshot = await semanticForgetSnapshot(client, this.id, row.project_id, row.memory_id)
+      if (!snapshot || snapshot.signature !== row.signature)
+        throw new Error("semantic forget preview changed; request a new preview")
+      const targets = [
+        ["memory", row.memory_id],
+        ...snapshot.candidateIds.map((id) => ["candidate", id]),
+        ...snapshot.sourceIds.map((id) => ["source", id]),
+        ...snapshot.evidenceTargets.map((e) => ["evidence", e.evidenceId]),
+      ]
+      await client.query(
+        `INSERT INTO remem.forget_tombstones(provider_id,project_id,target_kind,target_id,preview_id)
+         SELECT $1,$2,kind,target,$5 FROM unnest($3::text[],$4::text[]) items(kind,target) ON CONFLICT DO NOTHING`,
+        [this.id, row.project_id, targets.map((t) => t[0]), targets.map((t) => t[1]), previewId],
+      )
+      await client.query(
+        `UPDATE remem.candidate_lineage SET state='forgotten',action='semantic-memory-forgotten',actor='operator'
+        WHERE provider_id=$1 AND scope_kind='project' AND scope_key=$2 AND memory_id=$3`,
+        [this.id, row.project_id, row.memory_id],
+      )
+      const candidates = await client.query(
+        "DELETE FROM remem.candidate_memories WHERE id=ANY($1::uuid[]) AND metadata->>'providerId'=$2",
+        [snapshot.candidateIds, this.id],
+      )
+      const evidence = await client.query(
+        "DELETE FROM remem.session_events WHERE id=ANY($1::uuid[]) AND provider_id=$2 AND project_id=$3",
+        [snapshot.evidenceTargets.map((e) => e.rowId), this.id, row.project_id],
+      )
+      const memories = await client.query(
+        "DELETE FROM remem.memories WHERE id=$1 AND provider_id=$2 AND scope_kind='project' AND scope_id=$3",
+        [row.memory_id, this.id, row.project_id],
+      )
+      const sources = await client.query(
+        `DELETE FROM remem.sources s WHERE id=ANY($1::uuid[]) AND provider_id=$2
+        AND NOT EXISTS (SELECT 1 FROM remem.memory_provenance p WHERE p.source_id=s.id)
+        AND NOT EXISTS (SELECT 1 FROM remem.memories m WHERE m.source_id=s.id)`,
+        [snapshot.sourceIds, this.id],
+      )
+      await client.query(
+        "UPDATE remem.semantic_forget_previews SET confirmed_at=now() WHERE id=$1",
+        [previewId],
+      )
+      return {
+        previewId,
+        memoriesDeleted: memories.rowCount ?? 0,
+        candidatesDeleted: candidates.rowCount ?? 0,
+        sourcesDeleted: sources.rowCount ?? 0,
+        evidenceDeleted: evidence.rowCount ?? 0,
+      }
+    }, signal)
+  }
+
   async linkEvidenceEntity(
     providerId: string,
     evidenceId: string,
@@ -2924,17 +3090,46 @@ export class PostgresMemoryProvider
     fn: (client: PoolClient) => Promise<T>,
   ): Promise<T> {
     const client = await this.pool.connect()
+    let retained = false
+    let failed = false
+    let failure: unknown
+    let result: { value: T } | undefined
+    let previousTimeout: string | undefined
     try {
-      return await this.withEvidenceIdentityLockOnClient(
-        client,
-        providerId,
-        projectId,
-        evidenceId,
-        () => fn(client),
-      )
+      previousTimeout = (
+        await client.query<{ value: string }>("SELECT current_setting('statement_timeout') value")
+      ).rows[0]?.value
+      await client.query("SET statement_timeout='2000ms'")
+      await client.query("SELECT pg_advisory_lock_shared($1)", [FORGET_RESTORE_ADVISORY_LOCK])
+      retained = true
+      result = {
+        value: await this.withEvidenceIdentityLockOnClient(
+          client,
+          providerId,
+          projectId,
+          evidenceId,
+          () => fn(client),
+        ),
+      }
+    } catch (error) {
+      failed = true
+      failure = error
     } finally {
-      client.release()
+      if (retained && !failed) {
+        try {
+          await client.query("SELECT pg_advisory_unlock_shared($1)", [FORGET_RESTORE_ADVISORY_LOCK])
+          if (previousTimeout !== undefined)
+            await client.query("SELECT set_config('statement_timeout',$1,false)", [previousTimeout])
+        } catch (error) {
+          failed = true
+          failure = error
+        }
+      }
+      client.release(failed)
     }
+    if (failed) throw failure
+    if (!result) throw new Error("evidence mutation did not complete")
+    return result.value
   }
 
   private async withEvidenceIdentityLockOnClient<T>(
@@ -3809,6 +4004,11 @@ export class PostgresMemoryProvider
     if (memory.scope.kind !== "global" && !resolvedScopeId) {
       throw new TypeError(`${memory.scope.kind} memories require a scope id`)
     }
+    const forgotten = await client.query(
+      "SELECT 1 FROM remem.forget_tombstones WHERE provider_id=$1 AND target_kind='memory' AND target_id=$2",
+      [this.id, id],
+    )
+    if (forgotten.rowCount) throw new Error("memory was explicitly forgotten")
     await client.query(
       `INSERT INTO remem.providers (id, kind, name, summary)
        VALUES ($1, 'postgres', 'Remem managed memory', 'Durable local memories')
