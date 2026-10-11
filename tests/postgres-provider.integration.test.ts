@@ -1,3 +1,4 @@
+import { modelFingerprint } from "../src/storage/embedding-space.js"
 import { createHash, randomUUID } from "node:crypto"
 import { appendFile, copyFile, mkdir, mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
@@ -101,8 +102,8 @@ integration("PostgreSQL managed provider", () => {
 
       const upgraded = await runMigrations(pool)
       expect(upgraded).toMatchObject({
-        applied: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
-        currentVersion: 14,
+        applied: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        currentVersion: 15,
       })
       expect(
         (
@@ -121,7 +122,7 @@ integration("PostgreSQL managed provider", () => {
       ).toBeNull()
 
       const repeated = await runMigrations(pool)
-      expect(repeated).toMatchObject({ applied: [], currentVersion: 14 })
+      expect(repeated).toMatchObject({ applied: [], currentVersion: 15 })
 
       await copyFile(
         path.join(process.cwd(), "migrations/0002_consolidation_observation.sql"),
@@ -1514,17 +1515,17 @@ integration("PostgreSQL managed provider", () => {
       expect(firstBatch.status).toBe("completed")
       expect(firstBatch.claimed).toBe(2)
       expect(firstBatch.reembedded).toBe(2)
+      expect(firstBatch.coverage).toMatchObject({ staged: 2, pending: 1, cutover: "building" })
 
       const modelsAfterFirstBatch = await pool.query<{ memory_id: string; model: string }>(
         "SELECT memory_id, model FROM remem.memory_embeddings WHERE memory_id = ANY($1)",
         [ids],
       )
       const modelById = new Map(modelsAfterFirstBatch.rows.map((row) => [row.memory_id, row.model]))
-      // The two oldest rows (by the updated_at we set above) must have been
-      // claimed; the newest must still be waiting. A regression that dropped
-      // the LIMIT clause would instead reembed all three in the first batch.
-      expect(modelById.get(ids[0]!)).toBe("remem-local-hash-v1")
-      expect(modelById.get(ids[1]!)).toBe("remem-local-hash-v1")
+      // Both rebuilt vectors are staged; active rows remain unchanged until
+      // every retained source has compatible memory/catalog coverage.
+      expect(modelById.get(ids[0]!)).toBe("stale-batch-test")
+      expect(modelById.get(ids[1]!)).toBe("stale-batch-test")
       expect(modelById.get(ids[2]!)).toBe("stale-batch-test")
 
       const secondBatch = await provider.reembedStale(2)
@@ -1639,13 +1640,14 @@ integration("PostgreSQL managed provider", () => {
 
     const failingEmbedding: EmbeddingModel = {
       id: "always-fails-integration-test-marker",
+      space: { ...new LocalHashEmbeddingModel().space, asset: "test:failure" },
       dimensions: 384,
       embed: () => Promise.reject(new Error("embedding backend unavailable")),
     }
     const failingProvider = new PostgresMemoryProvider(
       {
         type: "postgres",
-        id: "reembed-failure-runner",
+        id: "reembed-failure-seed",
         connectionString: databaseUrl ?? "",
         primary: true,
         maxConnections: 2,
@@ -1721,7 +1723,7 @@ integration("PostgreSQL managed provider", () => {
       providers: [
         {
           type: "postgres",
-          id: "remem-local",
+          id: "reembed-cli-seed",
           connectionString: databaseUrl ?? "",
           primary: true,
           maxConnections: 2,
@@ -1805,7 +1807,7 @@ integration("PostgreSQL managed provider", () => {
       providers: [
         {
           type: "postgres",
-          id: "remem-local",
+          id: "reembed-neural-seed",
           connectionString: databaseUrl ?? "",
           primary: true,
           maxConnections: 2,
@@ -1982,11 +1984,26 @@ integration("PostgreSQL managed provider", () => {
     try {
       await mkdir(paths.dataDir, { recursive: true, mode: 0o700 })
       await writeAppConfig(config, paths)
-      await pool.query("UPDATE remem.memory_embeddings SET model = 'remem-local-hash-v1'")
+      for (const { provider_id } of (
+        await pool.query<{ provider_id: string }>("SELECT DISTINCT provider_id FROM remem.memories")
+      ).rows) {
+        await new PostgresMemoryProvider(
+          {
+            type: "postgres",
+            id: provider_id,
+            connectionString: databaseUrl ?? "",
+            primary: true,
+            maxConnections: 2,
+            catalogLimit: 100,
+          },
+          { pool },
+        ).reembedStale(10_000)
+      }
       await pool.query(
-        `INSERT INTO remem.embedding_settings (id, model, dimensions)
-           VALUES (true, 'remem-local-hash-v1', 384)
-         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions`,
+        `INSERT INTO remem.embedding_settings (id, model, dimensions, fingerprint)
+           VALUES (true, 'remem-local-hash-v1', 384, $1)
+         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions, fingerprint=excluded.fingerprint`,
+        [modelFingerprint(new LocalHashEmbeddingModel())],
       )
 
       const report = await runDoctor(
@@ -2113,10 +2130,14 @@ integration("PostgreSQL managed provider", () => {
       await writeAppConfig(config, paths)
 
       await pool.query(
-        `INSERT INTO remem.embedding_settings (id, model, dimensions)
-           VALUES (true, $1, $2)
-         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions`,
-        [config.embedding.model, config.embedding.dimensions],
+        `INSERT INTO remem.embedding_settings (id, model, dimensions, fingerprint)
+           VALUES (true, $1, $2, $3)
+         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions, fingerprint=excluded.fingerprint`,
+        [
+          config.embedding.model,
+          config.embedding.dimensions,
+          modelFingerprint(new LocalHashEmbeddingModel()),
+        ],
       )
       const matching = await runDoctor(config, paths, {
         run: () => Promise.resolve({ stdout: "", stderr: "" }),
@@ -2128,10 +2149,10 @@ integration("PostgreSQL managed provider", () => {
       })
 
       await pool.query(
-        `INSERT INTO remem.embedding_settings (id, model, dimensions)
-           VALUES (true, $1, $2)
-         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions`,
-        ["stale-recorded-model", 384],
+        `INSERT INTO remem.embedding_settings (id, model, dimensions, fingerprint)
+           VALUES (true, $1, $2, $3)
+         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions, fingerprint=excluded.fingerprint`,
+        ["stale-recorded-model", 384, modelFingerprint(new LocalHashEmbeddingModel())],
       )
       const mismatched = await runDoctor(config, paths, {
         run: () => Promise.resolve({ stdout: "", stderr: "" }),

@@ -20,6 +20,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Canonical embedding-space fingerprints now prevent label-only cross-generation similarity. Reindexing stages retained-source memory/catalog vectors and reports full compatible coverage before atomic cutover; lexical service, durable claims and interrupted recovery remain available. See `docs/embedding-compatibility.md`. Resolves [#45](https://github.com/cgkades/remem/issues/45).
+
 - Explicit opt-in concurrent index migrations now retain checksum/ownership receipts and safely
   resume interrupted builds or ledger finalization. Existing migrations remain transactional;
   see `docs/concurrent-migrations.md`. Refs [#87](https://github.com/cgkades/remem/issues/87).

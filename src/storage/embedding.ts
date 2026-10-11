@@ -1,3 +1,4 @@
+import type { EmbeddingSpace } from "./embedding-space.js"
 import { tokenize } from "../text.js"
 import type { EmbeddingModel } from "../types.js"
 import { EMBEDDING_DIMENSIONS, LOCAL_HASH_MODEL_ID } from "./embedding-model-ids.js"
@@ -60,6 +61,17 @@ function features(text: string): string[] {
 export class LocalHashEmbeddingModel implements EmbeddingModel {
   readonly id = LOCAL_HASH_MODEL_ID
   readonly dimensions = DEFAULT_EMBEDDING_DIMENSIONS
+  readonly space: EmbeddingSpace = {
+    schemaVersion: 1,
+    backend: "remem-local-hash",
+    asset: "builtin:remem-local-hash-v1@algorithm-1",
+    dimensions: DEFAULT_EMBEDDING_DIMENSIONS,
+    pooling: "signed-feature-sum",
+    normalization: "l2",
+    dtype: "float64",
+    query: { mode: "text", instruction: "" },
+    document: { mode: "text", instruction: "" },
+  }
 
   embed(text: string, signal?: AbortSignal): Promise<number[]> {
     signal?.throwIfAborted()

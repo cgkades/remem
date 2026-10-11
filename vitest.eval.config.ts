@@ -7,6 +7,9 @@ import { defineConfig } from "vitest/config"
 // `npm run test:eval`.
 export default defineConfig({
   test: {
+    // One model downloader at a time shares the pinned cache without racing
+    // initial downloads; acceptance still requires an actual neural backend.
+    fileParallelism: false,
     include: ["tests/**/*.eval.test.ts"],
   },
 })

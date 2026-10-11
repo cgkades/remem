@@ -1,3 +1,5 @@
+import { describeError } from "../src/text.js"
+import { modelFingerprint } from "../src/storage/embedding-space.js"
 import { readFile, mkdir, writeFile } from "node:fs/promises"
 import { Pool } from "pg"
 import { describe, expect, it, vi } from "vitest"
@@ -31,10 +33,20 @@ integration("fresh real-PostgreSQL retrieval validation", () => {
       ),
     ) as Fixture
     const pool = new Pool({ connectionString: process.env.REMEM_TEST_DATABASE_URL })
-    const neural = await createEmbeddingModel({ backend: "neural" })
-    expect(neural.id, "required real neural benchmark may not silently use fallback").toBe(
-      "bge-small-en-v1.5",
+    let fallbackReason = ""
+    const neural = await createEmbeddingModel(
+      { backend: "neural" },
+      {
+        onFallback: (error) => {
+          fallbackReason = describeError(error)
+          process.stdout.write("required-neural-load " + fallbackReason + "\n")
+        },
+      },
     )
+    expect(
+      neural.id,
+      "required real neural benchmark may not silently use fallback: " + fallbackReason,
+    ).toBe("bge-small-en-v1.5")
     const models: EmbeddingModel[] = [new LocalHashEmbeddingModel(), neural]
     const reports = []
     const context = {
@@ -82,9 +94,9 @@ integration("fresh real-PostgreSQL retrieval validation", () => {
           SELECT gen_random_uuid(),'validation','Archive note ' || g,'Unrelated archived inventory record ' || g,'Archived inventory','project','validation','semantic','current' FROM generate_series(1,5000) g`)
         const filler = await model.embed("Archived inventory record")
         await pool.query(
-          `INSERT INTO remem.memory_embeddings(memory_id,model,dimensions,embedding)
-          SELECT id,$1,384,$2::vector FROM remem.memories WHERE title LIKE 'Archive note %'`,
-          [model.id, `[${filler.join(",")}]`],
+          `INSERT INTO remem.memory_embeddings(memory_id,model,dimensions,embedding,fingerprint)
+          SELECT id,$1,384,$2::vector,$3 FROM remem.memories WHERE title LIKE 'Archive note %'`,
+          [model.id, `[${filler.join(",")}]`, modelFingerprint(model)],
         )
         await pool.query("ANALYZE remem.memories; ANALYZE remem.memory_embeddings")
         const rows = []

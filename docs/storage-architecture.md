@@ -153,7 +153,7 @@ Search enforces scope in SQL and combines bounded candidate sets:
 - cosine similarity against a 384-dimensional pgvector value.
 
 Lexical and vector top-K candidates are selected separately, then unioned and reranked. Stored
-vectors are compared only when their model ID and dimensions match the active embedding model.
+vectors are compared only when their canonical paired query/document embedding-space fingerprint, model ID and dimensions match the resolved query model. Unknown legacy fingerprints are lexical-only until reindexing. Migration `0015_embedding_fingerprints.sql` adds durable stages; `remem reembed` atomically promotes memory/catalog vectors only at full compatible coverage. See `docs/embedding-compatibility.md` for fingerprints, interrupted recovery and the distinction between batch completion and cutover.
 
 Embedding failure does not discard a write. The record remains searchable lexically. The default
 model depends on configuration: `remem init` selects local BGE neural embeddings; plugin-only

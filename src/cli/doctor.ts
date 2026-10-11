@@ -1,3 +1,4 @@
+import { modelFingerprint } from "../storage/embedding-space.js"
 import { constants } from "node:fs"
 import { access, readFile, stat } from "node:fs/promises"
 import path from "node:path"
@@ -323,9 +324,13 @@ export async function runDoctor(
 
     try {
       const backlog = await pool.query<{ count: string }>(
-        `SELECT count(*)::text AS count FROM remem.memory_embeddings
-          WHERE model <> $1 OR dimensions <> $2`,
-        [embeddingModel.id, embeddingModel.dimensions],
+        `SELECT count(*)::text AS count FROM remem.memories m
+          LEFT JOIN remem.memory_embeddings me ON me.memory_id=m.id
+          LEFT JOIN remem.catalog_entries ce ON ce.memory_id=m.id
+          WHERE me.model IS DISTINCT FROM $1 OR me.dimensions IS DISTINCT FROM $2
+            OR me.fingerprint IS DISTINCT FROM $3 OR me.fingerprint IS NULL
+            OR (ce.memory_id IS NOT NULL AND (ce.embedding_fingerprint IS DISTINCT FROM $3 OR ce.embedding IS NULL OR ce.embedding_model IS DISTINCT FROM $1 OR ce.embedding_dimensions IS DISTINCT FROM $2))`,
+        [embeddingModel.id, embeddingModel.dimensions, modelFingerprint(embeddingModel) ?? null],
       )
       const pending = Number(backlog.rows[0]?.count ?? 0)
       checks.push({
@@ -333,13 +338,32 @@ export async function runDoctor(
         status: pending === 0 ? "ok" : "warn",
         detail:
           pending === 0
-            ? "all memories use the active embedding model"
+            ? "all retained memories and catalog vectors have compatible embedding fingerprints"
             : `${pending} ${pending === 1 ? "memory" : "memories"} pending re-embedding; ` +
               "this drains automatically during normal use, or run `remem reembed` now",
       })
     } catch {
       // The main PostgreSQL connectivity check above already reports connection
       // failures; skip silently here rather than double-reporting.
+    }
+
+    try {
+      const state = await pool.query<{ staged: string; claimed: string; interrupted: string }>(
+        `
+        SELECT (SELECT count(*)::text FROM remem.embedding_reindex_stage WHERE fingerprint=$1) AS staged,
+          (SELECT count(*)::text FROM remem.memory_embeddings WHERE reembed_claim_id IS NOT NULL) AS claimed,
+          (SELECT count(*)::text FROM remem.consolidation_records WHERE kind='embedding-reembed' AND status='started'
+            AND started_at < now()-interval '15 minutes') AS interrupted`,
+        [modelFingerprint(embeddingModel) ?? null],
+      )
+      const row = state.rows[0]
+      checks.push({
+        name: "embedding reindex recovery",
+        status: Number(row?.staged) + Number(row?.claimed) > 0 ? "warn" : "ok",
+        detail: `${row?.staged ?? 0} staged target vectors; ${row?.claimed ?? 0} claimed rows; ${row?.interrupted ?? 0} expired interrupted runs. Retry remem reembed until coverage.cutover is completed; expired claims recover after 15 minutes.`,
+      })
+    } catch {
+      /* Pending schema/connectivity failures are reported above. */
     }
 
     try {
@@ -351,12 +375,16 @@ export async function runDoctor(
     }
 
     try {
-      const settings = await pool.query<{ model: string; dimensions: number }>(
-        "SELECT model, dimensions FROM remem.embedding_settings WHERE id = true",
-      )
+      const settings = await pool.query<{
+        model: string
+        dimensions: number
+        fingerprint: string | null
+      }>("SELECT model, dimensions, fingerprint FROM remem.embedding_settings WHERE id = true")
       const row = settings.rows[0]
       const matches =
-        row?.model === embeddingModel.id && row?.dimensions === embeddingModel.dimensions
+        row?.model === embeddingModel.id &&
+        row?.dimensions === embeddingModel.dimensions &&
+        row?.fingerprint === modelFingerprint(embeddingModel)
       checks.push({
         name: "embedding settings persistence",
         status: row === undefined ? "warn" : matches ? "ok" : "warn",
@@ -364,7 +392,7 @@ export async function runDoctor(
           row === undefined
             ? "no embedding_settings row found yet; it is written on first provider construction"
             : matches
-              ? `recorded model matches active model (${row.model}, ${row.dimensions} dimensions)`
+              ? `recorded target matches configured fingerprint (${row.model}, ${row.dimensions} dimensions); settings persistence is not reindex completion`
               : `recorded model (${row.model}, ${row.dimensions}d) does not match active model ` +
                 `(${embeddingModel.id}, ${embeddingModel.dimensions}d) — the write may be failing`,
       })

@@ -1,3 +1,4 @@
+import type { FeatureExtractionPipeline } from "../src/storage/embedding-neural.js"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import * as transformers from "@huggingface/transformers"
 import * as undici from "undici"
@@ -19,14 +20,20 @@ vi.mock("undici", async (importOriginal) => {
 // (the real, non-test loader) does to `env` when a modelPath is supplied,
 // without downloading real model weights or hitting the network.
 const fakeTransformersEnv = vi.hoisted<{
+  version: string
   cacheDir?: string
   localModelPath?: string
   allowRemoteModels?: boolean
-}>(() => ({}))
+  allowLocalModels?: boolean
+}>(() => ({ version: "3.8.1" }))
 vi.mock("@huggingface/transformers", () => ({
   env: fakeTransformersEnv,
   pipeline: vi.fn().mockResolvedValue(vi.fn().mockResolvedValue({ data: new Float32Array(384) })),
 }))
+
+const pipelineMock = vi.mocked(
+  transformers.pipeline as unknown as (...args: unknown[]) => Promise<FeatureExtractionPipeline>,
+)
 
 describe("createEmbeddingModel", () => {
   afterEach(() => {
@@ -34,9 +41,10 @@ describe("createEmbeddingModel", () => {
     // so a later test that also omits `loadPipeline` doesn't silently inherit
     // a previous test's localModelPath/allowRemoteModels values.
     delete fakeTransformersEnv.localModelPath
+    delete fakeTransformersEnv.allowLocalModels
     delete fakeTransformersEnv.allowRemoteModels
     delete fakeTransformersEnv.cacheDir
-    vi.mocked(transformers.pipeline).mockClear()
+    pipelineMock.mockClear()
   })
 
   it("returns LocalHashEmbeddingModel for backend 'hash'", async () => {
@@ -89,10 +97,15 @@ describe("createEmbeddingModel", () => {
       .fn()
       .mockResolvedValue(vi.fn().mockResolvedValue({ data: new Float32Array(384) }))
     await createEmbeddingModel(
-      { backend: "neural", modelPath: "/opt/models/bge-small" },
+      {
+        backend: "neural",
+        modelPath: new URL("./fixtures/embedding-assets", import.meta.url).pathname,
+      },
       { loadPipeline },
     )
-    expect(loadPipeline).toHaveBeenCalledWith("/opt/models/bge-small")
+    expect(loadPipeline).toHaveBeenCalledWith(
+      new URL("./fixtures/embedding-assets", import.meta.url).pathname,
+    )
   })
 
   it("defaultLoadPipeline disables remote model downloads when modelPath is set (air-gapped escape hatch)", async () => {
@@ -100,17 +113,33 @@ describe("createEmbeddingModel", () => {
     // the mocked @huggingface/transformers module above, to confirm that
     // providing modelPath genuinely prevents any network fetch attempt —
     // not just that the string is forwarded.
-    await createEmbeddingModel({ backend: "neural", modelPath: "/opt/models/bge-small" })
-    expect(fakeTransformersEnv.localModelPath).toBe("/opt/models/bge-small")
-    expect(fakeTransformersEnv.allowRemoteModels).toBe(false)
+    pipelineMock.mockImplementationOnce(() => {
+      expect(fakeTransformersEnv.localModelPath).toBe(
+        new URL("./fixtures/embedding-assets", import.meta.url).pathname,
+      )
+      expect(fakeTransformersEnv.allowRemoteModels).toBe(false)
+      expect(fakeTransformersEnv.allowLocalModels).toBe(true)
+      return Promise.resolve(vi.fn().mockResolvedValue({ data: new Float32Array(384) }))
+    })
+    await createEmbeddingModel({
+      backend: "neural",
+      modelPath: new URL("./fixtures/embedding-assets", import.meta.url).pathname,
+    })
+    expect(fakeTransformersEnv.localModelPath).toBeUndefined()
+    expect(fakeTransformersEnv.allowRemoteModels).toBeUndefined()
   })
 
   it("configures the explicit cache directory and pinned model revision", async () => {
     const previousCacheDir = process.env.REMEM_TRANSFORMERS_CACHE_DIR
     process.env.REMEM_TRANSFORMERS_CACHE_DIR = ".cache/test-transformers"
     try {
+      pipelineMock.mockImplementationOnce(() => {
+        expect(fakeTransformersEnv.cacheDir).toBe(".cache/test-transformers")
+        expect(fakeTransformersEnv.allowLocalModels).toBe(false)
+        return Promise.resolve(vi.fn().mockResolvedValue({ data: new Float32Array(384) }))
+      })
       await createEmbeddingModel({ backend: "neural" })
-      expect(fakeTransformersEnv.cacheDir).toBe(".cache/test-transformers")
+      expect(fakeTransformersEnv.cacheDir).toBeUndefined()
       // Exact match, not objectContaining: a typo or dropped key in either
       // the model id or the pipeline options (dtype, revision) must fail
       // this test, not silently pass because objectContaining only checks
@@ -127,6 +156,57 @@ describe("createEmbeddingModel", () => {
       if (previousCacheDir === undefined) delete process.env.REMEM_TRANSFORMERS_CACHE_DIR
       else process.env.REMEM_TRANSFORMERS_CACHE_DIR = previousCacheDir
     }
+  })
+
+  it("serializes consecutive/concurrent local and remote loads and restores download restrictions even after failure", async () => {
+    const seen: Array<{
+      local: string | undefined
+      allowLocal: boolean | undefined
+      remote: boolean | undefined
+    }> = []
+    fakeTransformersEnv.allowRemoteModels = false
+    fakeTransformersEnv.localModelPath = "external-owner-root"
+    let release!: () => void
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    pipelineMock.mockImplementationOnce(async () => {
+      seen.push({
+        local: fakeTransformersEnv.localModelPath,
+        allowLocal: fakeTransformersEnv.allowLocalModels,
+        remote: fakeTransformersEnv.allowRemoteModels,
+      })
+      entered()
+      await waiting
+      return vi.fn().mockResolvedValue({ data: new Float32Array(384) })
+    })
+    const local = createEmbeddingModel({
+      backend: "neural",
+      modelPath: new URL("./fixtures/embedding-assets", import.meta.url).pathname,
+    })
+    await started
+    pipelineMock.mockImplementationOnce(() => {
+      seen.push({
+        local: fakeTransformersEnv.localModelPath,
+        allowLocal: fakeTransformersEnv.allowLocalModels,
+        remote: fakeTransformersEnv.allowRemoteModels,
+      })
+      return Promise.reject(new Error("remote disabled"))
+    })
+    const remote = createEmbeddingModel({ backend: "neural" })
+    await Promise.resolve()
+    expect(seen).toHaveLength(1)
+    release()
+    const [a, b] = await Promise.all([local, remote])
+    expect(a.space?.asset).toMatch(/^sha256:/u)
+    expect(b.id).toBe("remem-local-hash-v1")
+    expect(seen[1]).toMatchObject({ allowLocal: false, remote: false })
+    expect(fakeTransformersEnv.localModelPath).toBe("external-owner-root")
+    expect(fakeTransformersEnv.allowRemoteModels).toBe(false)
   })
 
   it("calls onFallback with the error when the neural loader throws", async () => {

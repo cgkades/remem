@@ -22,6 +22,8 @@ describe("PostgresReembedRunner", () => {
     })
     const embed = vi.fn()
     const runner = new PostgresReembedRunner(pool as never, embed, {
+      providerId: "test",
+      fingerprint: "test-space",
       modelId: "bge-small-en-v1.5",
       dimensions: 384,
       batchSize: 10,
@@ -46,11 +48,17 @@ describe("PostgresReembedRunner", () => {
       query: vi.fn().mockResolvedValue({ rows: [], rowCount: 1 }),
       connect: vi.fn().mockResolvedValue(client),
     })
-    const runner = new PostgresReembedRunner(pool as never, () => Promise.resolve([0]), {
-      modelId: "bge-small-en-v1.5",
-      dimensions: 384,
-      batchSize: 10,
-    })
+    const runner = new PostgresReembedRunner(
+      pool as never,
+      () => Promise.resolve(Array.from<number>({ length: 384 }).fill(0)),
+      {
+        providerId: "test",
+        fingerprint: "test-space",
+        modelId: "bge-small-en-v1.5",
+        dimensions: 384,
+        batchSize: 10,
+      },
+    )
 
     await runner.run()
 
@@ -85,7 +93,13 @@ describe("PostgresReembedRunner", () => {
     const runner = new PostgresReembedRunner(
       pool as never,
       () => Promise.reject(new TypeError("dimension mismatch: expected 384, got 512")),
-      { modelId: "bge-small-en-v1.5", dimensions: 384, batchSize: 10 },
+      {
+        providerId: "test",
+        fingerprint: "test-space",
+        modelId: "bge-small-en-v1.5",
+        dimensions: 384,
+        batchSize: 10,
+      },
     )
 
     const result = await runner.run()

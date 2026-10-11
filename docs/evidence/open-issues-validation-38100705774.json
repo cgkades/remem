@@ -1,0 +1,1068 @@
+{
+  "date": "2026-10-11",
+  "source": "4bc3510ab9e273e091c391618ac96d6db0787341",
+  "run": 38100705774,
+  "jobs": [
+    {
+      "name": "OpenCode v2 beta E2E",
+      "id": 114355873761,
+      "conclusion": "success"
+    },
+    {
+      "name": "Episodic query benchmark",
+      "id": 114355873890,
+      "conclusion": "success"
+    },
+    {
+      "name": "Neural embedding evaluation",
+      "id": 114355873895,
+      "conclusion": "success"
+    },
+    {
+      "name": "Deterministic PostgreSQL hybrid quality",
+      "id": 114355873919,
+      "conclusion": "success"
+    },
+    {
+      "name": "Node.js 22",
+      "id": 114355873930,
+      "conclusion": "success"
+    },
+    {
+      "name": "Pi host E2E (Docker, mock model)",
+      "id": 114355873938,
+      "conclusion": "success"
+    },
+    {
+      "name": "OpenCode v1.18.27 E2E",
+      "id": 114355873954,
+      "conclusion": "success"
+    },
+    {
+      "name": "Pi host adapter",
+      "id": 114355873956,
+      "conclusion": "success"
+    },
+    {
+      "name": "Node.js 24",
+      "id": 114355874023,
+      "conclusion": "success"
+    }
+  ],
+  "postgres": {
+    "nodeVersions": [22, 24],
+    "tests": 774,
+    "files": 59,
+    "skipped": 0,
+    "embeddingBehaviorTests": 7
+  },
+  "neuralArtifact": {
+    "id": 11687442272,
+    "digest": "sha256:17bdac9a9e99dae0390186f83cb71d25929f9eaa71395e05e26fd26a3c1bb85a",
+    "inspected": true,
+    "total": 7,
+    "passed": 7,
+    "failed": 0,
+    "pending": 0
+  },
+  "artifacts": [
+    {
+      "id": 11688115480,
+      "name": "hybrid-retrieval-quality",
+      "digest": "sha256:5fdaf0be17bf1bd04fc3629d6bef2957a6af327e6257ebb7c4751f98be79819c"
+    },
+    {
+      "id": 11688105493,
+      "name": "episode-query-benchmark",
+      "digest": "sha256:e29111026a229e3c8a03cc39e2bcf9342a712dd7c8a8f54486e88b9f71d8654f"
+    },
+    {
+      "id": 11687442272,
+      "name": "neural-evaluation",
+      "digest": "sha256:17bdac9a9e99dae0390186f83cb71d25929f9eaa71395e05e26fd26a3c1bb85a"
+    }
+  ],
+  "freshValidation": [
+    {
+      "model": "remem-local-hash-v1",
+      "corpusRows": 5010,
+      "cases": [
+        {
+          "id": "ticket",
+          "expected": ["clock"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": ["clock"],
+          "baselineCandidateP95Ms": 4.443858999999975,
+          "candidateP95Ms": 4.43391100000008,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1742,
+          "dispatchMs": 12
+        },
+        {
+          "id": "ticket-sentence",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 4.220287999999982,
+          "candidateP95Ms": 4.594571999999971,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1757,
+          "dispatchMs": 6
+        },
+        {
+          "id": "alias",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["retries"],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 4.344603000000006,
+          "candidateP95Ms": 4.3464460000000145,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1757,
+          "currentTokens": 1757,
+          "dispatchMs": 7
+        },
+        {
+          "id": "alias-confuser",
+          "expected": ["search"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["search"],
+          "currentIds": ["search"],
+          "baselineCandidateP95Ms": 4.3614629999997305,
+          "candidateP95Ms": 4.59498399999984,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1735,
+          "currentTokens": 1735,
+          "dispatchMs": 7
+        },
+        {
+          "id": "two-topics",
+          "expected": ["billing", "search"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["billing", "search"],
+          "currentIds": ["billing", "search"],
+          "baselineCandidateP95Ms": 5.03669600000012,
+          "candidateP95Ms": 4.766507000000274,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1978,
+          "currentTokens": 1978,
+          "dispatchMs": 7
+        },
+        {
+          "id": "paraphrase",
+          "expected": ["queue"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["queue"],
+          "currentIds": ["queue"],
+          "baselineCandidateP95Ms": 4.324453999999605,
+          "candidateP95Ms": 4.331938000000264,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1747,
+          "currentTokens": 1747,
+          "dispatchMs": 8
+        },
+        {
+          "id": "supersession",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["retries"],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 5.9588629999998375,
+          "candidateP95Ms": 6.493256000000201,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1757,
+          "currentTokens": 1757,
+          "dispatchMs": 6
+        },
+        {
+          "id": "deployment",
+          "expected": ["tls"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["tls"],
+          "currentIds": ["tls"],
+          "baselineCandidateP95Ms": 7.495095000000219,
+          "candidateP95Ms": 7.52113399999962,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1750,
+          "currentTokens": 1750,
+          "dispatchMs": 7
+        },
+        {
+          "id": "unrelated-food",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 4.289148000000296,
+          "candidateP95Ms": 4.033555999999862,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 2
+        },
+        {
+          "id": "unrelated-math",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 4.080405000000155,
+          "candidateP95Ms": 4.135408000000098,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 2
+        },
+        {
+          "id": "unknown-ticket",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 4.206142,
+          "candidateP95Ms": 4.065926999999647,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 2
+        },
+        {
+          "id": "unrelated-poem",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 4.116712999999891,
+          "candidateP95Ms": 4.0793120000003,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 2
+        }
+      ],
+      "baselineCandidateP95Ms": 7.495095000000219,
+      "candidateP95Ms": 7.52113399999962,
+      "dispatchP95Ms": 12
+    },
+    {
+      "model": "bge-small-en-v1.5",
+      "corpusRows": 5010,
+      "cases": [
+        {
+          "id": "ticket",
+          "expected": ["clock"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": ["clock"],
+          "baselineCandidateP95Ms": 10.829174000000421,
+          "candidateP95Ms": 13.555288999999902,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1742,
+          "dispatchMs": 20
+        },
+        {
+          "id": "ticket-sentence",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["retries", "background", "background", "background", "background"],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 10.995457999999417,
+          "candidateP95Ms": 10.966773000000103,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2595,
+          "currentTokens": 1757,
+          "dispatchMs": 22
+        },
+        {
+          "id": "alias",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["retries", "background", "background", "background", "background"],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 11.226038999999219,
+          "candidateP95Ms": 9.768979999999829,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2595,
+          "currentTokens": 1757,
+          "dispatchMs": 18
+        },
+        {
+          "id": "alias-confuser",
+          "expected": ["search"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["background", "background", "background", "background", "background"],
+          "currentIds": ["search"],
+          "baselineCandidateP95Ms": 21.945588999999927,
+          "candidateP95Ms": 22.369646000000103,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2575,
+          "currentTokens": 1735,
+          "dispatchMs": 18
+        },
+        {
+          "id": "two-topics",
+          "expected": ["billing", "search"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["background", "background", "background", "background", "background"],
+          "currentIds": ["billing", "search"],
+          "baselineCandidateP95Ms": 20.826061000000664,
+          "candidateP95Ms": 19.10439799999949,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2606,
+          "currentTokens": 1978,
+          "dispatchMs": 28
+        },
+        {
+          "id": "paraphrase",
+          "expected": ["queue"],
+          "baseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["queue", "background", "background", "background", "background"],
+          "currentIds": ["queue"],
+          "baselineCandidateP95Ms": 11.384078999999474,
+          "candidateP95Ms": 10.435142000000269,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2583,
+          "currentTokens": 1747,
+          "dispatchMs": 19
+        },
+        {
+          "id": "supersession",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["background", "background", "background", "background", "background"],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 12.316029999999955,
+          "candidateP95Ms": 11.021811000000525,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2586,
+          "currentTokens": 1757,
+          "dispatchMs": 18
+        },
+        {
+          "id": "deployment",
+          "expected": ["tls"],
+          "baseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["tls", "background", "background", "background", "background"],
+          "currentIds": ["tls"],
+          "baselineCandidateP95Ms": 10.608256000000438,
+          "candidateP95Ms": 11.80240700000013,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2586,
+          "currentTokens": 1750,
+          "dispatchMs": 18
+        },
+        {
+          "id": "unrelated-food",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 11.622581000000537,
+          "candidateP95Ms": 12.807959000000665,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 11
+        },
+        {
+          "id": "unrelated-math",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 14.450229000000036,
+          "candidateP95Ms": 10.1919740000003,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 26
+        },
+        {
+          "id": "unknown-ticket",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 9.719705000000431,
+          "candidateP95Ms": 12.387729000000036,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 11
+        },
+        {
+          "id": "unrelated-poem",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 10.189809999999852,
+          "candidateP95Ms": 16.85464200000024,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 11
+        }
+      ],
+      "baselineCandidateP95Ms": 21.945588999999927,
+      "candidateP95Ms": 22.369646000000103,
+      "dispatchP95Ms": 28
+    }
+  ],
+  "hybrid": [
+    {
+      "embedding": "deterministic local hash; not a neural quality claim",
+      "relevantCases": 10,
+      "unrelatedCases": 4,
+      "hybridRecallAt5": 0.9,
+      "hybridPrecisionAt5": 0.6233333333333334,
+      "hybridMRR": 0.85,
+      "topicAwareRecallAt5": 1,
+      "topicAwareMRR": 0.95,
+      "offlineRrfRecallAt5": 0.9,
+      "offlineRrfPrecisionAt5": 0.6233333333333334,
+      "offlineRrfMRR": 0.85,
+      "relevantInjectionRate": 1,
+      "baselineRelevantInjectionRate": 0.9,
+      "baselineFalseInjectionRate": 0,
+      "baselineEstimatedTokenMax": 2288,
+      "baselineDispatchP95Ms": 13,
+      "falseInjectionRate": 0,
+      "forbiddenCandidates": 0,
+      "nonTargetSelected": 3,
+      "estimatedTokenMax": 2286,
+      "candidateP95Ms": 3.5055889999999863,
+      "dispatchP95Ms": 5
+    }
+  ],
+  "learning": [
+    {
+      "gate": "cross-session-investigation",
+      "repeats": 5,
+      "baseline": {
+        "recallAtK": 0,
+        "answerCorrect": false,
+        "dispatchRoundTripMs": 465.37517999999545
+      },
+      "k": 5,
+      "recallAtK": 1,
+      "answerCorrect": true,
+      "unsupportedAssertions": 0,
+      "falseInjection": 0,
+      "provenanceCorrect": true,
+      "procedureAccuracy": true,
+      "maxContextBytes": 4201,
+      "contextTokens": {
+        "upperBound": 4201,
+        "measurement": "UTF-8 bytes; not actual tokenizer output"
+      },
+      "dispatchRoundTripP95Ms": 66.73278200000641,
+      "latencyMeasurement": "host prompt through model response; includes retrieval and dispatch",
+      "modelQuality": "not evaluated; deterministic context reader"
+    },
+    {
+      "gate": "host-verified-procedure",
+      "promotedCandidates": 1,
+      "canonicalSources": 8,
+      "automaticPromotions": 1,
+      "freshSessionRecall": true,
+      "rule": "native-shell-recovery-v1",
+      "procedureQuality": "observed recovery sequence; root-cause/model quality not evaluated"
+    },
+    {
+      "gate": "host-evidence-slice",
+      "recallAt4": 1,
+      "falseInjection": 0,
+      "provenanceCorrect": true,
+      "dispatchRoundTripMs": 57.42113000000245,
+      "modelQuality": "not evaluated (deterministic mock)"
+    }
+  ],
+  "loaderRegression": "Serialize ReMem loader configuration, restore shared settings on success/failure, disallow unidentified local assets on pinned remote loads and preserve external remote-download prohibition.",
+  "limits": [
+    "Deterministic context reader; generative root cause inference not evaluated.",
+    "Warm per-case p95 uses ten samples; no production SLO or consistent speedup.",
+    "Fresh fixture now inspected regression data; not future blind validation."
+  ]
+}

@@ -1,3 +1,8 @@
+import { createRequire } from "node:module"
+import { createHash } from "node:crypto"
+import { readdir, readFile } from "node:fs/promises"
+import path from "node:path"
+import type { EmbeddingSpace } from "./embedding-space.js"
 import { ProxyAgent, setGlobalDispatcher } from "undici"
 import { LocalHashEmbeddingModel } from "./embedding.js"
 import { EMBEDDING_DIMENSIONS, HUGGING_FACE_MODEL, NEURAL_MODEL_ID } from "./embedding-model-ids.js"
@@ -8,10 +13,10 @@ export interface NeuralEmbeddingConfig {
   modelPath?: string
 }
 
-export type FeatureExtractionPipeline = (
+export type FeatureExtractionPipeline = ((
   text: string,
   options: { pooling: "mean"; normalize: true },
-) => Promise<{ data: ArrayLike<number> }>
+) => Promise<{ data: ArrayLike<number> }>) & { backendIdentity?: string }
 
 export interface EmbeddingModelFactoryOptions {
   /** Test/DI seam: loads (or fakes) the transformers.js feature-extraction pipeline. */
@@ -30,7 +35,7 @@ export interface EmbeddingModelFactoryOptions {
 
 const MODEL_ID = NEURAL_MODEL_ID
 const MODEL_DIMENSIONS = EMBEDDING_DIMENSIONS
-const HUGGING_FACE_REVISION = "ea104dacec62c0de699686887e3f920caeb4f3e3"
+export const HUGGING_FACE_REVISION = "ea104dacec62c0de699686887e3f920caeb4f3e3"
 
 // Module-level guard: setGlobalDispatcher replaces the process-wide undici
 // dispatcher without closing/destroying the one it replaces, so repeated
@@ -54,30 +59,85 @@ export function configureProxyFromEnvironment(
   return true
 }
 
-async function defaultLoadPipeline(
+let pipelineLoads: Promise<void> = Promise.resolve()
+function defaultLoadPipeline(modelPath: string | undefined): Promise<FeatureExtractionPipeline> {
+  const result = pipelineLoads.then(() => loadIsolatedPipeline(modelPath))
+  pipelineLoads = result.then(
+    () => undefined,
+    () => undefined,
+  )
+  return result
+}
+
+async function loadIsolatedPipeline(
   modelPath: string | undefined,
 ): Promise<FeatureExtractionPipeline> {
   configureProxyFromEnvironment()
   const { pipeline, env } = await import("@huggingface/transformers")
-  const cacheDir = process.env.REMEM_TRANSFORMERS_CACHE_DIR
-  if (cacheDir) env.cacheDir = cacheDir
-  if (modelPath) {
-    env.localModelPath = modelPath
-    env.allowRemoteModels = false
+  const previous = {
+    cacheDir: env.cacheDir,
+    localModelPath: env.localModelPath,
+    allowLocalModels: env.allowLocalModels,
+    allowRemoteModels: env.allowRemoteModels,
   }
-  const extractor = await pipeline("feature-extraction", HUGGING_FACE_MODEL, {
-    dtype: "q8",
-    revision: HUGGING_FACE_REVISION,
-  })
-  return (text, options) =>
-    extractor(text, options).then((output) => output as unknown as { data: ArrayLike<number> })
+  try {
+    const cacheDir = process.env.REMEM_TRANSFORMERS_CACHE_DIR
+    if (cacheDir) env.cacheDir = cacheDir
+    // Only an explicitly hashed local directory may identify local assets.
+    // A default pinned-remote load must not inherit another caller's local root.
+    env.allowLocalModels = modelPath !== undefined
+    if (modelPath) {
+      env.localModelPath = modelPath
+      env.allowRemoteModels = false
+    }
+    // For remote loads, preserve an existing global remote-download prohibition.
+    const extractor = await pipeline("feature-extraction", HUGGING_FACE_MODEL, {
+      dtype: "q8",
+      revision: HUGGING_FACE_REVISION,
+    })
+    if (typeof env.version !== "string" || !env.version)
+      throw new TypeError("cannot identify transformers runtime version")
+    const runtimePackage: unknown = createRequire(import.meta.url)("onnxruntime-node/package.json")
+    if (
+      !runtimePackage ||
+      typeof runtimePackage !== "object" ||
+      !("version" in runtimePackage) ||
+      typeof runtimePackage.version !== "string"
+    )
+      throw new TypeError("cannot identify neural runtime version")
+    return Object.assign(
+      (text: string, options: { pooling: "mean"; normalize: true }) =>
+        extractor(text, options).then((output) => output as unknown as { data: ArrayLike<number> }),
+      {
+        backendIdentity: `transformers.js@${env.version}/onnxruntime-node@${runtimePackage.version}`,
+      },
+    )
+  } finally {
+    Object.assign(env, previous)
+  }
 }
 
 export class BgeSmallEmbeddingModel implements EmbeddingModel {
   readonly id = MODEL_ID
   readonly dimensions = MODEL_DIMENSIONS
 
-  constructor(private readonly extractor: FeatureExtractionPipeline) {}
+  readonly space: EmbeddingSpace
+  constructor(
+    private readonly extractor: FeatureExtractionPipeline,
+    asset = `hf:${HUGGING_FACE_MODEL}@${HUGGING_FACE_REVISION}`,
+  ) {
+    this.space = {
+      schemaVersion: 1,
+      backend: extractor.backendIdentity ?? "external-bge-feature-extraction-v1",
+      asset,
+      dimensions: MODEL_DIMENSIONS,
+      pooling: "mean",
+      normalization: "l2",
+      dtype: "q8",
+      query: { mode: "text", instruction: "" },
+      document: { mode: "text", instruction: "" },
+    }
+  }
 
   async embed(text: string, signal?: AbortSignal): Promise<number[]> {
     signal?.throwIfAborted()
@@ -107,11 +167,14 @@ export async function createEmbeddingModel(
   if (config.backend !== "neural") return new LocalHashEmbeddingModel()
   try {
     const loadPipeline = options.loadPipeline ?? defaultLoadPipeline
+    const assetBefore = config.modelPath ? await localAssetIdentity(config.modelPath) : undefined
     const extractor = await loadPipeline(config.modelPath)
     // Fail fast here rather than lazily on first embed() so callers see the
     // fallback decision immediately instead of on a random later request.
     await extractor("remem embedding model warmup", { pooling: "mean", normalize: true })
-    return new BgeSmallEmbeddingModel(extractor)
+    const asset = config.modelPath ? await localAssetIdentity(config.modelPath) : undefined
+    if (asset !== assetBefore) throw new TypeError("local embedding assets changed while loading")
+    return new BgeSmallEmbeddingModel(extractor, asset)
   } catch (error) {
     try {
       options.onFallback?.(error)
@@ -120,4 +183,32 @@ export async function createEmbeddingModel(
     }
     return new LocalHashEmbeddingModel()
   }
+}
+
+/** Content identity of offline assets; paths and mtimes are not embedding identities. */
+async function localAssetIdentity(root: string): Promise<string> {
+  const digest = createHash("sha256")
+  let files = 0
+  async function visit(relative: string): Promise<void> {
+    const entries = await readdir(path.join(root, relative), { withFileTypes: true })
+    entries.sort((a, b) => a.name.localeCompare(b.name, "en"))
+    for (const entry of entries) {
+      const name = path.join(relative, entry.name)
+      if (entry.isSymbolicLink())
+        throw new TypeError("local embedding assets must not contain symlinks")
+      if (entry.isDirectory()) await visit(name)
+      else if (entry.isFile()) {
+        digest.update(name.replaceAll(path.sep, "/") + "\0")
+        digest.update(
+          createHash("sha256")
+            .update(await readFile(path.join(root, name)))
+            .digest(),
+        )
+        files++
+      }
+    }
+  }
+  await visit("")
+  if (files === 0) throw new TypeError("local embedding asset directory is empty")
+  return "sha256:" + digest.digest("hex")
 }
