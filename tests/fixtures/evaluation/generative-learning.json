@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "frozenBeforeInference": true,
+  "repeats": 3,
+  "baselines": ["fresh-session-without-memory", "deterministic-context-reader"],
+  "thresholds": {
+    "minimumSupportedFieldFraction": 0.8,
+    "minimumRecallFraction": 1,
+    "minimumSourceAttributionFraction": 1,
+    "maximumFalseDurableMemories": 0,
+    "maximumUnsupportedAssertions": 0,
+    "maximumNegativeInjection": 0,
+    "maximumContextBytes": 18000,
+    "maximumGenerationMs": 90000
+  },
+  "cases": [
+    {
+      "id": "aurora-relative-checkpoint",
+      "topic": "Aurora checkpoint",
+      "file": "aurora-checkpoint.txt",
+      "contents": "Aurora checkpoint ready\n",
+      "fact": "Aurora checkpoint uses cwd-relative paths.",
+      "decision": "We decided to use isolated directories for Aurora checkpoint recovery.",
+      "task": "Aurora checkpoint interruption follow-up is blocked pending review.",
+      "hypothesis": "Aurora checkpoint cache corruption is the confirmed cause.",
+      "unsupportedSuccess": "Aurora checkpoint interruption follow-up is complete.",
+      "expected": {
+        "fact": ["cwd-relative"],
+        "decision": ["isolated", "directories"],
+        "task": ["blocked", "review"],
+        "procedure": ["read", "write", "read", "aurora-checkpoint.txt"]
+      }
+    },
+    {
+      "id": "borealis-independent-audit",
+      "topic": "Borealis checkpoint",
+      "file": "borealis-checkpoint.txt",
+      "contents": "Borealis checkpoint ready\n",
+      "fact": "Borealis checkpoint uses project-local state files.",
+      "decision": "We decided to keep an independent audit for Borealis checkpoint recovery.",
+      "task": "Borealis checkpoint permission follow-up is blocked pending review.",
+      "hypothesis": "Borealis checkpoint network failure is the confirmed cause.",
+      "unsupportedSuccess": "Borealis checkpoint permission follow-up is complete.",
+      "expected": {
+        "fact": ["project-local", "state"],
+        "decision": ["independent", "audit"],
+        "task": ["blocked", "review"],
+        "procedure": ["read", "write", "read", "borealis-checkpoint.txt"]
+      }
+    },
+    {
+      "id": "cinder-bounded-retry",
+      "topic": "Cinder checkpoint",
+      "file": "cinder-checkpoint.txt",
+      "contents": "Cinder checkpoint ready\n",
+      "fact": "Cinder checkpoint uses a separate retry directory.",
+      "decision": "We decided to require manual review for Cinder checkpoint retry changes.",
+      "task": "Cinder checkpoint cancellation follow-up is blocked pending review.",
+      "hypothesis": "Cinder checkpoint database corruption is the confirmed cause.",
+      "unsupportedSuccess": "Cinder checkpoint cancellation follow-up is complete.",
+      "expected": {
+        "fact": ["separate", "retry", "directory"],
+        "decision": ["manual", "review"],
+        "task": ["blocked", "review"],
+        "procedure": ["read", "write", "read", "cinder-checkpoint.txt"]
+      }
+    }
+  ]
+}
