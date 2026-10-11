@@ -32,6 +32,11 @@ integration("resumable concurrent index migrations", () => {
 
   it("requires operator opt-in and serializes two runners without duplicate application", async () => {
     await expect(runMigrations(pool, directory)).rejects.toThrow("--allow-nontransactional")
+    await expect(
+      runMigrations(pool, directory, {
+        allowNonTransactional: "yes" as unknown as boolean,
+      }),
+    ).rejects.toThrow("--allow-nontransactional")
     expect((await migrationStatus(pool, directory)).currentVersion).toBe(1)
     const results = await Promise.all([
       runMigrations(pool, directory, { allowNonTransactional: true }),

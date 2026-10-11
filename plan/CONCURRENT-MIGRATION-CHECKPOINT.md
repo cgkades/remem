@@ -19,3 +19,11 @@ that CREATE INDEX CONCURRENTLY waited for. Replace it with pg_try_advisory_lock 
 bounded waits outside active SQL statements. Trim executed DDL so the backend-termination
 fixture identifies its active build. Checked-out connection errors now destroy the pooled client.
 The other four PostgreSQL recovery/integrity tests passed. Pending rerun of all six plus full CI.
+
+## Verified recovery gate
+
+Head 1271e8fc5f9935371d96ad9151e5167b52f4d6c4 passed all eight jobs in run 38097610637. Node 22/24 passed the complete PostgreSQL suite, including six migration
+regressions; Node 24 reported 752 tests in 55 files, no skips. Native OpenCode v1/v2,
+Pi, episodic benchmark and neural evaluation passed. Final follow-up narrows opt-in
+to literal true and documents the extension in the storage guide; rerun those checks
+for its containing commit. Integrate #114/current main before final merge and validation.

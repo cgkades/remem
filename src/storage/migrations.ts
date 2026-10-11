@@ -162,7 +162,7 @@ async function applyConcurrentIndex(
   options: MigrationOptions,
 ): Promise<void> {
   const index = migration.concurrentIndex!
-  if (!options.allowNonTransactional)
+  if (options.allowNonTransactional !== true)
     throw new MigrationIntegrityError(
       `migration ${migration.version} requires remem migrate --allow-nontransactional`,
     )
