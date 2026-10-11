@@ -139,7 +139,7 @@ integration("embedding fingerprint cutover on real PostgreSQL", () => {
           "SELECT fingerprint FROM remem.memory_embeddings WHERE memory_id=$1",
           [foreignId],
         )
-      ).rows[0].fingerprint,
+      ).rows[0]?.fingerprint,
     ).toBeNull()
     expect(
       (
@@ -147,7 +147,7 @@ integration("embedding fingerprint cutover on real PostgreSQL", () => {
           "SELECT fingerprint FROM remem.memory_embeddings WHERE memory_id=$1",
           [record.id],
         )
-      ).rows[0].fingerprint,
+      ).rows[0]?.fingerprint,
     ).toBe(modelFingerprint(model("revision-two")))
   })
   it("uses distinct query/document encoders and rejects a query-instruction change", async () => {
@@ -240,14 +240,14 @@ integration("embedding fingerprint cutover on real PostgreSQL", () => {
           "SELECT status FROM remem.consolidation_records WHERE id=$1",
           [run],
         )
-      ).rows[0].status,
+      ).rows[0]?.status,
     ).toBe("failed")
     expect(
       (
         await pool.query<Record<string, string | number | null>>(
           "SELECT count(*)::int AS n FROM remem.memory_embeddings WHERE reembed_claim_id IS NOT NULL",
         )
-      ).rows[0].n,
+      ).rows[0]?.n,
     ).toBe(0)
   })
   it("cancels without promoting an incomplete generation and retries safely after inference failure", async () => {
@@ -278,7 +278,7 @@ integration("embedding fingerprint cutover on real PostgreSQL", () => {
         await pool.query<Record<string, string | number | null>>(
           "SELECT fingerprint FROM remem.memory_embeddings me JOIN remem.memories m ON m.id=me.memory_id WHERE m.provider_id='cancel'",
         )
-      ).rows[0].fingerprint,
+      ).rows[0]?.fingerprint,
     ).toBe(modelFingerprint(model("cancel-old")))
     const bad = provider(
       {
