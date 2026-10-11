@@ -190,6 +190,15 @@ integration("PostgreSQL hybrid retrieval quality", () => {
         baselineSearch.mockRestore()
       }
       const injection = await orchestrator.processPrompt(item.prompt, context)
+      const plannedCandidates = await provider.search({
+        query: item.prompt,
+        topics: injection.plan.topics,
+        context,
+        limit: 5,
+        maxTokens: 700,
+        reason: "planned topic comparison",
+        signal: new AbortController().signal,
+      })
       for (const bad of fixture.entries.filter((value) => forbidden.has(ids.get(value.id) ?? ""))) {
         expect(injection.memoryText).not.toContain(bad.content)
       }
@@ -207,6 +216,10 @@ integration("PostgreSQL hybrid retrieval quality", () => {
           baselineInjection.trace.catalogTokens + baselineInjection.trace.recallTokens,
         baselineDispatchMs: baselineInjection.trace.totalDurationMs,
         hybrid: rankMetrics(actual, expected),
+        topicAware: rankMetrics(
+          plannedCandidates.map((value) => value.record.id),
+          expected,
+        ),
         rrf: rankMetrics(fused, expected),
         injectedRelevant:
           !!item.expected &&
@@ -240,6 +253,8 @@ integration("PostgreSQL hybrid retrieval quality", () => {
       hybridRecallAt5: mean(relevant.map((value) => value.hybrid.recallAt5)),
       hybridPrecisionAt5: mean(relevant.map((value) => value.hybrid.precisionAt5)),
       hybridMRR: mean(relevant.map((value) => value.hybrid.reciprocalRank)),
+      topicAwareRecallAt5: mean(relevant.map((value) => value.topicAware.recallAt5)),
+      topicAwareMRR: mean(relevant.map((value) => value.topicAware.reciprocalRank)),
       offlineRrfRecallAt5: mean(relevant.map((value) => value.rrf.recallAt5)),
       offlineRrfPrecisionAt5: mean(relevant.map((value) => value.rrf.precisionAt5)),
       offlineRrfMRR: mean(relevant.map((value) => value.rrf.reciprocalRank)),
@@ -268,7 +283,10 @@ integration("PostgreSQL hybrid retrieval quality", () => {
         "hybrid-quality-case " + JSON.stringify({ ...item, rankingReasons: undefined }) + "\n",
       )
     expect(metrics.hybridRecallAt5).toBeGreaterThanOrEqual(0.8)
-    expect(metrics.relevantInjectionRate).toBeGreaterThan(metrics.baselineRelevantInjectionRate)
+    expect(metrics.relevantInjectionRate).toBeGreaterThanOrEqual(
+      metrics.baselineRelevantInjectionRate,
+    )
+    expect(metrics.topicAwareRecallAt5).toBeGreaterThan(metrics.hybridRecallAt5)
     expect(metrics.relevantInjectionRate).toBeGreaterThanOrEqual(0.8)
     expect(metrics.falseInjectionRate).toBe(0)
     expect(metrics.estimatedTokenMax).toBeLessThanOrEqual(2300)
@@ -295,6 +313,16 @@ integration("PostgreSQL hybrid retrieval quality", () => {
       reason: "recognized alias",
       signal: new AbortController().signal,
     })
+    const baseline = await provider.search({
+      query: "Resume the Phoenix streaming cutover.",
+      topics: [],
+      context,
+      limit: 5,
+      maxTokens: 700,
+      reason: "pre-change topic behavior",
+      signal: new AbortController().signal,
+    })
+    expect(baseline.map((value) => value.record.id)).not.toContain(ids.get("phoenix-kafka"))
     expect(recalled[0]?.record.id).toBe(ids.get("phoenix-kafka"))
     expect(recalled[0]?.reasons).toContain("PostgreSQL catalog topic match")
     expect(recalled[0]?.reasons).not.toContain("PostgreSQL full-text match")
