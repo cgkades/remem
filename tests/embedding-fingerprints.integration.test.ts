@@ -153,6 +153,7 @@ integration("embedding fingerprint cutover on real PostgreSQL", () => {
   it("uses distinct query/document encoders and rejects a query-instruction change", async () => {
     let queryCalls = 0
     let documentCalls = 0
+    const encoded: string[] = []
     const m: EmbeddingModel = {
       ...model("asym"),
       space: {
@@ -162,11 +163,13 @@ integration("embedding fingerprint cutover on real PostgreSQL", () => {
         document: { mode: "document", instruction: "passage: " },
       },
       embed: () => Promise.reject(new Error("wrong encoder")),
-      embedQuery: () => {
+      embedQuery: (text) => {
+        encoded.push("search: " + text)
         queryCalls++
         return Promise.resolve(vector)
       },
-      embedDocument: () => {
+      embedDocument: (text) => {
+        encoded.push("passage: " + text)
         documentCalls++
         return Promise.resolve(vector)
       },
@@ -181,6 +184,8 @@ integration("embedding fingerprint cutover on real PostgreSQL", () => {
     expect(await search(p, "anotherlexeme")).toHaveLength(1)
     expect(queryCalls).toBe(1)
     expect(documentCalls).toBe(2)
+    expect(encoded).toContain("search: anotherlexeme")
+    expect(encoded.some((value) => value.startsWith("passage: Asymmetric record"))).toBe(true)
     const changed = provider(
       { ...m, space: { ...m.space!, query: { mode: "query", instruction: "changed: " } } },
       "asym",

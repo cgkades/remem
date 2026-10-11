@@ -53,20 +53,34 @@ export function modelFingerprint(model: EmbeddingModel): string | undefined {
     throw new TypeError("embedding space dimension mismatch")
   return embeddingFingerprint(model.space)
 }
+function checked(model: EmbeddingModel, pending: Promise<number[]>): Promise<number[]> {
+  return pending.then((vector) => {
+    if (
+      vector.length !== model.dimensions ||
+      vector.some((value) => !Number.isFinite(value)) ||
+      !vector.some((value) => value !== 0)
+    )
+      throw new TypeError("invalid embedding encoder output")
+    return vector
+  })
+}
 export function embedQuery(
   model: EmbeddingModel,
   text: string,
   signal?: AbortSignal,
 ): Promise<number[]> {
-  if (model.embedQuery) return model.embedQuery(text, signal)
+  if (model.embedQuery) return checked(model, model.embedQuery(text, signal))
   if (model.space && JSON.stringify(model.space.query) !== JSON.stringify(model.space.document))
     throw new TypeError("asymmetric space requires a query encoder")
-  return model.embed(text, signal)
+  return checked(model, model.embed(text, signal))
 }
 export function embedDocument(
   model: EmbeddingModel,
   text: string,
   signal?: AbortSignal,
 ): Promise<number[]> {
-  return model.embedDocument ? model.embedDocument(text, signal) : model.embed(text, signal)
+  return checked(
+    model,
+    model.embedDocument ? model.embedDocument(text, signal) : model.embed(text, signal),
+  )
 }

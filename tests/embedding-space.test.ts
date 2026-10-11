@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 import {
   embeddingFingerprint,
   embedQuery,
+  embedDocument,
   modelFingerprint,
 } from "../src/storage/embedding-space.js"
 import { LocalHashEmbeddingModel } from "../src/storage/embedding.js"
@@ -93,6 +94,17 @@ describe("canonical embedding spaces", () => {
     } finally {
       await rm(a, { recursive: true, force: true })
       await rm(b, { recursive: true, force: true })
+    }
+  })
+  it("rejects non-finite, wrong-width and zero encoder vectors before querying PostgreSQL", async () => {
+    for (const vector of [
+      [1],
+      Array.from<number>({ length: 384 }).fill(NaN),
+      Array.from<number>({ length: 384 }).fill(0),
+    ]) {
+      const m = { id: "invalid", dimensions: 384, space, embed: () => Promise.resolve(vector) }
+      await expect(embedQuery(m, "query")).rejects.toThrow("invalid embedding encoder output")
+      await expect(embedDocument(m, "document")).rejects.toThrow("invalid embedding encoder output")
     }
   })
 })

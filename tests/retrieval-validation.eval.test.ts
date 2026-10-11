@@ -1,3 +1,4 @@
+import { describeError } from "../src/text.js"
 import { modelFingerprint } from "../src/storage/embedding-space.js"
 import { readFile, mkdir, writeFile } from "node:fs/promises"
 import { Pool } from "pg"
@@ -32,10 +33,20 @@ integration("fresh real-PostgreSQL retrieval validation", () => {
       ),
     ) as Fixture
     const pool = new Pool({ connectionString: process.env.REMEM_TEST_DATABASE_URL })
-    const neural = await createEmbeddingModel({ backend: "neural" })
-    expect(neural.id, "required real neural benchmark may not silently use fallback").toBe(
-      "bge-small-en-v1.5",
+    let fallbackReason = ""
+    const neural = await createEmbeddingModel(
+      { backend: "neural" },
+      {
+        onFallback: (error) => {
+          fallbackReason = describeError(error)
+          process.stdout.write("required-neural-load " + fallbackReason + "\n")
+        },
+      },
     )
+    expect(
+      neural.id,
+      "required real neural benchmark may not silently use fallback: " + fallbackReason,
+    ).toBe("bge-small-en-v1.5")
     const models: EmbeddingModel[] = [new LocalHashEmbeddingModel(), neural]
     const reports = []
     const context = {

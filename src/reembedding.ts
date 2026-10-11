@@ -201,7 +201,7 @@ export class PostgresReembedRunner {
            LEFT JOIN remem.catalog_entries ce ON ce.memory_id=m.id
            WHERE m.provider_id=$4 AND
              (me.model <> $1 OR me.dimensions <> $2 OR me.fingerprint IS DISTINCT FROM $5
-               OR (ce.memory_id IS NOT NULL AND ce.embedding_fingerprint IS DISTINCT FROM $5))
+               OR (ce.memory_id IS NOT NULL AND (ce.embedding_fingerprint IS DISTINCT FROM $5 OR ce.embedding_model IS DISTINCT FROM $1 OR ce.embedding_dimensions IS DISTINCT FROM $2 OR ce.embedding IS NULL)))
              AND me.reembed_claim_id IS NULL
              AND NOT EXISTS(SELECT 1 FROM remem.embedding_reindex_stage stage
                WHERE stage.memory_id=m.id AND stage.fingerprint=$5 AND stage.source_version=m.updated_at)
@@ -267,10 +267,10 @@ export class PostgresReembedRunner {
         `
         SELECT count(*)::int AS total,
           count(*) FILTER(WHERE me.fingerprint=$2 AND me.model=$3 AND me.dimensions=$4
-            AND (ce.memory_id IS NULL OR ce.embedding_fingerprint=$2))::int AS compatible,
+            AND (ce.memory_id IS NULL OR (ce.embedding_fingerprint=$2 AND ce.embedding_model=$3 AND ce.embedding_dimensions=$4 AND ce.embedding IS NOT NULL)))::int AS compatible,
           count(*) FILTER(WHERE stage.memory_id IS NOT NULL AND NOT
             COALESCE(me.fingerprint=$2 AND me.model=$3 AND me.dimensions=$4
-              AND (ce.memory_id IS NULL OR ce.embedding_fingerprint=$2),false))::int AS staged
+              AND (ce.memory_id IS NULL OR (ce.embedding_fingerprint=$2 AND ce.embedding_model=$3 AND ce.embedding_dimensions=$4 AND ce.embedding IS NOT NULL)),false))::int AS staged
         FROM remem.memories m LEFT JOIN remem.memory_embeddings me ON me.memory_id=m.id
         LEFT JOIN remem.catalog_entries ce ON ce.memory_id=m.id
         LEFT JOIN remem.embedding_reindex_stage stage ON stage.memory_id=m.id AND stage.fingerprint=$2

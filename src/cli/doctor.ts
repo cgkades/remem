@@ -329,7 +329,7 @@ export async function runDoctor(
           LEFT JOIN remem.catalog_entries ce ON ce.memory_id=m.id
           WHERE me.model IS DISTINCT FROM $1 OR me.dimensions IS DISTINCT FROM $2
             OR me.fingerprint IS DISTINCT FROM $3 OR me.fingerprint IS NULL
-            OR (ce.memory_id IS NOT NULL AND (ce.embedding_fingerprint IS DISTINCT FROM $3 OR ce.embedding IS NULL))`,
+            OR (ce.memory_id IS NOT NULL AND (ce.embedding_fingerprint IS DISTINCT FROM $3 OR ce.embedding IS NULL OR ce.embedding_model IS DISTINCT FROM $1 OR ce.embedding_dimensions IS DISTINCT FROM $2))`,
         [embeddingModel.id, embeddingModel.dimensions, modelFingerprint(embeddingModel) ?? null],
       )
       const pending = Number(backlog.rows[0]?.count ?? 0)
