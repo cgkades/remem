@@ -6,6 +6,7 @@ import {
 } from "./observation-admission.js"
 import type { ResolvedTaskEpisode } from "./procedure.js"
 import type { MemoryContext } from "./types.js"
+import { sourceIsSafe } from "./source-safety.js"
 
 export const SHELL_RECOVERY_RULE = "native-shell-recovery-v1"
 export const PI_FILE_RECOVERY_RULE = "pi-native-file-recovery-v1"
@@ -110,6 +111,10 @@ export function verifiedProcedureFromEvidence(
     return undefined
   const [failed, action, verified] = evidence.slice(-3)
   if (!failed || !action || !verified) return undefined
+  // Cite only complete sources needed for the supported proof. Earlier
+  // attempts are historical data and cannot acquire semantic authority.
+  const proof = [first, failed, action, verified]
+  if (proof.some((source) => !sourceIsSafe(source))) return undefined
   if (first.host === "pi") return verifiedPiFileRecovery(evidence, context)
   const failure = shell(failed)
   const fix = shell(action)
@@ -157,7 +162,7 @@ export function verifiedProcedureFromEvidence(
     ],
     verification: {
       rule: SHELL_RECOVERY_RULE,
-      evidenceRefs: evidence.map((source) => ({
+      evidenceRefs: proof.map((source) => ({
         providerId: source.providerId,
         eventId: source.id,
       })),
@@ -265,7 +270,10 @@ function verifiedPiFileRecovery(
     ],
     verification: {
       rule: PI_FILE_RECOVERY_RULE,
-      evidenceRefs: evidence.map((e) => ({ providerId: e.providerId, eventId: e.id })),
+      evidenceRefs: [evidence[0]!, failed, action, verified].map((e) => ({
+        providerId: e.providerId,
+        eventId: e.id,
+      })),
     },
   }
 }

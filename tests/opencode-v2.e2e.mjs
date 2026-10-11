@@ -1265,7 +1265,7 @@ async function main() {
         [learnedScope.rows[0].scope_id],
       )
       const requiredRefs = procedureRefs.rows.map((row) => `hooks-postgres:${row.evidence_id}`)
-      if (requiredRefs.length !== 8)
+      if (requiredRefs.length !== 4)
         throw new Error("investigation procedure source window changed")
       const qualityRuns = []
       const verifyAnswer = async (session, requests, elapsed) => {
@@ -1419,7 +1419,7 @@ async function main() {
         JSON.stringify({
           gate: "host-verified-procedure",
           promotedCandidates: 1,
-          canonicalSources: 8,
+          canonicalSources: 4,
           automaticPromotions: 1,
           freshSessionRecall: true,
           rule: "native-shell-recovery-v1",
