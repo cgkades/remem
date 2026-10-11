@@ -2170,6 +2170,14 @@ export class PostgresMemoryProvider
     )
     if (tombstone.rows[0]) return { outcome: "forgotten", id: envelope.id }
 
+    // Evidence exists before semantic learning. Register its admitted provider
+    // in this transaction so privacy previews do not depend on a later memory write.
+    await client.query(
+      `INSERT INTO remem.providers(id,kind,name) VALUES($1,'postgres','Remem managed memory')
+      ON CONFLICT(id) DO NOTHING`,
+      [envelope.providerId],
+    )
+
     const insertParams = [
       sessionId,
       envelope.context.projectId,
