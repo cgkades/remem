@@ -54,9 +54,9 @@ export class ModelLearningCoordinator {
                 .map((e) => ({
                   ...e,
                   context: {
-                    ...context,
-                    projectId: e.context.projectId,
-                    sessionId: e.context.sessionId,
+                    ...e.context,
+                    directory: context.directory,
+                    worktree: context.worktree,
                   },
                 }))
                 .filter((e) => {
