@@ -101,12 +101,37 @@ integration("Pi canonical procedure lifecycle", () => {
     expect((await store.candidateLineage(f.candidate.id, piContext))?.state).toBe("approved")
     const preview = await store.previewForget(config.id, f.sources[0]!.id, piContext.projectId)
     await store.confirmForget(preview!.id)
-    await expect(store.appendEvidence(f.sources[0]!)).rejects.toThrow()
+    expect(await store.appendEvidence(f.sources[0]!)).toMatchObject({ outcome: "forgotten" })
     await store.recoverLearningCandidates(piContext)
     expect(
       (await pool.query("SELECT id FROM remem.memories WHERE type='procedure'")).rowCount,
     ).toBe(0)
   })
+  it("returns an approval to review when conflicting file recovery appears before commit", async () => {
+    const f = await fixture()
+    await store.persistCandidate(f.observation, f.candidate, {
+      autoApprove: true,
+      applyLearningPolicy: true,
+    })
+    const prior = await store.write({
+      type: "procedure",
+      title: "Prior file recovery",
+      content: "Prior recovery requires different contents.",
+      scope: { kind: "project", id: piContext.projectId },
+      metadata: { learningKey: "file-contents:aurora-checkpoint.txt" },
+    })
+    const pipeline = new DeterministicConsolidationPipeline(store)
+    expect((await pipeline.consolidate([{ ...f.candidate, status: "approved" }]))[0]?.status).toBe(
+      "pending",
+    )
+    expect((await store.candidateLineage(f.candidate.id, piContext))?.policyReason).toBe(
+      "conflicting-current-knowledge",
+    )
+    expect((await store.get(prior.id, piContext))?.content).toBe(
+      "Prior recovery requires different contents.",
+    )
+  })
+
   it("keeps automatic-disabled procedures pending, and bounds failed promotion recovery", async () => {
     const f = await fixture()
     expect(
