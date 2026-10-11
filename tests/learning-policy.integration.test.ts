@@ -99,7 +99,7 @@ integration("server learning authorization and audit", () => {
       const lineage = await store.candidateLineage(candidate.id, context)
       expect(lineage).toMatchObject({
         state: "promoted",
-        policyVersion: "scoped-evidence-learning-v1",
+        policyVersion: "scoped-evidence-learning-v2",
         policyOutcome: "auto-promote",
       })
       const audit = await pool.query<{ policy_version: string; policy_outcome: string }>(
@@ -110,7 +110,7 @@ integration("server learning authorization and audit", () => {
       expect(
         audit.rows.every(
           (row) =>
-            row.policy_version === "scoped-evidence-learning-v1" &&
+            row.policy_version === "scoped-evidence-learning-v2" &&
             row.policy_outcome === "auto-promote",
         ),
       ).toBe(true)
@@ -233,6 +233,27 @@ integration("server learning authorization and audit", () => {
     const lineage = await store.candidateLineage(f.candidate.id, context)
     expect((await store.recoverLearningCandidates(context)).selected).toBe(0)
     expect(await store.candidateLineage(f.candidate.id, context)).toEqual(lineage)
+  })
+
+  it("revalidates supported prior policy approvals before recovery without accepting unknown versions", async () => {
+    const f = await input("Versioned startup worker uses local files.")
+    await store.persistCandidate(f.observation, f.candidate, options)
+    await pool.query(
+      "UPDATE remem.candidate_memories SET metadata=jsonb_set(metadata,'{learningPolicy,version}','\"scoped-evidence-learning-v1\"'::jsonb) WHERE id=$1",
+      [f.candidate.id],
+    )
+    expect((await store.recoverLearningCandidates(context)).promoted).toBe(1)
+    expect((await store.candidateLineage(f.candidate.id, context))?.policyVersion).toBe(
+      "scoped-evidence-learning-v2",
+    )
+    const unknown = await input("Unknown version worker uses local files.")
+    await store.persistCandidate(unknown.observation, unknown.candidate, options)
+    await pool.query(
+      "UPDATE remem.candidate_memories SET metadata=jsonb_set(metadata,'{learningPolicy,version}','\"unknown-policy\"'::jsonb) WHERE id=$1",
+      [unknown.candidate.id],
+    )
+    expect((await store.recoverLearningCandidates(context)).selected).toBe(0)
+    expect((await store.candidateLineage(unknown.candidate.id, context))?.state).toBe("approved")
   })
 
   it("never recovers a legacy approval or an aborted recovery request", async () => {

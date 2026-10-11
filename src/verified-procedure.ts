@@ -8,6 +8,7 @@ import type { ResolvedTaskEpisode } from "./procedure.js"
 import type { MemoryContext } from "./types.js"
 
 export const SHELL_RECOVERY_RULE = "native-shell-recovery-v1"
+export const PI_FILE_RECOVERY_RULE = "pi-native-file-recovery-v1"
 export const PROCEDURE_WINDOW_LIMIT = 9
 
 /** Optional host-neutral stored-evidence capability; unsupported providers
@@ -74,7 +75,8 @@ export function verifiedProcedureFromEvidence(
   if (evidence.length < 4 || evidence.length > PROCEDURE_WINDOW_LIMIT) return undefined
   const first = evidence[0]
   const last = evidence.at(-1)
-  if (!first || !last || !context.sessionId || first.host !== "opencode-v2") return undefined
+  if (!first || !last || !context.sessionId || !["opencode-v2", "pi"].includes(first.host))
+    return undefined
   const ids = new Set<string>()
   for (const source of evidence) {
     if (
@@ -108,6 +110,7 @@ export function verifiedProcedureFromEvidence(
     return undefined
   const [failed, action, verified] = evidence.slice(-3)
   if (!failed || !action || !verified) return undefined
+  if (first.host === "pi") return verifiedPiFileRecovery(evidence, context)
   const failure = shell(failed)
   const fix = shell(action)
   const check = shell(verified)
@@ -158,6 +161,111 @@ export function verifiedProcedureFromEvidence(
         providerId: source.providerId,
         eventId: source.id,
       })),
+    },
+  }
+}
+
+/** Pi exposes read/write completion and content, but no reliable shell exit
+ * field. Verify exactly one bounded file check/write/identical read instead. */
+function verifiedPiFileRecovery(
+  evidence: readonly EvidenceEnvelope[],
+  context: MemoryContext,
+): ResolvedTaskEpisode | undefined {
+  const [failed, action, verified] = evidence.slice(-3)
+  if (
+    !failed ||
+    !action ||
+    !verified ||
+    new Set([failed.turnId, action.turnId, verified.turnId]).size !== 3 ||
+    [failed, action, verified].some(
+      (e) => !e.turnId || e.origin !== "host-observed" || e.kind !== "tool-result",
+    )
+  )
+    return undefined
+  const f = failed.payload.metadata,
+    a = action.payload.metadata,
+    v = verified.payload.metadata
+  const fi = f?.input,
+    ai = a?.input,
+    vi = v?.input
+  if (
+    !fi ||
+    typeof fi !== "object" ||
+    Array.isArray(fi) ||
+    !ai ||
+    typeof ai !== "object" ||
+    Array.isArray(ai) ||
+    !vi ||
+    typeof vi !== "object" ||
+    Array.isArray(vi)
+  )
+    return undefined
+  const input = fi as Record<string, unknown>,
+    write = ai as Record<string, unknown>,
+    check = vi as Record<string, unknown>
+  const path = input.path,
+    content = write.content
+  if (
+    f?.tool !== "read" ||
+    f.status !== "error" ||
+    a?.tool !== "write" ||
+    a.status !== "completed" ||
+    v?.tool !== "read" ||
+    v.status !== "completed" ||
+    typeof path !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,159}$/u.test(path) ||
+    path.split("/").some((p) => p === ".." || !p) ||
+    /(?:password|secret|credential|private|production|\.pem$|\.key$)/iu.test(path) ||
+    write.path !== path ||
+    check.path !== path ||
+    Object.keys(input).length !== 1 ||
+    Object.keys(check).length !== 1 ||
+    Object.keys(write).some((k) => !["path", "content"].includes(k)) ||
+    typeof content !== "string" ||
+    !/^[A-Za-z0-9 .:_/-]{1,160}\n?$/u.test(content) ||
+    !failed.payload.text?.startsWith("ENOENT:") ||
+    verified.payload.text !== content ||
+    [failed, action, verified].some((e) => {
+      const details = e.payload.metadata?.result
+      return (
+        details !== undefined &&
+        (!details ||
+          typeof details !== "object" ||
+          Array.isArray(details) ||
+          Object.keys(details).length > 0)
+      )
+    })
+  )
+    return undefined
+  return {
+    host: "pi",
+    context,
+    sessionId: context.sessionId!,
+    messageId: verified.id,
+    goal: `Recover the missing workspace file: ${path}`,
+    outcome: "succeeded",
+    occurredAt: verified.occurredAt,
+    steps: [
+      {
+        kind: "read",
+        path,
+        summary: "Native read reported ENOENT",
+        errorSignature: "ENOENT: workspace file was unavailable",
+      },
+      {
+        kind: "other",
+        path,
+        summary: `Native write completed with bounded contents: ${content.trim()}`,
+      },
+      {
+        kind: "read",
+        path,
+        summary: "The identical native read returned exactly the written contents",
+      },
+    ],
+    verification: {
+      rule: PI_FILE_RECOVERY_RULE,
+      evidenceRefs: evidence.map((e) => ({ providerId: e.providerId, eventId: e.id })),
     },
   }
 }

@@ -14,15 +14,11 @@ import { DeterministicCandidateExtractor } from "../capture.js"
 import {
   assertionLearningKey,
   decideLearning,
-  LEARNING_POLICY_VERSION,
+  REVALIDATABLE_LEARNING_POLICY_VERSIONS,
   type CaptureReceipt,
   type LearningDecision,
 } from "../learning-policy.js"
-import {
-  PROCEDURE_WINDOW_LIMIT,
-  SHELL_RECOVERY_RULE,
-  verifiedProcedureFromEvidence,
-} from "../verified-procedure.js"
+import { PROCEDURE_WINDOW_LIMIT, verifiedProcedureFromEvidence } from "../verified-procedure.js"
 import { extractProcedureCandidate, observationFromResolvedTask } from "../procedure.js"
 import { parseConfig } from "../config.js"
 import { Pool, type PoolClient, type QueryResultRow } from "pg"
@@ -1170,7 +1166,11 @@ export class PostgresMemoryProvider
           policy.outcome === "auto-promote" &&
           previous?.actor !== "review"
         ) {
-          if (!("version" in policy) || policy.version !== LEARNING_POLICY_VERSION)
+          if (
+            !("version" in policy) ||
+            typeof policy.version !== "string" ||
+            !REVALIDATABLE_LEARNING_POLICY_VERSIONS.includes(policy.version)
+          )
             throw new Error("automatic learning policy version is unsupported")
           const savedObservation: unknown = row?.metadata.learningObservation
           if (
@@ -1232,6 +1232,25 @@ export class PostgresMemoryProvider
             )
             await client.query("COMMIT")
             return { ...durable, status: "pending", reasons: [...durable.reasons, decision.reason] }
+          }
+          if (policy.version !== decision.version) {
+            durable.memory.metadata = { ...durable.memory.metadata, learningPolicy: decision }
+            await client.query(
+              "UPDATE remem.candidate_memories SET metadata=jsonb_set(metadata,'{memory,metadata,learningPolicy}',$2::jsonb) || jsonb_build_object('learningPolicy',$2::jsonb) WHERE id=$1",
+              [candidate.id, JSON.stringify(decision)],
+            )
+            await client.query(
+              "UPDATE remem.candidate_lineage SET policy_version=$5,policy_outcome=$6,policy_reason=$7,action='learning-policy-revalidated',actor='learning-policy' WHERE provider_id=$1 AND scope_kind=$2 AND scope_key=$3 AND candidate_id=$4",
+              [
+                this.id,
+                scope.kind,
+                key,
+                candidate.id,
+                decision.version,
+                decision.outcome,
+                decision.reason,
+              ],
+            )
           }
         }
         const forgotten = await client.query(
@@ -1652,7 +1671,7 @@ export class PostgresMemoryProvider
       if (
         !expected ||
         !extracted ||
-        observation.payload.verificationRule !== SHELL_RECOVERY_RULE ||
+        observation.payload.verificationRule !== expected.payload.verificationRule ||
         observation.id !== expected.id ||
         observation.payload.text !== expected.payload.text ||
         !isDeepStrictEqual(raw, expected.payload.evidenceRefs) ||
@@ -2585,13 +2604,13 @@ export class PostgresMemoryProvider
     if (providerId !== this.id || !context.sessionId) return []
     const result = await queryable.query<EpisodicEventRow & { evidence_order: string }>(
       `WITH trigger AS (
-         SELECT created_at FROM remem.session_events
+         SELECT created_at,host FROM remem.session_events
          WHERE provider_id=$1 AND evidence_id=$2 AND project_id=$3 AND session_id=$4
-           AND host='opencode-v2'
+           AND host IN ('opencode-v2','pi')
        )
        SELECT e.*, e.created_at::text AS evidence_order FROM remem.session_events e, trigger t
        WHERE e.provider_id=$1 AND e.project_id=$3 AND e.session_id=$4
-         AND e.host='opencode-v2' AND e.evidence_id IS NOT NULL AND e.created_at<=t.created_at
+         AND e.host=t.host AND e.evidence_id IS NOT NULL AND e.created_at<=t.created_at
        ORDER BY e.created_at DESC, e.id DESC LIMIT $5`,
       [providerId, triggerId, context.projectId, context.sessionId, PROCEDURE_WINDOW_LIMIT + 1],
     )
@@ -3515,10 +3534,10 @@ export class PostgresMemoryProvider
       `SELECT * FROM remem.candidate_memories WHERE status='approved'
        AND scope_kind='project' AND scope_id=$1 AND metadata->>'providerId'=$2
        AND metadata->>'canonicalEvidence'='true'
-       AND metadata->'learningPolicy'->>'version'=$3
+       AND metadata->'learningPolicy'->>'version'=ANY($3::text[])
        AND metadata->'learningPolicy'->>'outcome'='auto-promote'
        ORDER BY created_at,id LIMIT 8`,
-      [context.projectId, this.id, LEARNING_POLICY_VERSION],
+      [context.projectId, this.id, REVALIDATABLE_LEARNING_POLICY_VERSIONS],
     )
     options.signal?.throwIfAborted()
     const results = await new DeterministicConsolidationPipeline(this, {

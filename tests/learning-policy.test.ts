@@ -27,7 +27,7 @@ describe("versioned evidence learning policy", () => {
       outcome: "auto-promote",
       rule: "missing-file-recovery-v1",
       key: "file-presence:phoenix-checkpoint.txt",
-      version: "scoped-evidence-learning-v1",
+      version: "scoped-evidence-learning-v2",
     })
   })
   const corpus = [

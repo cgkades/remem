@@ -2,15 +2,20 @@ import type { CandidateMemory, SessionObservation } from "./observation.js"
 import type { EvidenceEnvelope } from "./observation-admission.js"
 import { admitEvidence, DEFAULT_EVIDENCE_ADMISSION_CONFIG } from "./observation-admission.js"
 import { containsSensitiveCredential } from "./sensitive-data.js"
-import { verifiedProcedureFromEvidence } from "./verified-procedure.js"
+import { PI_FILE_RECOVERY_RULE, verifiedProcedureFromEvidence } from "./verified-procedure.js"
 
-export const LEARNING_POLICY_VERSION = "scoped-evidence-learning-v1"
+export const LEARNING_POLICY_VERSION = "scoped-evidence-learning-v2"
+// Old approvals remain eligible only after full current evidence/policy revalidation.
+export const REVALIDATABLE_LEARNING_POLICY_VERSIONS: readonly string[] = [
+  "scoped-evidence-learning-v1",
+  LEARNING_POLICY_VERSION,
+]
 export type LearningOutcome = "reject" | "episodic-only" | "auto-promote" | "require-review"
 export interface LearningDecision {
   version: typeof LEARNING_POLICY_VERSION
   outcome: LearningOutcome
   reason: string
-  rule?: "original-user-assertion-v1" | "missing-file-recovery-v1"
+  rule?: "original-user-assertion-v1" | "missing-file-recovery-v1" | "pi-file-recovery-v1"
   key?: string
 }
 export interface CaptureReceipt {
@@ -141,11 +146,16 @@ export function decideLearning(input: {
   let rule: LearningDecision["rule"]
   let key: string | undefined
   if (observation.payload.verificationRule) {
-    if (!verifiedProcedureFromEvidence(evidence, observation.context))
-      return decide("episodic-only", "unverified-procedure")
-    key = missingFileRecoveryKey(evidence)
-    if (!key) return decide("require-review", "procedure-outside-low-risk-rule")
-    rule = "missing-file-recovery-v1"
+    const verified = verifiedProcedureFromEvidence(evidence, observation.context)
+    if (!verified) return decide("episodic-only", "unverified-procedure")
+    if (verified.verification?.rule === PI_FILE_RECOVERY_RULE) {
+      rule = "pi-file-recovery-v1"
+      key = `file-contents:${verified.steps[0]?.path}`
+    } else {
+      key = missingFileRecoveryKey(evidence)
+      if (!key) return decide("require-review", "procedure-outside-low-risk-rule")
+      rule = "missing-file-recovery-v1"
+    }
   } else if (
     evidence.every((source) => source.role === "user" && source.origin === "direct-user")
   ) {
