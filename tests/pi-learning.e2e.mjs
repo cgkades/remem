@@ -35,9 +35,12 @@ const server = createServer((request, response) => {
   request.on("end", () => {
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8"))
     requests.push(body)
-    const latest = body.messages.findLast((m) => m.role === "user")
-    const learning = JSON.stringify(latest?.content).includes(firstPrompt)
-    const unsafe = JSON.stringify(latest?.content).includes(unsafePrompt)
+    const learning = body.messages.some(
+      (m) => m.role === "user" && JSON.stringify(m.content).includes(firstPrompt),
+    )
+    const unsafe = body.messages.some(
+      (m) => m.role === "user" && JSON.stringify(m.content).includes(unsafePrompt),
+    )
     const completed = body.messages.filter((m) => m.role === "tool").length
     response.writeHead(200, { "content-type": "text/event-stream", connection: "keep-alive" })
     const base = {
