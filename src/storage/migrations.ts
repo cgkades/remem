@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { readdir, readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { setTimeout as delay } from "node:timers/promises"
 import type { Pool, PoolClient } from "pg"
 
 const MIGRATION_PATTERN = /^(\d{4})_([a-z0-9_]+)\.sql$/u
@@ -50,7 +51,7 @@ export interface Migration {
   file: string
   checksum: string
   sql: string
-  concurrentIndex: ConcurrentIndex | undefined
+  concurrentIndex?: ConcurrentIndex | undefined
 }
 
 export interface MigrationResult {
@@ -206,7 +207,9 @@ async function applyConcurrentIndex(
       await client.query(`DROP INDEX CONCURRENTLY remem.${index.name}`)
     if (!existing || !existing.valid || !existing.ready)
       await client.query(
-        migration.sql.slice(migration.sql.indexOf(CONCURRENT_MARKER) + CONCURRENT_MARKER.length),
+        migration.sql
+          .slice(migration.sql.indexOf(CONCURRENT_MARKER) + CONCURRENT_MARKER.length)
+          .trim(),
       )
     const checked = await client.query<{ definition: string; valid: boolean; ready: boolean }>(
       `SELECT pg_get_indexdef(i.indexrelid) AS definition, i.indisvalid AS valid, i.indisready AS ready
@@ -259,8 +262,26 @@ export async function runMigrations(
   const client = await pool.connect()
   const appliedNow: number[] = []
   let failure: Error | undefined
+  const connectionError = (error: Error) => {
+    failure = error
+  }
+  client.on("error", connectionError)
   try {
-    await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK])
+    // A blocking SELECT pg_advisory_lock holds a virtual transaction while
+    // waiting. CREATE INDEX CONCURRENTLY can wait for that same transaction,
+    // deadlocking two migration runners. Poll outside an active SQL statement.
+    const lockStarted = Date.now()
+    while (
+      !(
+        await client.query<{ acquired: boolean }>("SELECT pg_try_advisory_lock($1) AS acquired", [
+          MIGRATION_LOCK,
+        ])
+      ).rows[0]?.acquired
+    ) {
+      if (Date.now() - lockStarted >= (options.lockTimeoutMs ?? 600000))
+        throw new Error("migration advisory lock wait timed out")
+      await delay(50)
+    }
     await bootstrap(client)
     const result = await client.query<AppliedMigration>(
       "SELECT version, name, checksum FROM remem.schema_migrations ORDER BY version",
@@ -298,8 +319,13 @@ export async function runMigrations(
     failure = error instanceof Error ? error : new Error("migration failed")
     throw error
   } finally {
-    await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK]).catch(() => undefined)
+    await client
+      .query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK])
+      .catch((error: unknown) => {
+        failure ??= error instanceof Error ? error : new Error("migration unlock failed")
+      })
     client.release(failure)
+    client.off("error", connectionError)
   }
 }
 

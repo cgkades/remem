@@ -45,3 +45,9 @@ Integration tests exercise operator opt-in, concurrent runners, index/ledger int
 backend termination, retry, checksum and definition drift, SQL constraints, lock timeout and
 ordinary-write availability. These gates establish recovery/locking behavior, not production
 migration duration or a zero-downtime promise.
+
+Migration runners acquire the session advisory lock using nonblocking probes with waits outside
+an active SQL statement. Blocking advisory-lock SELECTs hold a virtual transaction that a
+concurrent index build may itself wait for; polling avoids that deadlock. The advisory acquisition
+limit defaults to ten minutes (or the API lock timeout override). Connection failure destroys the
+checked-out client, ensuring session locks cannot leak into the pool.

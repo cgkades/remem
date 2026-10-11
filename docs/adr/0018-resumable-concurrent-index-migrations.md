@@ -36,3 +36,9 @@ The advisory lock protects ReMem runners, not arbitrary external DDL by other ad
 A generated stored column rewrite cannot be made nonblocking by concurrent index creation.
 Existing-installation operations must schedule that rewrite separately. No automatic rollback,
 index deployment on startup, capture-default change or new neural dependency follows from this ADR.
+
+Migration runners acquire the session advisory lock using nonblocking probes with waits outside
+an active SQL statement. Blocking advisory-lock SELECTs hold a virtual transaction that a
+concurrent index build may itself wait for; polling avoids that deadlock. The advisory acquisition
+limit defaults to ten minutes (or the API lock timeout override). Connection failure destroys the
+checked-out client, ensuring session locks cannot leak into the pool.

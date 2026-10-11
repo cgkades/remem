@@ -10,3 +10,12 @@
   update this checkpoint with verified head/run IDs before merge. Local container has no mapped
   unprivileged UID and cannot launch a safe PostgreSQL server; do not substitute mocks for DB acceptance.
 - Next: publish a draft PR, run CI, fix verified defects, merge only after all #87 acceptance gates pass.
+
+## Verified failure and fix
+
+Run 38097440994 at c94c8c61972328a346224c1c6ce29aa680b3ce6d exposed a real
+concurrent-runner deadlock: blocking pg_advisory_lock SELECT retained a virtual transaction
+that CREATE INDEX CONCURRENTLY waited for. Replace it with pg_try_advisory_lock probes and
+bounded waits outside active SQL statements. Trim executed DDL so the backend-termination
+fixture identifies its active build. Checked-out connection errors now destroy the pooled client.
+The other four PostgreSQL recovery/integrity tests passed. Pending rerun of all six plus full CI.
