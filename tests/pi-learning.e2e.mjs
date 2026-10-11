@@ -84,9 +84,10 @@ const server = createServer((request, response) => {
       })
       emit({}, "tool_calls")
     } else {
-      const context = JSON.stringify(
-        body.messages.filter((m) => m.role === "system" || m.role === "user"),
-      )
+      const context =
+        JSON.stringify(body.messages.filter((m) => m.role === "system" || m.role === "user")).match(
+          /<memory-context>[\s\S]*?<\/memory-context>/u,
+        )?.[0] ?? ""
       emit({
         role: "assistant",
         content:
