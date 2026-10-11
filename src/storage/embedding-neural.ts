@@ -59,38 +59,62 @@ export function configureProxyFromEnvironment(
   return true
 }
 
-async function defaultLoadPipeline(
+let pipelineLoads: Promise<void> = Promise.resolve()
+function defaultLoadPipeline(modelPath: string | undefined): Promise<FeatureExtractionPipeline> {
+  const result = pipelineLoads.then(() => loadIsolatedPipeline(modelPath))
+  pipelineLoads = result.then(
+    () => undefined,
+    () => undefined,
+  )
+  return result
+}
+
+async function loadIsolatedPipeline(
   modelPath: string | undefined,
 ): Promise<FeatureExtractionPipeline> {
   configureProxyFromEnvironment()
   const { pipeline, env } = await import("@huggingface/transformers")
-  const cacheDir = process.env.REMEM_TRANSFORMERS_CACHE_DIR
-  if (cacheDir) env.cacheDir = cacheDir
-  if (modelPath) {
-    env.localModelPath = modelPath
-    env.allowRemoteModels = false
+  const previous = {
+    cacheDir: env.cacheDir,
+    localModelPath: env.localModelPath,
+    allowLocalModels: env.allowLocalModels,
+    allowRemoteModels: env.allowRemoteModels,
   }
-  const extractor = await pipeline("feature-extraction", HUGGING_FACE_MODEL, {
-    dtype: "q8",
-    revision: HUGGING_FACE_REVISION,
-  })
-  if (typeof env.version !== "string" || !env.version)
-    throw new TypeError("cannot identify transformers runtime version")
-  const runtimePackage: unknown = createRequire(import.meta.url)("onnxruntime-node/package.json")
-  if (
-    !runtimePackage ||
-    typeof runtimePackage !== "object" ||
-    !("version" in runtimePackage) ||
-    typeof runtimePackage.version !== "string"
-  )
-    throw new TypeError("cannot identify neural runtime version")
-  return Object.assign(
-    (text: string, options: { pooling: "mean"; normalize: true }) =>
-      extractor(text, options).then((output) => output as unknown as { data: ArrayLike<number> }),
-    {
-      backendIdentity: `transformers.js@${env.version}/onnxruntime-node@${runtimePackage.version}`,
-    },
-  )
+  try {
+    const cacheDir = process.env.REMEM_TRANSFORMERS_CACHE_DIR
+    if (cacheDir) env.cacheDir = cacheDir
+    // Only an explicitly hashed local directory may identify local assets.
+    // A default pinned-remote load must not inherit another caller's local root.
+    env.allowLocalModels = modelPath !== undefined
+    if (modelPath) {
+      env.localModelPath = modelPath
+      env.allowRemoteModels = false
+    }
+    // For remote loads, preserve an existing global remote-download prohibition.
+    const extractor = await pipeline("feature-extraction", HUGGING_FACE_MODEL, {
+      dtype: "q8",
+      revision: HUGGING_FACE_REVISION,
+    })
+    if (typeof env.version !== "string" || !env.version)
+      throw new TypeError("cannot identify transformers runtime version")
+    const runtimePackage: unknown = createRequire(import.meta.url)("onnxruntime-node/package.json")
+    if (
+      !runtimePackage ||
+      typeof runtimePackage !== "object" ||
+      !("version" in runtimePackage) ||
+      typeof runtimePackage.version !== "string"
+    )
+      throw new TypeError("cannot identify neural runtime version")
+    return Object.assign(
+      (text: string, options: { pooling: "mean"; normalize: true }) =>
+        extractor(text, options).then((output) => output as unknown as { data: ArrayLike<number> }),
+      {
+        backendIdentity: `transformers.js@${env.version}/onnxruntime-node@${runtimePackage.version}`,
+      },
+    )
+  } finally {
+    Object.assign(env, previous)
+  }
 }
 
 export class BgeSmallEmbeddingModel implements EmbeddingModel {
