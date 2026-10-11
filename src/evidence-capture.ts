@@ -9,6 +9,7 @@ import {
 import { isCapacityStore, isEpisodicStore, type EpisodicStore } from "./observation.js"
 import { withTimeout } from "./timeout.js"
 import type { MemoryProvider, RememLogger } from "./types.js"
+import { CaptureGapRecorder, isLearningDiagnosticsStore } from "./learning-diagnostics.js"
 
 /** Host-neutral evidence queue. Admission precedes all persistence and is
  * independent of semantic significance and promotion. */
@@ -17,6 +18,7 @@ export class EvidenceCaptureCoordinator {
   private draining: Promise<void> | undefined
   private closed = false
   private readonly shutdown = new AbortController()
+  private readonly gaps: CaptureGapRecorder | undefined
 
   constructor(
     private readonly store: EpisodicStore,
@@ -28,9 +30,19 @@ export class EvidenceCaptureCoordinator {
       envelope: EvidenceEnvelope,
       signal: AbortSignal,
     ) => void | Promise<void>,
-  ) {}
+  ) {
+    this.gaps = isLearningDiagnosticsStore(store)
+      ? new CaptureGapRecorder(
+          store,
+          { directory: "", worktree: "", projectId: authority.projectId },
+          authority.host,
+          timeoutMs,
+        )
+      : undefined
+  }
 
   private diagnostic(reason: string): void {
+    this.gaps?.record(reason)
     try {
       void Promise.resolve(
         this.logger.log("warn", "evidence.capture_gap", {
@@ -62,6 +74,7 @@ export class EvidenceCaptureCoordinator {
 
   async idle(): Promise<void> {
     await this.draining
+    await this.gaps?.idle()
   }
 
   private async drain(): Promise<void> {
@@ -165,6 +178,8 @@ export class EvidenceCaptureCoordinator {
       this.shutdown.abort()
       this.queue.length = 0
       this.diagnostic("shutdown-timeout")
+    } finally {
+      await this.gaps?.dispose()
     }
   }
 }

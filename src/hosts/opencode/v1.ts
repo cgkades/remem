@@ -169,18 +169,27 @@ export function createOpenCodeV1Hooks(
       memory_explain: tool({
         description: MEMORY_TOOL_DESCRIPTIONS.explain,
         args: {},
-        execute(_args, toolContext) {
-          return Promise.resolve({
+        async execute(_args, toolContext) {
+          return {
             title: "Memory retrieval explanation",
             output: JSON.stringify(
-              formatMemoryExplain(
-                orchestrator.explain(toolContext.sessionID),
-                capture?.explain(toolContext.sessionID),
-              ),
+              {
+                ...formatMemoryExplain(
+                  orchestrator.explain(toolContext.sessionID),
+                  capture?.explain(toolContext.sessionID),
+                ),
+                learning: await orchestrator.learning(
+                  memoryContext(
+                    locationFor(input, toolContext.directory, toolContext.worktree),
+                    toolContext.sessionID,
+                  ),
+                  toolContext.abort,
+                ),
+              },
               null,
               2,
             ),
-          })
+          }
         },
       }),
     },

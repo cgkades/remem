@@ -32,3 +32,4 @@ export * from "./token-budget.js"
 export * from "./types.js"
 
 export * from "./learning-ledger.js"
+export * from "./learning-diagnostics.js"

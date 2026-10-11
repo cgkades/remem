@@ -3,6 +3,13 @@ import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import { episodeResults } from "../episodic-recall.js"
 import type { CandidateLineage } from "../learning-ledger.js"
+import {
+  CAPTURE_GAP_REASONS,
+  LEARNING_DIAGNOSTIC_LIMIT,
+  type CaptureGap,
+  type LearningHistory,
+  type LearningHistoryEntry,
+} from "../learning-diagnostics.js"
 import { DeterministicCandidateExtractor } from "../capture.js"
 import {
   assertionLearningKey,
@@ -1356,6 +1363,139 @@ export class PostgresMemoryProvider
     }
   }
 
+  /** Project-only, body-free snapshots. No project means no history disclosure. */
+  async learningHistory(
+    context: MemoryContext,
+    options: { limit?: number; signal?: AbortSignal } = {},
+  ): Promise<LearningHistory> {
+    options.signal?.throwIfAborted()
+    if (!context.projectId) return { entries: [], gaps: [], limited: false }
+    const limit = Number.isFinite(options.limit)
+      ? Math.max(1, Math.min(LEARNING_DIAGNOSTIC_LIMIT, Math.floor(options.limit!)))
+      : 5
+    const result = await this.pool.query<{
+      candidate_id: string
+      state: string
+      memory_id: string | null
+      revision: number
+      observation_ids: string[]
+      available_ids: string[]
+      policy_version: string
+      policy_outcome: string | null
+      policy_reason: string | null
+      extractor_version: string
+      confidence: number | null
+      updated_at: Date
+      audit: CandidateLineage["audit"]
+    }>(
+      `SELECT l.candidate_id,l.state,l.memory_id,l.revision,l.observation_ids[1:16] AS observation_ids,
+        l.policy_version,l.policy_outcome,l.policy_reason,l.extractor_version,l.confidence,l.updated_at,
+        ARRAY(SELECT e.id FROM remem.session_events e WHERE e.id=ANY(l.observation_ids[1:16])
+          AND e.provider_id=$1 AND e.project_id=$2) AS available_ids,
+        COALESCE((SELECT jsonb_agg(a) FROM (SELECT revision,state,action,actor
+          FROM remem.candidate_lineage_audit WHERE provider_id=$1 AND scope_kind='project'
+            AND scope_key=$2 AND candidate_id=l.candidate_id ORDER BY revision DESC LIMIT 3) a),'[]') AS audit
+      FROM remem.candidate_lineage l WHERE provider_id=$1 AND scope_kind='project' AND scope_key=$2
+      ORDER BY updated_at DESC,candidate_id LIMIT $3`,
+      [this.id, context.projectId, limit + 1],
+    )
+    options.signal?.throwIfAborted()
+    // Labels are server codes, never an arbitrary source/model diagnostic string.
+    const code = (value: string) => (/^[a-z0-9.-]{1,80}$/u.test(value) ? value : "unrecognized")
+    const entries: LearningHistoryEntry[] = result.rows.slice(0, limit).map((row) => ({
+      candidateId: row.candidate_id,
+      state: code(row.state),
+      revision: row.revision,
+      ...(row.memory_id ? { memoryId: row.memory_id } : {}),
+      observationIds: row.observation_ids,
+      availableObservationIds: row.available_ids,
+      policyVersion: code(row.policy_version),
+      extractorVersion: code(row.extractor_version),
+      ...(row.policy_outcome ? { policyOutcome: code(row.policy_outcome) } : {}),
+      ...(row.policy_reason ? { policyReason: code(row.policy_reason) } : {}),
+      ...(row.confidence !== null && Number.isFinite(row.confidence)
+        ? { confidence: row.confidence }
+        : {}),
+      updatedAt: row.updated_at.toISOString(),
+      audit: row.audit.map((a) => ({
+        revision: a.revision,
+        state: code(a.state),
+        action: code(a.action),
+        actor: code(a.actor),
+      })),
+    }))
+    const counters = await this.pool.query<{
+      host: CaptureGap["host"]
+      reason: CaptureGap["reason"]
+      count: number
+      updated_at: Date
+    }>(
+      `SELECT host,reason,count,updated_at FROM remem.learning_capture_gaps
+       WHERE provider_id=$1 AND project_id=$2 AND updated_at >= now()-interval '30 days'
+       ORDER BY updated_at DESC,host,reason LIMIT 68`,
+      [this.id, context.projectId],
+    )
+    options.signal?.throwIfAborted()
+    return {
+      entries,
+      limited: result.rows.length > limit,
+      gaps: counters.rows.map((row) => ({
+        host: row.host,
+        reason: row.reason,
+        count: row.count,
+        lastObservedAt: row.updated_at.toISOString(),
+      })),
+    }
+  }
+
+  async recordCaptureGap(
+    context: MemoryContext,
+    gap: Pick<CaptureGap, "host" | "reason" | "count">,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    signal?.throwIfAborted()
+    if (!context.projectId || context.projectId.length > 256 || context.projectId.includes("\0"))
+      return
+    if (
+      !CAPTURE_GAP_REASONS.includes(gap.reason) ||
+      !["opencode-v1", "opencode-v2", "pi", "other"].includes(gap.host) ||
+      !Number.isInteger(gap.count) ||
+      gap.count < 1 ||
+      gap.count > 1_000_000
+    )
+      throw new TypeError("invalid capture gap counter")
+    const client = await this.pool.connect()
+    try {
+      await client.query("BEGIN")
+      await client.query("SET LOCAL statement_timeout='1000ms'")
+      await client.query(
+        `INSERT INTO remem.providers(id,kind,name) VALUES($1,'postgres','Remem managed memory')
+        ON CONFLICT(id) DO NOTHING`,
+        [this.id],
+      )
+      // Do not revive a stale cumulative count as though its events were recent.
+      await client.query(
+        `INSERT INTO remem.learning_capture_gaps(provider_id,project_id,host,reason,count)
+        VALUES($1,$2,$3,$4,$5) ON CONFLICT(provider_id,project_id,host,reason) DO UPDATE SET
+        count=CASE WHEN learning_capture_gaps.updated_at < now()-interval '30 days' THEN EXCLUDED.count
+          ELSE LEAST(2147483647::bigint,learning_capture_gaps.count::bigint+EXCLUDED.count)::integer END,
+        updated_at=now()`,
+        [this.id, context.projectId, gap.host, gap.reason, gap.count],
+      )
+      await client.query(
+        `DELETE FROM remem.learning_capture_gaps WHERE provider_id=$1 AND updated_at < now()-interval '30 days'`,
+        [this.id],
+      )
+      signal?.throwIfAborted()
+      await client.query("COMMIT")
+    } catch (error) {
+      await client.query("ROLLBACK")
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
   private async lockLearningScope(client: PoolClient, scope: MemoryScope): Promise<void> {
     await client.query("SELECT pg_advisory_xact_lock_shared($1)", [FORGET_RESTORE_ADVISORY_LOCK])
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
@@ -1762,8 +1902,8 @@ export class PostgresMemoryProvider
       if (decision && receipt?.status === "rejected") {
         await client.query(
           `INSERT INTO remem.candidate_lineage
-           (provider_id,scope_kind,scope_key,candidate_id,state,observation_ids,action,actor,policy_version,extractor_version,policy_outcome,policy_reason)
-           VALUES ($1,$2,$3,$4,'rejected',$5,'learning-declined','learning-policy',$6,$7,$8,$9)
+           (provider_id,scope_kind,scope_key,candidate_id,state,observation_ids,action,actor,policy_version,extractor_version,policy_outcome,policy_reason,confidence)
+           VALUES ($1,$2,$3,$4,'rejected',$5,'learning-declined','learning-policy',$6,$7,$8,$9,$10)
            ON CONFLICT DO NOTHING`,
           [
             this.id,
@@ -1775,6 +1915,11 @@ export class PostgresMemoryProvider
             "evidence-linked-v1",
             decision.outcome,
             decision.reason,
+            Number.isFinite(candidate.confidence) &&
+            candidate.confidence >= 0 &&
+            candidate.confidence <= 1
+              ? candidate.confidence
+              : null,
           ],
         )
         await client.query("COMMIT")
@@ -2024,6 +2169,14 @@ export class PostgresMemoryProvider
       [envelope.providerId, envelope.context.projectId, envelope.id],
     )
     if (tombstone.rows[0]) return { outcome: "forgotten", id: envelope.id }
+
+    // Evidence exists before semantic learning. Register its admitted provider
+    // in this transaction so privacy previews do not depend on a later memory write.
+    await client.query(
+      `INSERT INTO remem.providers(id,kind,name) VALUES($1,'postgres','Remem managed memory')
+      ON CONFLICT(id) DO NOTHING`,
+      [envelope.providerId],
+    )
 
     const insertParams = [
       sessionId,

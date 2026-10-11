@@ -103,6 +103,7 @@ const POSTGRES_RETRIEVAL_PROMPT = "Let's continue the Aurora database migration 
 const TOOL_CALL_STEPS = [
   { id: "call_read", name: "read", arguments: '{"path":"tool-loop.txt"}' },
   { id: "call_memory_status", name: "memory_status", arguments: "{}" },
+  { id: "call_memory_explain", name: "memory_explain", arguments: "{}" },
   {
     id: "call_shell_failed",
     name: "shell",

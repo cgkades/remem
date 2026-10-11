@@ -25,7 +25,7 @@ export const MEMORY_TOOL_DESCRIPTIONS = {
   status:
     "Show memory health and bounded diagnostics. Use when a user asks whether memory is available; never returns memory bodies.",
   explain:
-    "Explain the latest capture or retrieval outcome, including why automatic recall did not return a result, without exposing memory bodies.",
+    "Explain the latest capture/recall outcome and bounded persisted project learning history, including policy reasons, evidence availability and capture gaps after restart. Never returns memory bodies.",
 } as const
 
 const MAX_DIAGNOSTICS = 5

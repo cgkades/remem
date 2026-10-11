@@ -102,8 +102,8 @@ integration("PostgreSQL managed provider", () => {
 
       const upgraded = await runMigrations(pool)
       expect(upgraded).toMatchObject({
-        applied: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-        currentVersion: 15,
+        applied: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+        currentVersion: 16,
       })
       expect(
         (
@@ -122,7 +122,7 @@ integration("PostgreSQL managed provider", () => {
       ).toBeNull()
 
       const repeated = await runMigrations(pool)
-      expect(repeated).toMatchObject({ applied: [], currentVersion: 15 })
+      expect(repeated).toMatchObject({ applied: [], currentVersion: 16 })
 
       await copyFile(
         path.join(process.cwd(), "migrations/0002_consolidation_observation.sql"),

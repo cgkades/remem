@@ -7,6 +7,10 @@ import type {
   CorrectionReviewQueue,
 } from "./correction.js"
 import { MemoryDiagnostics } from "./diagnostics.js"
+import {
+  isLearningDiagnosticsStore,
+  type LearningDiagnosticsStore,
+} from "./learning-diagnostics.js"
 import { catalogPolicyAllows } from "./retrieval-policy.js"
 import { isCapacityStore, isObservationStore } from "./observation.js"
 import { DeterministicRetrievalPlanner } from "./planner.js"
@@ -509,8 +513,39 @@ export class RememOrchestrator {
       },
       budgets: this.config.budgets,
       candidates: candidates.filter((candidate) => candidate !== undefined),
+      learning: (await this.learning(context)).map(
+        ({ providerId, status, entries, gaps, limited }) => ({
+          providerId,
+          status,
+          recentCandidates: Array.isArray(entries) ? entries.length : 0,
+          gapCounters: Array.isArray(gaps) ? gaps.length : 0,
+          limited,
+        }),
+      ),
       lastTrace: this.diagnostics.latest(context.sessionId),
     }
+  }
+
+  async learning(context: MemoryContext, signal?: AbortSignal): Promise<Record<string, unknown>[]> {
+    return Promise.all(
+      this.providers
+        .filter((provider): provider is MemoryProvider & LearningDiagnosticsStore =>
+          isLearningDiagnosticsStore(provider),
+        )
+        .slice(0, 4)
+        .map(async (provider) => {
+          try {
+            const history = await withTimeout(
+              this.config.providerTimeoutMs,
+              (child) => provider.learningHistory(context, { limit: 5, signal: child }),
+              signal,
+            )
+            return { providerId: provider.id, status: "available", ...history }
+          } catch {
+            return { providerId: provider.id, status: "unavailable" }
+          }
+        }),
+    )
   }
 
   explain(sessionId?: string): MemoryTrace | { status: "no-trace" } {

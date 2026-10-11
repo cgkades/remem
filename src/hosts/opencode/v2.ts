@@ -168,17 +168,20 @@ async function registerTools(
       description: MEMORY_TOOL_DESCRIPTIONS.explain,
       options: BARE_CALLABLE_TOOL_OPTIONS,
       input: { type: "object", properties: {}, additionalProperties: false },
-      execute(_input, toolContext) {
-        return Promise.resolve({
+      async execute(_input, toolContext) {
+        return {
           content: JSON.stringify(
-            formatMemoryExplain(
-              orchestrator.explain(toolContext.sessionID),
-              capture?.explain(toolContext.sessionID),
-            ),
+            {
+              ...formatMemoryExplain(
+                orchestrator.explain(toolContext.sessionID),
+                capture?.explain(toolContext.sessionID),
+              ),
+              learning: await orchestrator.learning(memoryContext(location, toolContext.sessionID)),
+            },
             null,
             2,
           ),
-        })
+        }
       },
     })
     draft.add({

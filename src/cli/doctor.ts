@@ -375,6 +375,25 @@ export async function runDoctor(
     }
 
     try {
+      const learning = await pool.query<{ pending: number; recent_gaps: number }>(`
+        SELECT (SELECT count(*)::integer FROM remem.candidate_lineage WHERE state IN ('pending','approved')) AS pending,
+          (SELECT COALESCE(sum(count),0)::float8 FROM remem.learning_capture_gaps
+            WHERE updated_at >= now()-interval '30 days') AS recent_gaps`)
+      const row = learning.rows[0]!
+      checks.push({
+        name: "learning diagnostics",
+        status: row.recent_gaps > 0 ? "warn" : "ok",
+        detail: `${row.pending} pending/approved lineage entries; ${row.recent_gaps} capture gaps in active 30-day counters; use scoped memory_explain for details`,
+      })
+    } catch {
+      checks.push({
+        name: "learning diagnostics",
+        status: "warn",
+        detail: "unavailable; check schema migrations and database access",
+      })
+    }
+
+    try {
       const settings = await pool.query<{
         model: string
         dimensions: number
