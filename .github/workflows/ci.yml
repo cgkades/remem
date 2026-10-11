@@ -205,6 +205,49 @@ jobs:
           name: native-pi-learning
           path: artifacts/pi-learning.json
 
+  local-model-proposals:
+    name: Actual offline model proposals
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.1-pg16
+        env:
+          POSTGRES_DB: remem_test
+          POSTGRES_USER: remem
+          POSTGRES_PASSWORD: remem-ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U remem -d remem_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ runner.temp }}/generation-cache
+          key: qwen-0.5b-q4-22942cb7-v1
+      - run: npm ci
+      - run: npm run build
+      - run: node scripts/prepare-local-model.mjs
+        env:
+          REMEM_GENERATION_CACHE: ${{ runner.temp }}/generation-cache
+      - run: mkdir -p artifacts && node tests/local-model-proposals.e2e.mjs
+        env:
+          REMEM_TEST_DATABASE_URL: postgres://remem:remem-ci-password@127.0.0.1:5432/remem_test
+          REMEM_LOCAL_MODEL_PATH: ${{ runner.temp }}/generation-cache/onnx-community/Qwen2.5-0.5B-Instruct/22942cb7d7ba4cc81bb4673549ca4d4614469b5e
+          REMEM_MODEL_PROPOSAL_ARTIFACT: artifacts/model-proposals.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: actual-offline-model-proposals
+          path: artifacts/model-proposals.json
+
   neural-evaluation:
     name: Neural embedding evaluation
     runs-on: ubuntu-latest

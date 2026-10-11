@@ -1,3 +1,7 @@
+import {
+  createModelLearningCoordinator,
+  type ModelLearningCoordinator,
+} from "../../model-learning.js"
 import { Plugin } from "@opencode-ai/plugin"
 import type { Context } from "@opencode-ai/plugin/promise/plugin"
 import { createCaptureCoordinator, type CaptureCoordinator } from "../../capture.js"
@@ -308,6 +312,7 @@ export const RememPlugin = Plugin.define({
     let evidenceToolRegistration: { dispose(): Promise<void> } | undefined
     let evidence: EvidenceCaptureCoordinator | undefined
     let capture: CaptureCoordinator | undefined
+    let modelLearning: ModelLearningCoordinator | undefined
     // Scoped to this setup() call rather than module-level: every plugin
     // setup has at most one primaryPostgres, and `remem init` always writes
     // the same literal provider id ("remem-local"), so a module-level Map
@@ -348,6 +353,7 @@ export const RememPlugin = Plugin.define({
       })
       capture = createCaptureCoordinator(created.providers, parsed.config, logger)
       await capture?.recover(location)
+      modelLearning = createModelLearningCoordinator(created.providers, parsed.config, logger)
       const coordinator = capture
       evidence = createEvidenceCaptureCoordinator(
         created.providers,
@@ -355,6 +361,8 @@ export const RememPlugin = Plugin.define({
         { host: "opencode-v2", projectId: location.projectId },
         logger,
         async (envelope, signal) => {
+          signal.throwIfAborted()
+          modelLearning?.enqueue(envelope)
           if (coordinator && envelope.role === "tool" && envelope.host === "opencode-v2") {
             const primary = created.providers.find(
               (provider) => provider.id === envelope.providerId,
@@ -478,6 +486,7 @@ export const RememPlugin = Plugin.define({
         ])
         // Evidence persistence may enqueue semantic capture while draining.
         await Promise.allSettled([evidence?.dispose()])
+        await Promise.allSettled([modelLearning?.dispose()])
         await Promise.allSettled([capture?.dispose()])
         await Promise.allSettled([toolRegistration.dispose(), disposeProviders(providers)])
       }
@@ -490,6 +499,7 @@ export const RememPlugin = Plugin.define({
         evidenceToolRegistration?.dispose(),
       ])
       await Promise.allSettled([evidence?.dispose()])
+      await Promise.allSettled([modelLearning?.dispose()])
       await Promise.allSettled([capture?.dispose()])
       await disposeProviders(providers)
       safeLoggerCall(logger, "error", "plugin.initialization_failed", {

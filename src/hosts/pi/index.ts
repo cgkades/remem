@@ -1,4 +1,8 @@
 import {
+  createModelLearningCoordinator,
+  type ModelLearningCoordinator,
+} from "../../model-learning.js"
+import {
   createEvidenceCaptureCoordinator,
   type EvidenceCaptureCoordinator,
 } from "../../evidence-capture.js"
@@ -50,6 +54,7 @@ interface PiSessionState {
   orchestrator: RememOrchestrator
   providers: MemoryProvider[]
   capture?: CaptureCoordinator | undefined
+  modelLearning?: ModelLearningCoordinator | undefined
   evidence?: EvidenceCaptureCoordinator | undefined
   evidenceAdapter?: PiEvidenceAdapter | undefined
   primaryPostgres?: PostgresMemoryProvider | undefined
@@ -305,12 +310,15 @@ async function buildSessionState(
     })
     const capture = createCaptureCoordinator(created.providers, parsed.config, logger)
     await capture?.recover(location)
+    const modelLearning = createModelLearningCoordinator(created.providers, parsed.config, logger)
     const evidence = createEvidenceCaptureCoordinator(
       created.providers,
       parsed.config,
       { host: "pi", projectId: location.projectId },
       logger,
       async (envelope, signal) => {
+        signal.throwIfAborted()
+        modelLearning?.enqueue(envelope)
         if (capture && envelope.role === "tool" && primaryPostgres?.id === envelope.providerId) {
           const context = {
             ...envelope.context,
@@ -353,6 +361,7 @@ async function buildSessionState(
       orchestrator,
       providers: created.providers,
       capture,
+      modelLearning,
       evidence,
       evidenceAdapter,
       primaryPostgres,
@@ -373,6 +382,7 @@ async function teardownSessionState(state: PiSessionState | undefined): Promise<
   state.clearStatus?.()
   state.evidenceAdapter?.dispose()
   await state.evidence?.dispose()
+  await state.modelLearning?.dispose()
   await state.capture?.dispose()
   await disposeProviders(state.providers)
 }
