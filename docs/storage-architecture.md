@@ -123,11 +123,18 @@ Migration filenames must form a contiguous `0001`, `0002`, ... sequence. On migr
 2. acquires a PostgreSQL advisory lock;
 3. bootstraps `remem.schema_migrations` if needed;
 4. verifies that applied rows are a complete prefix with matching names and checksums;
-5. applies each pending migration in its own transaction; and
+5. applies each ordinary pending migration in its own transaction; and
 6. records the checksum atomically with the schema change.
 
 Unknown versions, gaps, renamed migrations, or checksum changes raise an integrity error. Remem does
 not rewrite history, run automatic down migrations, or guess how to repair drift.
+
+Future single-index files explicitly marked `-- remem:concurrent-index` are the narrow exception:
+`remem migrate --allow-nontransactional` retains a checksum/ownership receipt before concurrent
+DDL and finalizes the migration ledger only after index validity/definition verification. Startup,
+init and restore never enable this opt-in. See [concurrent migration operations](concurrent-migrations.md)
+and [ADR 0018](adr/0018-resumable-concurrent-index-migrations.md) for recovery and lock limits.
+Migration 0008's generated-column rewrite and applied SQL history remain unchanged.
 
 ```sh
 remem migrate

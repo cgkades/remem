@@ -309,7 +309,7 @@ export async function runDoctor(
         detail:
           status.pending.length === 0
             ? `schema version ${status.currentVersion}`
-            : `pending migrations: ${status.pending.join(", ")}; run remem migrate`,
+            : `pending migrations: ${status.pending.join(", ")}; ${status.unfinished.length ? `unfinished concurrent migration: ${status.unfinished.join(", ")}; inspect and retry remem migrate --allow-nontransactional` : "run remem migrate"}`,
       })
     } catch (error) {
       checks.push({

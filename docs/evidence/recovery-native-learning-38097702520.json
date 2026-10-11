@@ -1,0 +1,50 @@
+{
+  "repository": "cgkades/remem",
+  "head": "f10bb4b42253b37ab47518bc004f63151c77b406",
+  "runId": 38097702520,
+  "jobId": 114346958645,
+  "environment": "installed pinned native OpenCode v2, disposable PostgreSQL 16/pgvector 0.8.1; deterministic model",
+  "gates": [
+    {
+      "gate": "cross-session-investigation",
+      "repeats": 5,
+      "baseline": {
+        "recallAtK": 0,
+        "answerCorrect": false,
+        "dispatchRoundTripMs": 574.9165780000039
+      },
+      "k": 5,
+      "recallAtK": 1,
+      "answerCorrect": true,
+      "unsupportedAssertions": 0,
+      "falseInjection": 0,
+      "provenanceCorrect": true,
+      "procedureAccuracy": true,
+      "maxContextBytes": 4201,
+      "contextTokens": {
+        "upperBound": 4201,
+        "measurement": "UTF-8 bytes; not actual tokenizer output"
+      },
+      "dispatchRoundTripP95Ms": 95.8001099999965,
+      "latencyMeasurement": "host prompt through model response; includes retrieval and dispatch",
+      "modelQuality": "not evaluated; deterministic context reader"
+    },
+    {
+      "gate": "host-verified-procedure",
+      "promotedCandidates": 1,
+      "canonicalSources": 8,
+      "automaticPromotions": 1,
+      "freshSessionRecall": true,
+      "rule": "native-shell-recovery-v1",
+      "procedureQuality": "observed recovery sequence; root-cause/model quality not evaluated"
+    },
+    {
+      "gate": "host-evidence-slice",
+      "recallAt4": 1,
+      "falseInjection": 0,
+      "provenanceCorrect": true,
+      "dispatchRoundTripMs": 95.8001099999965,
+      "modelQuality": "not evaluated (deterministic mock)"
+    }
+  ]
+}
