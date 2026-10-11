@@ -89,3 +89,9 @@ unknown legacy vectors, provider-isolated stages and full-coverage atomic cutove
 [operator recovery](embedding-compatibility.md) and [ADR 0019](adr/0019-embedding-space-and-staged-cutover.md).
 Persisted settings and batch completion do not prove compatible generation coverage. All existing
 capture/privacy/authority defaults remain unchanged; no npm release was published.
+
+## Retained-source recovery completion (#125)
+
+PR131 (merge2b8ad093) adds one bounded retained-evidence extraction batch at native OpenCodev2/Pi initialization and shutdown, in addition to approved-candidate recovery. Explicit evidence admission and capture modes must both be enabled. Source identity/hash, provider/project/host/origin,24h age, availability, policy and conflicts are rechecked; progress and30second leases survive process interruption. At most8 events per attempt and5seconds; later sessions handle backlog. Disabled capture does no replay; review mode remains pending and existing reviews/declines are not overridden. Events never persisted cannot be reconstructed.
+
+Run38110674948 source27120f64 passes852 unskipped realPostgreSQL tests on both Node versions and all11native/model/benchmark jobs. ActualnativePi proof-only A (no candidate/memory) recovers one procedure in fresh B without A transcript/callbacks, and repeated B creates no duplicate. Five native v2/Pi baseline repetitions retain recall1 and false/unsupported0 with correct provenance/procedure. Whole-source poisoning is screened before segmentation and at server persistence/promotion. Procedures cite exactly the four complete safe proof sources; other attempts remain historical. Measurements and per-case regression evidence: docs/evidence/retained-evidence-recovery-38110674948.json. This remains deterministic host-evidence learning/reader validation; real generative answer quality is still issue124.129 semantic-forget,121 bounded catalog aliases and122 current-state synthesis remain unfinished.
