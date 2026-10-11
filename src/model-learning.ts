@@ -49,6 +49,16 @@ export class ModelLearningCoordinator {
             async (signal) => {
               const stored = await this.store.readModelEvidenceWindow(context, signal)
               let evidence = stored
+                // Stores deliberately omit machine-local paths. Restore only
+                // the authorized caller location, retaining source project/session.
+                .map((e) => ({
+                  ...e,
+                  context: {
+                    ...context,
+                    projectId: e.context.projectId,
+                    sessionId: e.context.sessionId,
+                  },
+                }))
                 .filter((e) => {
                   const admitted = admitEvidence(
                     e,

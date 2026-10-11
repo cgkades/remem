@@ -61,7 +61,11 @@ describe("guarded optional local model learning", () => {
   it("queues bounded evidence, persists only review proposals, contains failures and cancels late inference", async () => {
     const evidence = piEvidence(),
       persistCandidate = vi.fn<ModelLearningStore["persistCandidate"]>().mockResolvedValue()
-    const readWindow = vi.fn().mockResolvedValue(evidence)
+    const readWindow = vi
+      .fn()
+      .mockResolvedValue(
+        evidence.map((e) => ({ ...e, context: { ...e.context, directory: "", worktree: "" } })),
+      )
     const store = {
       persistCandidate,
       readModelEvidenceWindow: readWindow,
