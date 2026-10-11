@@ -7,6 +7,7 @@ import type { EpisodicStore, ObservationStore, SessionObservation } from "./obse
 import { observationFromResolvedTask } from "./procedure.js"
 import { verifiedProcedureFromEvidence, type ProcedureEvidenceStore } from "./verified-procedure.js"
 import type { MemoryContext, MemoryProvider } from "./types.js"
+import { sourceIsSafe } from "./source-safety.js"
 export const EVIDENCE_REFLECTION_VERSION = "canonical-reflection-v1"
 export interface EvidenceExtractionClaim {
   envelope: EvidenceEnvelope
@@ -52,6 +53,7 @@ export async function extractRetainedCanonicalEvidence(
   signal: AbortSignal,
 ): Promise<void> {
   signal.throwIfAborted()
+  if (!sourceIsSafe(envelope)) return
   let observation: SessionObservation | undefined
   if (
     envelope.role === "user" &&

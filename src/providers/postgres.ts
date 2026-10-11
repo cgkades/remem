@@ -1564,6 +1564,7 @@ export class PostgresMemoryProvider
       )
         throw new Error("candidate evidence is unavailable")
       const envelope = episodicRowToEnvelope(row)
+      if (!sourceIsSafe(envelope)) throw new Error("candidate evidence is unavailable")
       const admitted = admitEvidence(
         {
           ...envelope,
@@ -1647,6 +1648,7 @@ export class PostgresMemoryProvider
       const row = result.rows[0]
       if (!row) throw new Error("candidate evidence is unavailable")
       const envelope = episodicRowToEnvelope(row)
+      if (!sourceIsSafe(envelope)) throw new Error("candidate evidence is unavailable")
       const admitted = admitEvidence(
         { ...envelope, context: observation.context },
         {
