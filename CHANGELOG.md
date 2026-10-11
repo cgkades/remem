@@ -20,6 +20,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Operators can separately preview and confirm project semantic-memory forgetting with
+  `remem forget ID --semantic --project PROJECT` and `remem forget PREVIEW --semantic --confirm`.
+  The bounded preview discloses private cleanup and shared-source retention; body-free decisions
+  prevent replay and same-database restore resurrection. Existing episode confirmation remains
+  separate. See `docs/semantic-forget.md`. Refs [#129](https://github.com/cgkades/remem/issues/129).
+
 - Canonical embedding-space fingerprints now prevent label-only cross-generation similarity. Reindexing stages retained-source memory/catalog vectors and reports full compatible coverage before atomic cutover; lexical service, durable claims and interrupted recovery remain available. See `docs/embedding-compatibility.md`. Resolves [#45](https://github.com/cgkades/remem/issues/45).
 
 - Explicit opt-in concurrent index migrations now retain checksum/ownership receipts and safely

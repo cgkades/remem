@@ -32,6 +32,7 @@ import {
 import { runDoctor } from "./doctor.js"
 import { PostgresMemoryProvider } from "../providers/postgres.js"
 import { FORGET_RESTORE_ADVISORY_LOCK } from "../forget.js"
+import { suppressForgottenSemanticBodies } from "../semantic-forget.js"
 import { createEmbeddingModel } from "../storage/embedding-neural.js"
 import { withInstallLock } from "./lock.js"
 import { composeArguments, managedCommand, writeManagedFiles } from "./managed.js"
@@ -66,7 +67,7 @@ export const RESTORE_FLAGS = [
 interface ForgetTombstoneRow {
   provider_id: string
   project_id: string
-  target_kind: "evidence" | "candidate"
+  target_kind: "evidence" | "candidate" | "memory" | "source"
   target_id: string
   preview_id: string
   deleted_at: Date
@@ -600,6 +601,12 @@ async function reapplyForgetTombstones(
   client: PoolClient,
   preserved: ForgetTombstoneRow[],
 ): Promise<void> {
+  for (const providerId of new Set(preserved.map((t) => t.provider_id))) {
+    await client.query(
+      "INSERT INTO remem.providers(id,kind,name) VALUES($1,'postgres','Retained privacy decisions') ON CONFLICT(id) DO NOTHING",
+      [providerId],
+    )
+  }
   for (const tombstone of preserved) {
     await client.query(
       `INSERT INTO remem.forget_tombstones
@@ -623,7 +630,8 @@ async function reapplyForgetTombstones(
     `DELETE FROM remem.candidate_memories candidate
      USING remem.forget_tombstones tombstone
      WHERE tombstone.target_kind = 'candidate'
-       AND candidate.id::text = tombstone.target_id`,
+       AND candidate.id::text = tombstone.target_id
+       AND candidate.metadata->>'providerId'=tombstone.provider_id`,
   )
   await client.query(
     `DELETE FROM remem.session_events event
@@ -633,11 +641,13 @@ async function reapplyForgetTombstones(
        AND event.project_id = tombstone.project_id
        AND event.evidence_id = tombstone.target_id`,
   )
+  await suppressForgottenSemanticBodies(client)
 }
 
 async function confirmForgetInteractively(
   previewId: string,
   confirm?: CliDependencies["confirmForget"],
+  target = "scoped evidence",
 ): Promise<void> {
   if (confirm) {
     if (!(await confirm(previewId))) throw new Error("forget confirmation was declined")
@@ -649,7 +659,7 @@ async function confirmForgetInteractively(
   const terminal = createInterface({ input: process.stdin, output: process.stdout })
   try {
     const response = await terminal.question(
-      `Type the preview id to permanently forget its scoped evidence (${previewId}): `,
+      `Type the preview id to permanently forget its ${target} (${previewId}): `,
     )
     if (response !== previewId) throw new Error("forget confirmation did not match the preview id")
   } finally {
@@ -676,6 +686,8 @@ Commands:
   supersession-candidates --project PROJECT_ID [--limit NUMBER]
   forget <EVIDENCE_ID> --project PROJECT_ID
   forget <PREVIEW_ID> --confirm
+  forget <MEMORY_ID> --semantic --project PROJECT_ID
+  forget <SEMANTIC_PREVIEW_ID> --semantic --confirm
   backup [--output FILE]
   restore <FILE> --confirm
   reset --confirm`
@@ -841,15 +853,31 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
             if (stringFlag(parsed, "project")) {
               throw new Error("forget confirmation uses the preview scope; omit --project")
             }
-            await confirmForgetInteractively(id, dependencies.confirmForget)
-            output(JSON.stringify(await provider.confirmForget(id), null, 2))
+            await confirmForgetInteractively(
+              id,
+              dependencies.confirmForget,
+              hasFlag(parsed, "semantic")
+                ? "selected semantic memory and disclosed private supporting copies"
+                : "scoped evidence",
+            )
+            output(
+              JSON.stringify(
+                await (hasFlag(parsed, "semantic")
+                  ? provider.confirmSemanticForget(id)
+                  : provider.confirmForget(id)),
+                null,
+                2,
+              ),
+            )
             return 0
           }
           const projectId = boundedFlag(parsed, "project", 256)
           if (!projectId || projectId.includes("\u0000")) {
             throw new Error("forget preview requires a non-empty, NUL-free --project")
           }
-          const preview = await provider.previewForget(provider.id, id, projectId)
+          const preview = await (hasFlag(parsed, "semantic")
+            ? provider.previewSemanticForget(provider.id, id, projectId)
+            : provider.previewForget(provider.id, id, projectId))
           if (!preview) throw new Error("forget target was not found in the requested project")
           output(JSON.stringify(preview, null, 2))
           return 0

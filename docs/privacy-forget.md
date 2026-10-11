@@ -1,5 +1,9 @@
 # Explicit Privacy Forgetting
 
+For a separately selected project-scoped semantic memory, use the explicit
+[`--semantic` preview/confirmation workflow](semantic-forget.md). The episode
+workflow below retains its original boundary.
+
 `remem forget` is review-gated. It never infers a deletion target from model
 output and it never removes data until a person confirms a recent preview.
 
