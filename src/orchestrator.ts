@@ -7,6 +7,8 @@ import type {
   CorrectionReviewQueue,
 } from "./correction.js"
 import { MemoryDiagnostics } from "./diagnostics.js"
+import { historicalRecall, type HistoricalRecallResult } from "./historical-recall.js"
+import { sourceIsSafe } from "./source-safety.js"
 import {
   isLearningDiagnosticsStore,
   type LearningDiagnosticsStore,
@@ -119,7 +121,9 @@ function safeLog(
   data?: Record<string, unknown>,
 ): void {
   try {
-    void Promise.resolve(logger.log(level, event, data)).catch(() => undefined)
+    void Promise.resolve(
+      logger.log(level, event, sourceIsSafe(data) ? data : { details: "withheld" }),
+    ).catch(() => undefined)
   } catch {
     // Logging is never on the critical path.
   }
@@ -436,9 +440,27 @@ export class RememOrchestrator {
     this.diagnostics.record(trace, "search")
     this.logTrace(trace)
     return {
-      text: synthesis.text || "No relevant memories were found in the selected providers.",
+      text:
+        synthesis.text ||
+        "No relevant semantic memories were found in the selected providers. This bounded scoped search does not prove that prior work never happened. Use memory_history for retained historical evidence when needed.",
       trace,
     }
+  }
+
+  history(
+    query: string,
+    context: MemoryContext,
+    providerId?: string,
+    signal?: AbortSignal,
+  ): Promise<HistoricalRecallResult> {
+    return historicalRecall(
+      this.providers,
+      query,
+      context,
+      this.config.providerTimeoutMs,
+      providerId,
+      signal,
+    )
   }
 
   async compactionContext(context: MemoryContext): Promise<string> {
@@ -693,12 +715,15 @@ export class RememOrchestrator {
   private logTrace(trace: MemoryTrace): void {
     if (!this.config.debug) return
     safeLog(this.logger, "debug", "retrieval.trace", {
-      sessionId: trace.sessionId,
-      catalogMatches: trace.catalogMatches,
+      catalogMatchCount: trace.catalogMatches.length,
       shouldRetrieve: trace.shouldRetrieve,
       confidence: trace.confidence,
-      topics: trace.topics,
-      providers: trace.providers,
+      topicCount: trace.topics.length,
+      providers: trace.providers.map(({ status, durationMs, resultCount }) => ({
+        status,
+        durationMs,
+        resultCount,
+      })),
       resultCounts: {
         raw: trace.rawResults,
         deduplicated: trace.deduplicatedResults,
@@ -709,7 +734,7 @@ export class RememOrchestrator {
         recall: trace.recallTokens,
       },
       totalDurationMs: trace.totalDurationMs,
-      diagnostics: trace.diagnostics,
+      diagnosticCount: trace.diagnostics.length,
     })
   }
 }

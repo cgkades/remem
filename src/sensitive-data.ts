@@ -7,6 +7,7 @@ const CREDENTIAL_PATTERNS = [
   /\beyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}\b/u,
   /-----BEGIN [A-Z0-9 ]*(?:PRIVATE KEY|OPENSSH PRIVATE KEY)-----/iu,
   /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s:/]+:[^\s@]+@[^\s]+/iu,
+  /\bhttps?:\/\/[^\s:/]+:[^\s@]+@[^\s]+/iu,
 ]
 
 const HIGH_ENTROPY_TOKEN = /[A-Za-z0-9_~+/-]{32,}/gu

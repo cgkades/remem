@@ -143,6 +143,41 @@ export function createOpenCodeV1Hooks(
           }
         },
       }),
+      memory_history: tool({
+        description: MEMORY_TOOL_DESCRIPTIONS.history,
+        args: {
+          query: tool.schema.string().min(1).max(2000).describe("Historical evidence query"),
+          provider: tool.schema.string().min(1).optional().describe("Optional provider ID"),
+        },
+        async execute(args, toolContext) {
+          try {
+            const context = memoryContext(
+              locationFor(input, toolContext.directory, toolContext.worktree),
+              toolContext.sessionID,
+            )
+            const result = await orchestrator.history(
+              args.query,
+              context,
+              args.provider,
+              toolContext.abort,
+            )
+            return {
+              title: "Memory history",
+              output: result.text,
+              metadata: {
+                selectedResults: result.selectedResults,
+                estimatedTokens: result.estimatedTokens,
+                limited: result.limited,
+                unavailableProviders: result.unavailableProviders,
+                withheldResults: result.withheldResults,
+              },
+            }
+          } catch (error) {
+            if (toolContext.abort.aborted) throw error
+            return "Memory search failed. OpenCode can continue without memory."
+          }
+        },
+      }),
       memory_status: tool({
         description: MEMORY_TOOL_DESCRIPTIONS.status,
         args: {},

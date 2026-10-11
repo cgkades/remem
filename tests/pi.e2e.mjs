@@ -18,6 +18,7 @@ const CORRECTION_PROMPT =
   "Correct the prior Phoenix answer: rollback plans are required. Call memory_submit_correction."
 const REVIEW_PROMPT = "Show the pending correction review status with memory_review_status."
 const EXPLAIN_PROMPT = "Explain the persisted project learning history with memory_explain."
+const HISTORY_PROMPT = "Search retained Phoenix observations with memory_history."
 const CORRECTION_TEXT = "Rollback plans are required for Phoenix."
 const SENTINEL = "use logical replication"
 const repository = fileURLToPath(new URL("..", import.meta.url))
@@ -60,15 +61,21 @@ function startMockModelServer() {
         (message) =>
           message.role === "user" && JSON.stringify(message.content).includes(EXPLAIN_PROMPT),
       )
+      const historyIndex = body.messages.findLastIndex(
+        (message) =>
+          message.role === "user" && JSON.stringify(message.content).includes(HISTORY_PROMPT),
+      )
       const name =
-        explainIndex >= 0
-          ? "memory_explain"
-          : reviewIndex >= 0
-            ? "memory_review_status"
-            : correctionIndex >= 0
-              ? "memory_submit_correction"
-              : "memory_status"
-      const turnIndex = Math.max(reviewIndex, correctionIndex, explainIndex, 0)
+        historyIndex >= 0
+          ? "memory_history"
+          : explainIndex >= 0
+            ? "memory_explain"
+            : reviewIndex >= 0
+              ? "memory_review_status"
+              : correctionIndex >= 0
+                ? "memory_submit_correction"
+                : "memory_status"
+      const turnIndex = Math.max(reviewIndex, correctionIndex, explainIndex, historyIndex, 0)
       const hasToolResult = body.messages
         .slice(turnIndex + 1)
         .some((message) => message.role === "tool")
@@ -78,7 +85,9 @@ function startMockModelServer() {
               correctionText: CORRECTION_TEXT,
               expectedOutcome: "Include an approved rollback plan.",
             }
-          : {}
+          : name === "memory_history"
+            ? { query: "Phoenix checkpoint" }
+            : {}
       const id = `chatcmpl-${requests.length}`
       const created = Math.floor(Date.now() / 1000)
       const base = { id, object: "chat.completion.chunk", created, model: body.model }
@@ -239,13 +248,14 @@ async function run() {
         "--no-themes",
         "--no-session",
         "--tools",
-        "memory_status,memory_submit_correction,memory_review_status,memory_explain",
+        "memory_status,memory_submit_correction,memory_review_status,memory_explain,memory_history",
         "--no-builtin-tools",
         "-p",
         RELATED_PROMPT,
         CORRECTION_PROMPT,
         REVIEW_PROMPT,
         EXPLAIN_PROMPT,
+        HISTORY_PROMPT,
       ],
       {
         env: {
@@ -301,13 +311,25 @@ async function run() {
     }
 
     const tools = mock.requests
-      .flatMap((request) => request.messages.filter((message) => message.role === "tool"))
+      .flatMap((request) =>
+        request.messages.filter(
+          (message) => message.role === "tool" && message.tool_call_id !== "call_memory_history",
+        ),
+      )
       .map((message) => JSON.parse(message.content))
     const explanation = mock.requests
       .flatMap((request) => request.messages)
       .find((message) => message.role === "tool" && message.tool_call_id === "call_memory_explain")
     if (!explanation || !Array.isArray(JSON.parse(explanation.content).learning))
       throw new Error("native memory_explain did not return bounded learning diagnostics")
+    const history = mock.requests
+      .flatMap((request) => request.messages)
+      .find((message) => message.role === "tool" && message.tool_call_id === "call_memory_history")
+    if (
+      !history?.content.includes("<memory-history>") ||
+      !history.content.includes("does not prove")
+    )
+      throw new Error("native historical tool did not return bounded scoped guidance")
     const submitted = tools.find(
       (result) => typeof result?.id === "string" && typeof result?.state === "string",
     )
@@ -326,7 +348,7 @@ async function run() {
     )
       throw new Error("native correction tools leaked free-text content")
     const advertised = mock.requests[0].tools.map((tool) => tool.function.name)
-    for (const name of ["memory_submit_correction", "memory_review_status"])
+    for (const name of ["memory_submit_correction", "memory_review_status", "memory_history"])
       if (!advertised.includes(name)) throw new Error(`native tool missing: ${name}`)
     if (advertised.some((name) => /approve|apply|reject/.test(name)))
       throw new Error("native agent was offered review authority")

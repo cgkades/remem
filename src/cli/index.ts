@@ -764,6 +764,15 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
       const report = await runDoctor(config, paths, runner)
       output(`Remem initialized in ${paths.configDir}.`)
       output(`PostgreSQL: ${report.healthy ? "healthy" : "needs attention"}.`)
+      output(
+        "Memory transport: storage and inference follow explicit provider/model configuration. Native hosts may send injected memory to their configured answer model. Asset downloads are separate from memory transport.",
+      )
+      output(
+        `Learning sources: user capture ${config.capture?.enabled ? "enabled" : "disabled"}; canonical source capture ${config.evidenceAdmission?.enabled ? "enabled" : "disabled"}; optional offline model proposals ${config.learningModel?.enabled ? "enabled" : "disabled"}. Provider/project scope and configured source opt-outs remain enforced.`,
+      )
+      output(
+        "Retention: capacity compaction uses configured limits; there is no automatic age purge. Disable learning in capture/evidenceAdmission/learningModel configuration. Episode forgetting removes scoped evidence/candidates; separately reviewed semantic memories and offline backups require separate removal. See docs/privacy-transports.md and docs/privacy-forget.md.",
+      )
       if (!config.opencode?.configured)
         output("OpenCode: run remem init --opencode or configure the plugin manually.")
       if (!config.pi?.configured)

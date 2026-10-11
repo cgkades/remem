@@ -2,6 +2,7 @@ import type { OrchestratorConfig } from "./config.js"
 import { episodeResults } from "./episodic-recall.js"
 import { isEpisodicSearchStore } from "./observation.js"
 import { recalledPolicyAllows } from "./retrieval-policy.js"
+import { sourceIsSafe, safeSourceLabel } from "./source-safety.js"
 import { clamp, contentFingerprint } from "./text.js"
 import { truncateToTokens } from "./token-budget.js"
 import { OperationTimeoutError, withTimeout } from "./timeout.js"
@@ -60,6 +61,7 @@ function normalizeResult(
   blockedCatalogIds: ReadonlySet<string>,
   query: string,
 ): MemoryResult | undefined {
+  if (!sourceIsSafe(value) || !sourceIsSafe(providerId)) return undefined
   if (!value || typeof value !== "object" || !("record" in value)) return undefined
   const candidate = value as Partial<MemoryResult>
   const record = candidate.record
@@ -157,7 +159,7 @@ function deduplicate(results: MemoryResult[], confidence: number): RankedMemory[
 
 function errorLabel(error: unknown): string {
   if (error instanceof OperationTimeoutError) return "timeout"
-  if (error instanceof Error) return error.name || "Error"
+  if (error instanceof Error) return "provider error"
   return "unknown error"
 }
 
@@ -197,7 +199,7 @@ export class RecallEngine {
           return {
             results: [] as MemoryResult[],
             attempt: {
-              providerId: request.providerId,
+              providerId: safeSourceLabel(request.providerId),
               status: "failed",
               durationMs: 0,
               resultCount: 0,
@@ -212,7 +214,7 @@ export class RecallEngine {
             return {
               results: [] as MemoryResult[],
               attempt: {
-                providerId: provider.id,
+                providerId: safeSourceLabel(provider.id),
                 status: "failed",
                 durationMs: 0,
                 resultCount: 0,
@@ -289,7 +291,7 @@ export class RecallEngine {
           return {
             results: results.slice(0, this.config.maxResults),
             attempt: {
-              providerId: provider.id,
+              providerId: safeSourceLabel(provider.id),
               status: "ok",
               durationMs: Math.round(performance.now() - started),
               resultCount: results.length,
@@ -307,7 +309,7 @@ export class RecallEngine {
           return {
             results: [] as MemoryResult[],
             attempt: {
-              providerId: provider.id,
+              providerId: safeSourceLabel(provider.id),
               status: error instanceof OperationTimeoutError ? "timed_out" : "failed",
               durationMs: Math.round(performance.now() - started),
               resultCount: 0,

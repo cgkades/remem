@@ -147,6 +147,42 @@ async function registerTools(
       },
     })
     draft.add({
+      name: "memory_history",
+      description: MEMORY_TOOL_DESCRIPTIONS.history,
+      options: BARE_CALLABLE_TOOL_OPTIONS,
+      input: {
+        type: "object",
+        properties: {
+          query: { type: "string", minLength: 1, maxLength: 2000 },
+          provider: { type: "string", minLength: 1 },
+        },
+        required: ["query"],
+        additionalProperties: false,
+      },
+      async execute(input, toolContext) {
+        const args = input as { query: string; provider?: string }
+        try {
+          const result = await orchestrator.history(
+            args.query,
+            memoryContext(location, toolContext.sessionID),
+            args.provider,
+          )
+          return {
+            content: result.text,
+            metadata: {
+              selectedResults: result.selectedResults,
+              estimatedTokens: result.estimatedTokens,
+              limited: result.limited,
+              unavailableProviders: result.unavailableProviders,
+              withheldResults: result.withheldResults,
+            },
+          }
+        } catch {
+          return { content: "Memory search failed. OpenCode can continue without memory." }
+        }
+      },
+    })
+    draft.add({
       name: "memory_status",
       description: MEMORY_TOOL_DESCRIPTIONS.status,
       options: BARE_CALLABLE_TOOL_OPTIONS,

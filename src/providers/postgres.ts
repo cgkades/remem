@@ -1,4 +1,5 @@
 import { MODEL_PROPOSAL_VERSION, validateModelProposal } from "../model-proposal.js"
+import { sourceIsSafe } from "../source-safety.js"
 import { embedQuery, embedDocument, modelFingerprint } from "../storage/embedding-space.js"
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
@@ -367,6 +368,8 @@ interface CatalogRow extends QueryResultRow {
   source: string | null
   embedding: string | null
   institutional?: unknown
+  source_content?: string | null
+  source_metadata?: unknown
 }
 
 export interface PostgresMemoryProviderOptions {
@@ -644,6 +647,7 @@ export class PostgresMemoryProvider
         SELECT ce.id, ce.memory_id, ce.parent_id, ce.title, ce.summary, ce.aliases, ce.tags,
           ce.scope_kind, ce.scope_id, ce.unresolved, ce.source,
           m.metadata->'institutional' AS institutional,
+          left(m.content, 2000001) AS source_content, m.metadata AS source_metadata,
           CASE WHEN m.freshness = 'stale' THEN ce.importance * 0.5 ELSE ce.importance END AS importance,
           CASE WHEN ce.embedding_model = $6 AND ce.embedding_dimensions = $7 AND ce.embedding_fingerprint = $8
             THEN ce.embedding::text ELSE NULL END AS embedding
@@ -671,6 +675,7 @@ export class PostgresMemoryProvider
     )
     signal.throwIfAborted()
     return result.rows.flatMap((row) => {
+      if (!sourceIsSafe(row)) return []
       const institutional = institutionalMetadata(row.institutional)
       if (row.institutional !== undefined && row.institutional !== null && !institutional) return []
       return [
@@ -791,7 +796,7 @@ export class PostgresMemoryProvider
           GROUP BY id
           HAVING max(lexical_score) > 0 OR max(semantic_score) >= 0.34
         )
-        SELECT m.id, m.provider_id, m.title, left(m.content, $12) AS content, m.summary,
+        SELECT m.id, m.provider_id, m.title, left(m.content, GREATEST($12, 2000001)) AS content, m.summary,
           COALESCE(s.uri, s.external_id) AS source,
           m.scope_kind, m.scope_id, m.type, m.freshness, m.created_at, m.updated_at,
           m.observed_at, m.confidence, m.importance, m.unresolved, m.metadata,
@@ -840,18 +845,22 @@ export class PostgresMemoryProvider
       ],
     )
     request.signal.throwIfAborted()
-    return result.rows.map((row) => {
+    return result.rows.flatMap((row) => {
+      const record = rowToRecord(row)
+      if (!sourceIsSafe(record)) return []
       const lexical = Number(row.lexical_score ?? 0)
       const semantic = Number(row.semantic_score ?? 0)
-      return {
-        record: rowToRecord(row),
-        score: Math.max(0, Math.min(1, Math.max(lexical, semantic))),
-        reasons: [
-          ...(row.full_text_match ? ["PostgreSQL full-text match"] : []),
-          ...(row.catalog_topic_match ? ["PostgreSQL catalog topic match"] : []),
-          ...(semantic >= 0.34 ? ["pgvector semantic match"] : []),
-        ],
-      }
+      return [
+        {
+          record: { ...record, content: record.content.slice(0, perResultCharacters) },
+          score: Math.max(0, Math.min(1, Math.max(lexical, semantic))),
+          reasons: [
+            ...(row.full_text_match ? ["PostgreSQL full-text match"] : []),
+            ...(row.catalog_topic_match ? ["PostgreSQL catalog topic match"] : []),
+            ...(semantic >= 0.34 ? ["pgvector semantic match"] : []),
+          ],
+        },
+      ]
     })
   }
 
@@ -2809,6 +2818,7 @@ export class PostgresMemoryProvider
 
     let remainingTokens = maxOutputTokens
     let budgetExhausted = false
+    let withheldResults = 0
     const matches: EpisodicSearchMatch[] = []
     for (const row of matched.rows) {
       if (remainingTokens <= 0) {
@@ -2816,6 +2826,10 @@ export class PostgresMemoryProvider
         break
       }
       const envelope = episodicRowToEnvelope(row)
+      if (options.screenUnsafeSources && !sourceIsSafe(envelope)) {
+        withheldResults++
+        continue
+      }
       if (
         options.automaticRecall &&
         episodeResults(
@@ -2852,6 +2866,10 @@ export class PostgresMemoryProvider
         }
         const neighborRow = neighborRowsById.get(neighborId)
         if (!neighborRow) continue // should be unreachable: fetched by the ids just collected above
+        if (options.screenUnsafeSources && !sourceIsSafe(episodicRowToEnvelope(neighborRow))) {
+          withheldResults++
+          continue
+        }
         const fittedNeighbor = fitEnvelopeToBudget(
           episodicRowToEnvelope(neighborRow),
           remainingTokens,
@@ -2883,7 +2901,7 @@ export class PostgresMemoryProvider
     }
     if (!options.automaticRecall && matches.length < matched.rows.length) budgetExhausted = true
 
-    return { matches, budgetExhausted }
+    return { matches, budgetExhausted, ...(options.screenUnsafeSources ? { withheldResults } : {}) }
   }
 
   /**

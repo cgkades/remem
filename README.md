@@ -242,3 +242,5 @@ The test database is bound only to `127.0.0.1:54330`; the teardown command remov
 ## License
 
 Apache License 2.0. See [`LICENSE`](LICENSE).
+
+Memory transport, source/retention controls and explicit historical search are documented in [privacy and transport behavior](docs/privacy-transports.md). Native hosts may forward injected memory to their configured answer model; local storage alone does not make that host conversation offline.

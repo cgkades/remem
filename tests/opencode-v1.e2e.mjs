@@ -172,7 +172,7 @@ async function main() {
     `v1 did not inject recalled memory: ${JSON.stringify(dispatch.messages)}`,
   )
   const tools = dispatch.tools ?? []
-  for (const name of ["memory_search", "memory_status", "memory_explain"]) {
+  for (const name of ["memory_search", "memory_history", "memory_status", "memory_explain"]) {
     assert(
       tools.some((tool) => tool.function?.name === name),
       `v1 did not register ${name}`,
