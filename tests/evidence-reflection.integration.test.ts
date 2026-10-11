@@ -330,6 +330,7 @@ integration("bounded retained evidence reflection", () => {
         "SELECT extraction_claim_token token FROM remem.session_events",
       )
     ).rows
+    if (!claim) throw new Error("missing durable claim")
     await expect(
       store.finishEvidenceExtraction(
         { envelope: source(), token: claim.token },
