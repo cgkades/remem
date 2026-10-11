@@ -748,7 +748,7 @@ export class PostgresMemoryProvider
           LIMIT $13
         ),
         topic_candidates AS (
-          SELECT m.id, 0.91::double precision AS lexical_score,
+          SELECT m.id, 0.5::double precision AS lexical_score,
             0::double precision AS semantic_score
           FROM remem.memories m
           WHERE m.provider_id = $1 AND (

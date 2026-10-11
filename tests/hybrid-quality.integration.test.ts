@@ -287,6 +287,8 @@ integration("PostgreSQL hybrid retrieval quality", () => {
       metrics.baselineRelevantInjectionRate,
     )
     expect(metrics.topicAwareRecallAt5).toBeGreaterThan(metrics.hybridRecallAt5)
+    for (const item of cases.filter((value) => value.baselineInjectedRelevant))
+      expect(item.injectedRelevant, "topic candidates must preserve " + item.id).toBe(true)
     expect(metrics.relevantInjectionRate).toBeGreaterThanOrEqual(0.8)
     expect(metrics.falseInjectionRate).toBe(0)
     expect(metrics.estimatedTokenMax).toBeLessThanOrEqual(2300)
