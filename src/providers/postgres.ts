@@ -1389,7 +1389,7 @@ export class PostgresMemoryProvider
       revision: row.revision,
       ...(row.memory_id ? { memoryId: row.memory_id } : {}),
       observationIds: row.observation_ids,
-      availableObservationIds: row.available_ids,
+      availableObservationIds: row.observation_ids.filter((id) => row.available_ids.includes(id)),
       policyVersion: row.policy_version,
       ...(row.policy_outcome ? { policyOutcome: row.policy_outcome } : {}),
       ...(row.policy_reason ? { policyReason: row.policy_reason } : {}),

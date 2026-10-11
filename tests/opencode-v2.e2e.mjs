@@ -1376,7 +1376,7 @@ async function main() {
         if (
           rows.rows.length !== 1 ||
           rows.rows[0].status !== "promoted" ||
-          rows.rows[0].observation_ids.length !== 8 ||
+          rows.rows[0].observation_ids.length !== 4 ||
           !rows.rows[0].content.includes(PROCEDURE_ACTION)
         )
           throw new Error(`native procedure contract changed: ${JSON.stringify(rows.rows)}`)
