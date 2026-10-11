@@ -1,0 +1,582 @@
+{
+  "metrics": {
+    "embedding": "deterministic local hash; not a neural quality claim",
+    "relevantCases": 10,
+    "unrelatedCases": 4,
+    "hybridRecallAt5": 0.9,
+    "hybridPrecisionAt5": 0.6233333333333334,
+    "hybridMRR": 0.85,
+    "topicAwareRecallAt5": 1,
+    "topicAwareMRR": 0.95,
+    "offlineRrfRecallAt5": 0.9,
+    "offlineRrfPrecisionAt5": 0.6233333333333334,
+    "offlineRrfMRR": 0.85,
+    "relevantInjectionRate": 0.9,
+    "baselineRelevantInjectionRate": 0.8,
+    "baselineFalseInjectionRate": 0,
+    "baselineEstimatedTokenMax": 2286,
+    "baselineDispatchP95Ms": 13,
+    "falseInjectionRate": 0,
+    "forbiddenCandidates": 0,
+    "nonTargetSelected": 8,
+    "estimatedTokenMax": 2286,
+    "candidateP95Ms": 4.84847400000001,
+    "dispatchP95Ms": 6
+  },
+  "cases": [
+    {
+      "id": "existing-0",
+      "partition": "baseline",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 2286,
+      "baselineDispatchMs": 13,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 0.2,
+        "reciprocalRank": 0.5
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 0.2,
+        "reciprocalRank": 0.5
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 0.2,
+        "reciprocalRank": 0.5
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 2,
+      "selectedCount": 3,
+      "estimatedTokens": 2286,
+      "dispatchMs": 6,
+      "rankingReasons": [
+        {
+          "label": "s3-credentials",
+          "score": 0.6995310991862747,
+          "reasons": ["pgvector semantic match"]
+        },
+        {
+          "label": "bedrock-auth",
+          "score": 0.690662404616547,
+          "reasons": ["pgvector semantic match"]
+        },
+        {
+          "label": "apollo-auth",
+          "score": 0.5064591471230475,
+          "reasons": ["pgvector semantic match"]
+        },
+        {
+          "label": "azure-identity",
+          "score": 0.47875972155452795,
+          "reasons": ["pgvector semantic match"]
+        },
+        {
+          "label": "css-buttons",
+          "score": 0.34898481813027926,
+          "reasons": ["pgvector semantic match"]
+        }
+      ]
+    },
+    {
+      "id": "existing-1",
+      "partition": "baseline",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1919,
+      "baselineDispatchMs": 6,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 0.3333333333333333,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 1,
+      "selectedCount": 2,
+      "estimatedTokens": 2178,
+      "dispatchMs": 3,
+      "rankingReasons": [
+        {
+          "label": "phoenix-kafka",
+          "score": 0.7472894191741943,
+          "reasons": ["pgvector semantic match"]
+        }
+      ]
+    },
+    {
+      "id": "existing-2",
+      "partition": "baseline",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1814,
+      "baselineDispatchMs": 6,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 1,
+      "estimatedTokens": 1814,
+      "dispatchMs": 3,
+      "rankingReasons": [
+        {
+          "label": "global-concise",
+          "score": 0.5282091059747074,
+          "reasons": ["pgvector semantic match"]
+        }
+      ]
+    },
+    {
+      "id": "existing-3",
+      "partition": "baseline",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 2162,
+      "baselineDispatchMs": 6,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 0.3333333333333333,
+        "reciprocalRank": 1
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 0.3333333333333333,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 0.3333333333333333,
+        "reciprocalRank": 1
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 1,
+      "selectedCount": 2,
+      "estimatedTokens": 2162,
+      "dispatchMs": 3,
+      "rankingReasons": [
+        {
+          "label": "deploy-task",
+          "score": 0.7874998576939205,
+          "reasons": ["pgvector semantic match"]
+        },
+        {
+          "label": "graphql-procedure",
+          "score": 0.6374412178993271,
+          "reasons": ["pgvector semantic match"]
+        },
+        {
+          "label": "azure-identity",
+          "score": 0.3939716048274511,
+          "reasons": ["pgvector semantic match"]
+        }
+      ]
+    },
+    {
+      "id": "existing-4",
+      "partition": "baseline",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1837,
+      "baselineDispatchMs": 5,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 1,
+      "estimatedTokens": 1837,
+      "dispatchMs": 3,
+      "rankingReasons": [
+        {
+          "label": "current-postgres",
+          "score": 0.9113351106643677,
+          "reasons": ["pgvector semantic match"]
+        }
+      ]
+    },
+    {
+      "id": "existing-5",
+      "partition": "baseline",
+      "relevant": false,
+      "baselineInjectedRelevant": false,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1388,
+      "baselineDispatchMs": 3,
+      "hybrid": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "topicAware": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "rrf": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "injectedRelevant": false,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 0,
+      "estimatedTokens": 1388,
+      "dispatchMs": 1,
+      "rankingReasons": []
+    },
+    {
+      "id": "existing-6",
+      "partition": "baseline",
+      "relevant": false,
+      "baselineInjectedRelevant": false,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1388,
+      "baselineDispatchMs": 3,
+      "hybrid": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "topicAware": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "rrf": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "injectedRelevant": false,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 0,
+      "estimatedTokens": 1388,
+      "dispatchMs": 1,
+      "rankingReasons": []
+    },
+    {
+      "id": "existing-7",
+      "partition": "baseline",
+      "relevant": false,
+      "baselineInjectedRelevant": false,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1388,
+      "baselineDispatchMs": 3,
+      "hybrid": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "topicAware": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "rrf": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "injectedRelevant": false,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 0,
+      "estimatedTokens": 1388,
+      "dispatchMs": 1,
+      "rankingReasons": []
+    },
+    {
+      "id": "exact-bedrock",
+      "partition": "holdout",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 2207,
+      "baselineDispatchMs": 5,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 0.2,
+        "reciprocalRank": 1
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 0.2,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 0.2,
+        "reciprocalRank": 1
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 1,
+      "selectedCount": 2,
+      "estimatedTokens": 2207,
+      "dispatchMs": 3,
+      "rankingReasons": [
+        {
+          "label": "bedrock-auth",
+          "score": 1,
+          "reasons": ["PostgreSQL full-text match", "pgvector semantic match"]
+        },
+        {
+          "label": "s3-credentials",
+          "score": 0.7618729472160339,
+          "reasons": ["pgvector semantic match"]
+        },
+        {
+          "label": "apollo-auth",
+          "score": 0.5642175246541957,
+          "reasons": ["pgvector semantic match"]
+        },
+        {
+          "label": "azure-identity",
+          "score": 0.5297968071820264,
+          "reasons": ["pgvector semantic match"]
+        },
+        {
+          "label": "css-buttons",
+          "score": 0.36251330375671387,
+          "reasons": ["pgvector semantic match"]
+        }
+      ]
+    },
+    {
+      "id": "exact-graphql",
+      "partition": "holdout",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 2062,
+      "baselineDispatchMs": 5,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 0.5,
+        "reciprocalRank": 1
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 0.5,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 0.5,
+        "reciprocalRank": 1
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 1,
+      "selectedCount": 2,
+      "estimatedTokens": 2062,
+      "dispatchMs": 3,
+      "rankingReasons": [
+        {
+          "label": "graphql-procedure",
+          "score": 1,
+          "reasons": ["PostgreSQL full-text match"]
+        },
+        {
+          "label": "phoenix-payments",
+          "score": 0.3728380577064725,
+          "reasons": ["pgvector semantic match"]
+        }
+      ]
+    },
+    {
+      "id": "paraphrase-cutover",
+      "partition": "holdout",
+      "relevant": true,
+      "baselineInjectedRelevant": false,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 2013,
+      "baselineDispatchMs": 4,
+      "hybrid": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 0.3333333333333333,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 2,
+      "selectedCount": 3,
+      "estimatedTokens": 2245,
+      "dispatchMs": 3,
+      "rankingReasons": [
+        {
+          "label": "phoenix-search",
+          "score": 0.3541591763496399,
+          "reasons": ["pgvector semantic match"]
+        },
+        {
+          "label": "phoenix-email",
+          "score": 0.3419705935094305,
+          "reasons": ["pgvector semantic match"]
+        }
+      ]
+    },
+    {
+      "id": "stale-conflict",
+      "partition": "holdout",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1837,
+      "baselineDispatchMs": 6,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 1,
+      "estimatedTokens": 1837,
+      "dispatchMs": 3,
+      "rankingReasons": [
+        {
+          "label": "current-postgres",
+          "score": 0.8210771083831787,
+          "reasons": ["pgvector semantic match"]
+        }
+      ]
+    },
+    {
+      "id": "exact-timezone",
+      "partition": "holdout",
+      "relevant": true,
+      "baselineInjectedRelevant": false,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1388,
+      "baselineDispatchMs": 3,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "injectedRelevant": false,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 0,
+      "estimatedTokens": 1388,
+      "dispatchMs": 1,
+      "rankingReasons": [
+        {
+          "label": "resolved-test",
+          "score": 1,
+          "reasons": ["PostgreSQL full-text match"]
+        }
+      ]
+    },
+    {
+      "id": "unrelated-recipe",
+      "partition": "holdout",
+      "relevant": false,
+      "baselineInjectedRelevant": false,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1388,
+      "baselineDispatchMs": 3,
+      "hybrid": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "topicAware": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "rrf": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "injectedRelevant": false,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 0,
+      "estimatedTokens": 1388,
+      "dispatchMs": 1,
+      "rankingReasons": []
+    }
+  ]
+}
