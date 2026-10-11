@@ -1,0 +1,26 @@
+{
+  "sourceHead": "c6d7af212ada40c8255f3e15914b1646579eb927",
+  "workflowRun": 38106794095,
+  "node22": {
+    "passed": 800,
+    "skipped": 0
+  },
+  "node24": {
+    "passed": 800,
+    "skipped": 0
+  },
+  "gate": "native-pi-automatic-learning",
+  "host": "pi@0.85.0",
+  "backend": "real PostgreSQL",
+  "repeats": 5,
+  "recallAt5": 1,
+  "provenanceCorrect": true,
+  "procedureAccuracy": true,
+  "falseInjection": 0,
+  "unsupportedAssertions": 0,
+  "maxRequestBytes": 4710,
+  "sessionRoundTripP95Ms": 679.7270480000002,
+  "latencyMeasurement": "fresh native process startup through response/shutdown; includes retrieval",
+  "modelQuality": "not evaluated; deterministic local driver/reader",
+  "supportedOutcome": "bounded missing-file read/write/identical read; no shell exit inference"
+}
