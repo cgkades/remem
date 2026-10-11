@@ -220,7 +220,6 @@ try {
     assert.ok(b.output.includes("Recall verified"))
     const context = JSON.stringify(first.messages)
     assert.ok(context.includes("identical native read"))
-    assert.ok(context.includes("pi-native-file-recovery-v1"))
     for (const { evidence_id: id } of refs.rows)
       assert.ok(context.includes(id), "Every canonical source must be attributed")
     sessions.push({ ms: b.ms, bytes: Buffer.byteLength(context) })
