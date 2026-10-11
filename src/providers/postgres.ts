@@ -745,7 +745,7 @@ export class PostgresMemoryProvider
           JOIN remem.memories m ON m.id = me.memory_id
           CROSS JOIN settings
           WHERE $6::vector IS NOT NULL
-          AND me.model = $10 AND me.dimensions = $11 AND me.fingerprint = $15
+          AND me.model = $10 AND me.dimensions = $11 AND me.fingerprint = $16
           AND m.provider_id = $1 AND (
             m.scope_kind = 'global' OR
             (m.scope_kind = 'workspace' AND m.scope_id = $2) OR
@@ -811,6 +811,7 @@ export class PostgresMemoryProvider
         FROM candidates
         JOIN remem.memories m ON m.id = candidates.id
         LEFT JOIN remem.sources s ON s.id = m.source_id
+        WHERE NOT $15::boolean OR m.title = ANY($14::text[])
         ORDER BY GREATEST(candidates.lexical_score, candidates.semantic_score) DESC,
           m.updated_at DESC
         LIMIT $7
@@ -830,6 +831,7 @@ export class PostgresMemoryProvider
         perResultCharacters,
         Math.max(32, request.limit * 4),
         request.topics.filter((topic) => typeof topic === "string").slice(0, 8),
+        request.catalogOnly === true && request.topics.length > 0,
         modelFingerprint(this.embeddingModel) ?? null,
       ],
     )
@@ -3562,6 +3564,7 @@ export class PostgresMemoryProvider
     )
 
     let catalogEmbedding: number[] | undefined
+    await client.query("SAVEPOINT remem_optional_embedding")
     try {
       const embedding =
         (memory.embeddingFingerprint &&
@@ -3594,7 +3597,10 @@ export class PostgresMemoryProvider
         options.signal,
       )
     } catch {
+      await client.query("ROLLBACK TO SAVEPOINT remem_optional_embedding")
       options.signal?.throwIfAborted()
+    } finally {
+      await client.query("RELEASE SAVEPOINT remem_optional_embedding")
     }
     const source = memory.source ?? provenance[0]?.source.uri ?? `remem://${this.id}/${id}`
     await client.query(

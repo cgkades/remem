@@ -1,0 +1,93 @@
+{
+  "description": "Fresh validation set frozen before first PostgreSQL benchmark; subsequent changes must label it regression, never blind holdout.",
+  "entries": [
+    {
+      "id": "clock",
+      "title": "Calendar UTC fixture [INC-410]",
+      "alias": "clock regression",
+      "content": "Set calendar fixtures to UTC before asserting offsets."
+    },
+    {
+      "id": "retries",
+      "title": "Orchid webhook delivery [WH-208]",
+      "alias": "webhook replay",
+      "content": "Deduplicate webhook deliveries by their event ID before retrying."
+    },
+    {
+      "id": "search",
+      "title": "Orchid search refresh",
+      "alias": "index rebuild",
+      "content": "Refresh the search snapshot after importing the document catalog."
+    },
+    {
+      "id": "billing",
+      "title": "Orchid invoice reconciliation",
+      "alias": "invoice audit",
+      "content": "Match settled invoices against the processor settlement export."
+    },
+    {
+      "id": "email",
+      "title": "Orchid SMTP delivery",
+      "alias": "mail retries",
+      "content": "Retry transient mail failures up to three times."
+    },
+    {
+      "id": "tls",
+      "title": "Juniper certificate deployment",
+      "alias": "certificate rotation",
+      "content": "Rotate the certificate and verify the chain before deployment."
+    },
+    {
+      "id": "cache",
+      "title": "Juniper cache allocation",
+      "alias": "cache budget",
+      "content": "Limit the largest cache keys and measure eviction frequency."
+    },
+    {
+      "id": "queue",
+      "title": "Juniper event transport",
+      "alias": "streaming transition",
+      "content": "Compare consumer offsets during dual writes before the transport cutover."
+    },
+    {
+      "id": "old",
+      "title": "Orchid webhook delivery legacy",
+      "alias": "old webhook replay",
+      "content": "The obsolete design accepted every duplicate event.",
+      "freshness": "superseded"
+    },
+    {
+      "id": "foreign",
+      "title": "Orchid webhook delivery [WH-208]",
+      "alias": "webhook replay",
+      "content": "Foreign project confidential delivery settings.",
+      "foreign": true
+    }
+  ],
+  "cases": [
+    { "id": "ticket", "prompt": "INC-410", "expected": ["clock"] },
+    { "id": "ticket-sentence", "prompt": "How did we resolve WH-208?", "expected": ["retries"] },
+    { "id": "alias", "prompt": "Resume webhook replay", "expected": ["retries"] },
+    { "id": "alias-confuser", "prompt": "Continue the index rebuild", "expected": ["search"] },
+    {
+      "id": "two-topics",
+      "prompt": "Orchid invoice reconciliation and Orchid search refresh",
+      "expected": ["billing", "search"]
+    },
+    {
+      "id": "paraphrase",
+      "prompt": "What was our streaming transition plan?",
+      "expected": ["queue"]
+    },
+    {
+      "id": "supersession",
+      "prompt": "Remember the webhook replay decision",
+      "expected": ["retries"]
+    },
+    { "id": "deployment", "prompt": "Continue certificate rotation", "expected": ["tls"] },
+    { "id": "unrelated-food", "prompt": "Write a recipe for carrot cake", "expected": [] },
+    { "id": "unrelated-math", "prompt": "Compute the square root of 625", "expected": [] },
+    { "id": "unknown-ticket", "prompt": "INC-4102", "expected": [] },
+    { "id": "unrelated-poem", "prompt": "Write a poem about the moon", "expected": [] }
+  ]
+}

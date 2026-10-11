@@ -180,6 +180,8 @@ export interface MemoryResult {
 }
 
 export interface MemorySearchRequest {
+  /** Automatic recognized-topic recall; explicit searches retain broad candidates. */
+  catalogOnly?: boolean
   query: string
   topics: string[]
   context: MemoryContext

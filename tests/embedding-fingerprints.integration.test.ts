@@ -347,4 +347,40 @@ integration("embedding fingerprint cutover on real PostgreSQL", () => {
     expect(result.claimed).toBe(0)
     expect(result.coverage).toMatchObject({ total: 1, compatible: 1, cutover: "completed" })
   })
+  it("retains lexical source writes when optional vector storage rejects the insert", async () => {
+    const p = provider(model("storage-target"), "storage-failure")
+    await pool.query(`CREATE FUNCTION remem.reject_test_vector() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      IF EXISTS(SELECT 1 FROM remem.memories WHERE id=NEW.memory_id AND provider_id='storage-failure') THEN RAISE EXCEPTION 'vector storage unavailable'; END IF; RETURN NEW; END $$`)
+    await pool.query(
+      "CREATE TRIGGER reject_test_vector BEFORE INSERT ON remem.memory_embeddings FOR EACH ROW EXECUTE FUNCTION remem.reject_test_vector()",
+    )
+    let record
+    try {
+      record = await p.write({
+        title: "Lexical retained source",
+        content: "Survives optional vector storage failure",
+        type: "semantic",
+        scope: { kind: "project", id: "fp" },
+      })
+      expect(
+        (await search(p, "Lexical retained source")).map((result) => result.record.id),
+      ).toContain(record.id)
+      expect(
+        (
+          await pool.query<{ n: number }>(
+            "SELECT count(*)::int AS n FROM remem.memory_embeddings WHERE memory_id=$1",
+            [record.id],
+          )
+        ).rows[0]?.n,
+      ).toBe(0)
+    } finally {
+      await pool.query("DROP TRIGGER reject_test_vector ON remem.memory_embeddings")
+      await pool.query("DROP FUNCTION remem.reject_test_vector()")
+    }
+    expect((await p.reembedStale()).coverage).toMatchObject({
+      total: 1,
+      compatible: 1,
+      cutover: "completed",
+    })
+  })
 })

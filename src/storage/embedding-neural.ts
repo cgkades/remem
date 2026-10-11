@@ -1,3 +1,4 @@
+import { createRequire } from "node:module"
 import { createHash } from "node:crypto"
 import { readdir, readFile } from "node:fs/promises"
 import path from "node:path"
@@ -12,10 +13,10 @@ export interface NeuralEmbeddingConfig {
   modelPath?: string
 }
 
-export type FeatureExtractionPipeline = (
+export type FeatureExtractionPipeline = ((
   text: string,
   options: { pooling: "mean"; normalize: true },
-) => Promise<{ data: ArrayLike<number> }>
+) => Promise<{ data: ArrayLike<number> }>) & { backendIdentity?: string }
 
 export interface EmbeddingModelFactoryOptions {
   /** Test/DI seam: loads (or fakes) the transformers.js feature-extraction pipeline. */
@@ -73,8 +74,23 @@ async function defaultLoadPipeline(
     dtype: "q8",
     revision: HUGGING_FACE_REVISION,
   })
-  return (text, options) =>
-    extractor(text, options).then((output) => output as unknown as { data: ArrayLike<number> })
+  if (typeof env.version !== "string" || !env.version)
+    throw new TypeError("cannot identify transformers runtime version")
+  const runtimePackage: unknown = createRequire(import.meta.url)("onnxruntime-node/package.json")
+  if (
+    !runtimePackage ||
+    typeof runtimePackage !== "object" ||
+    !("version" in runtimePackage) ||
+    typeof runtimePackage.version !== "string"
+  )
+    throw new TypeError("cannot identify neural runtime version")
+  return Object.assign(
+    (text: string, options: { pooling: "mean"; normalize: true }) =>
+      extractor(text, options).then((output) => output as unknown as { data: ArrayLike<number> }),
+    {
+      backendIdentity: `transformers.js@${env.version}/onnxruntime-node@${runtimePackage.version}`,
+    },
+  )
 }
 
 export class BgeSmallEmbeddingModel implements EmbeddingModel {
@@ -88,7 +104,7 @@ export class BgeSmallEmbeddingModel implements EmbeddingModel {
   ) {
     this.space = {
       schemaVersion: 1,
-      backend: "transformers.js-onnx",
+      backend: extractor.backendIdentity ?? "external-bge-feature-extraction-v1",
       asset,
       dimensions: MODEL_DIMENSIONS,
       pooling: "mean",

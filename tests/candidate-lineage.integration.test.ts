@@ -78,10 +78,28 @@ integration("durable managed candidate lineage", () => {
           await copyFile(path.join("migrations", file), path.join(directory, file))
       }
       await runMigrations(pool, directory)
-      await provider().write({
-        ...candidate("Retained legacy fixture").memory,
-        metadata: { consolidation: { candidateId: legacyFirst, lastCandidateId: legacyLast } },
-      })
+      // Seed using the historical layout. Current provider SQL intentionally
+      // requires current migrations and must not write into schema 12.
+      const legacyMemory = randomUUID()
+      await pool.query(
+        "INSERT INTO remem.providers(id,kind,name) VALUES($1,'postgres','Legacy fixture')",
+        [config.id],
+      )
+      await pool.query(
+        `INSERT INTO remem.memories(id,provider_id,title,content,scope_kind,scope_id,type,metadata)
+        VALUES($1,$2,'Retained legacy fixture','Checkpoint paths are relative to the workspace.','project',$3,'semantic',$4)`,
+        [
+          legacyMemory,
+          config.id,
+          context.projectId,
+          { consolidation: { candidateId: legacyFirst, lastCandidateId: legacyLast } },
+        ],
+      )
+      await pool.query(
+        `INSERT INTO remem.catalog_entries(id,provider_id,memory_id,title,scope_kind,scope_id)
+        VALUES($1,$2,$3,'Retained legacy fixture','project',$4)`,
+        [randomUUID(), config.id, legacyMemory, context.projectId],
+      )
       await pool.query(
         `INSERT INTO remem.session_events (id,session_id,project_id,kind,occurred_at,payload)
         VALUES ($1,$2,$3,'fact-discovered',now(),'{}')`,

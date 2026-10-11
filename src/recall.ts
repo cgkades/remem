@@ -226,6 +226,9 @@ export class RecallEngine {
               provider.search({
                 query: request.query,
                 topics: request.topics ?? plan.topics,
+                catalogOnly: plan.matches.some(
+                  (match) => plan.topics.includes(match.entry.title) && match.score >= 0.9,
+                ),
                 context,
                 limit: Math.min(request.limit, this.config.maxResults),
                 maxTokens: this.config.budgets.perProviderTokens,

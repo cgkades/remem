@@ -1,13 +1,13 @@
-import type { PlannerConfig } from "./config.js"
-import { catalogPolicyDecision } from "./retrieval-policy.js"
-import { clamp, containsPhrase, overlapRatio, tokenize } from "./text.js"
+import type { PlannerConfig } from "../../../src/config.js"
+import { catalogPolicyDecision } from "../../../src/retrieval-policy.js"
+import { clamp, containsPhrase, overlapRatio, tokenize } from "../../../src/text.js"
 import type {
   CatalogEntry,
   CatalogMatch,
   MemoryContext,
   ProviderRetrievalRequest,
   RetrievalPlan,
-} from "./types.js"
+} from "../../../src/types.js"
 
 const STRONG_CONTINUITY =
   /\b(last time|we decided|we agreed|remember|continue|resume|again|pick up where|the thing we)\b/iu
@@ -106,26 +106,6 @@ function scoreEntry(prompt: string, promptTokens: string[], entry: CatalogEntry)
   const reasons: string[] = []
   let score = 0
 
-  // Preserve exact structured identifiers that tokenization splits (ticket IDs,
-  // slugs, filenames). Require the whole identifier, never a substring or a
-  // body/summary match; generic single words keep the existing confidence gate.
-  const identifiers = [entry.title, ...entry.aliases].flatMap(
-    (value) => value.match(/[\p{L}\p{N}]+(?:[-_.][\p{L}\p{N}]+)+/gu) ?? [],
-  )
-  const promptIdentifiers = new Set(
-    (prompt.match(/[\p{L}\p{N}]+(?:[-_.][\p{L}\p{N}]+)+/gu) ?? []).map((value) =>
-      value.normalize("NFKC").toLowerCase(),
-    ),
-  )
-  if (
-    identifiers.some((identifier) =>
-      promptIdentifiers.has(identifier.normalize("NFKC").toLowerCase()),
-    )
-  ) {
-    score = 0.94
-    reasons.push("catalog structured identifier")
-  }
-
   if (containsPhrase(prompt, entry.title)) {
     score = 0.96
     reasons.push("catalog title phrase")
@@ -223,10 +203,7 @@ export class DeterministicRetrievalPlanner {
     const qualified = matches.filter((match) => match.score >= this.config.minimumConfidence)
     const fallbackToProviders =
       continuity && qualified.length === 0 && availableProviderIds.length > 0
-    // A strong explicit name/alias is more specific than incidental token
-    // overlap. Keep weak multi-topic routing when there is no explicit match.
-    const explicit = qualified.filter((match) => match.score >= 0.9)
-    const selected = (explicit.length > 0 ? explicit : qualified).slice(0, this.config.maxTopics)
+    const selected = qualified.slice(0, this.config.maxTopics)
     const topics = selected.map((match) => match.entry.title)
     const confidence = selected[0]?.score ?? (fallbackToProviders ? 0.62 : (matches[0]?.score ?? 0))
 

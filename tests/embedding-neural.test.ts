@@ -19,10 +19,11 @@ vi.mock("undici", async (importOriginal) => {
 // (the real, non-test loader) does to `env` when a modelPath is supplied,
 // without downloading real model weights or hitting the network.
 const fakeTransformersEnv = vi.hoisted<{
+  version: string
   cacheDir?: string
   localModelPath?: string
   allowRemoteModels?: boolean
-}>(() => ({}))
+}>(() => ({ version: "3.8.1" }))
 vi.mock("@huggingface/transformers", () => ({
   env: fakeTransformersEnv,
   pipeline: vi.fn().mockResolvedValue(vi.fn().mockResolvedValue({ data: new Float32Array(384) })),

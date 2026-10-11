@@ -1,3 +1,6 @@
+import { mkdtemp, writeFile, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { describe, expect, it } from "vitest"
 import {
   embeddingFingerprint,
@@ -52,5 +55,44 @@ describe("canonical embedding spaces", () => {
       },
     )
     expect(modelFingerprint(model)).toBe(embeddingFingerprint(space))
+  })
+  it("identifies offline asset contents independently of directory paths and detects changes while loading", async () => {
+    const a = await mkdtemp(path.join(tmpdir(), "remem-model-a-"))
+    const b = await mkdtemp(path.join(tmpdir(), "remem-model-b-"))
+    const loadPipeline = () =>
+      Promise.resolve(() => Promise.resolve({ data: new Float32Array(384) }))
+    try {
+      await writeFile(path.join(a, "weights.bin"), "same weights")
+      await writeFile(path.join(b, "weights.bin"), "same weights")
+      const first = await createEmbeddingModel(
+        { backend: "neural", modelPath: a },
+        { loadPipeline },
+      )
+      const relocated = await createEmbeddingModel(
+        { backend: "neural", modelPath: b },
+        { loadPipeline },
+      )
+      expect(first.id).toBe("bge-small-en-v1.5")
+      expect(modelFingerprint(first)).toBe(modelFingerprint(relocated))
+      await writeFile(path.join(b, "weights.bin"), "new weights")
+      const changed = await createEmbeddingModel(
+        { backend: "neural", modelPath: b },
+        { loadPipeline },
+      )
+      expect(modelFingerprint(first)).not.toBe(modelFingerprint(changed))
+      const raced = await createEmbeddingModel(
+        { backend: "neural", modelPath: a },
+        {
+          loadPipeline: async () => {
+            await writeFile(path.join(a, "weights.bin"), "racing change")
+            return () => Promise.resolve({ data: new Float32Array(384) })
+          },
+        },
+      )
+      expect(raced.id).toBe("remem-local-hash-v1")
+    } finally {
+      await rm(a, { recursive: true, force: true })
+      await rm(b, { recursive: true, force: true })
+    }
   })
 })

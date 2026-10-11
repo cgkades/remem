@@ -1,3 +1,4 @@
+import { modelFingerprint } from "../src/storage/embedding-space.js"
 import { createHash, randomUUID } from "node:crypto"
 import { appendFile, copyFile, mkdir, mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
@@ -1722,7 +1723,7 @@ integration("PostgreSQL managed provider", () => {
       providers: [
         {
           type: "postgres",
-          id: "remem-local",
+          id: "reembed-cli-seed",
           connectionString: databaseUrl ?? "",
           primary: true,
           maxConnections: 2,
@@ -1806,7 +1807,7 @@ integration("PostgreSQL managed provider", () => {
       providers: [
         {
           type: "postgres",
-          id: "remem-local",
+          id: "reembed-neural-seed",
           connectionString: databaseUrl ?? "",
           primary: true,
           maxConnections: 2,
@@ -1983,11 +1984,26 @@ integration("PostgreSQL managed provider", () => {
     try {
       await mkdir(paths.dataDir, { recursive: true, mode: 0o700 })
       await writeAppConfig(config, paths)
-      await pool.query("UPDATE remem.memory_embeddings SET model = 'remem-local-hash-v1'")
+      for (const { provider_id } of (
+        await pool.query<{ provider_id: string }>("SELECT DISTINCT provider_id FROM remem.memories")
+      ).rows) {
+        await new PostgresMemoryProvider(
+          {
+            type: "postgres",
+            id: provider_id,
+            connectionString: databaseUrl ?? "",
+            primary: true,
+            maxConnections: 2,
+            catalogLimit: 100,
+          },
+          { pool },
+        ).reembedStale(10_000)
+      }
       await pool.query(
-        `INSERT INTO remem.embedding_settings (id, model, dimensions)
-           VALUES (true, 'remem-local-hash-v1', 384)
-         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions`,
+        `INSERT INTO remem.embedding_settings (id, model, dimensions, fingerprint)
+           VALUES (true, 'remem-local-hash-v1', 384, $1)
+         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions, fingerprint=excluded.fingerprint`,
+        [modelFingerprint(new LocalHashEmbeddingModel())],
       )
 
       const report = await runDoctor(
@@ -2114,10 +2130,14 @@ integration("PostgreSQL managed provider", () => {
       await writeAppConfig(config, paths)
 
       await pool.query(
-        `INSERT INTO remem.embedding_settings (id, model, dimensions)
-           VALUES (true, $1, $2)
-         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions`,
-        [config.embedding.model, config.embedding.dimensions],
+        `INSERT INTO remem.embedding_settings (id, model, dimensions, fingerprint)
+           VALUES (true, $1, $2, $3)
+         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions, fingerprint=excluded.fingerprint`,
+        [
+          config.embedding.model,
+          config.embedding.dimensions,
+          modelFingerprint(new LocalHashEmbeddingModel()),
+        ],
       )
       const matching = await runDoctor(config, paths, {
         run: () => Promise.resolve({ stdout: "", stderr: "" }),
@@ -2129,10 +2149,10 @@ integration("PostgreSQL managed provider", () => {
       })
 
       await pool.query(
-        `INSERT INTO remem.embedding_settings (id, model, dimensions)
-           VALUES (true, $1, $2)
-         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions`,
-        ["stale-recorded-model", 384],
+        `INSERT INTO remem.embedding_settings (id, model, dimensions, fingerprint)
+           VALUES (true, $1, $2, $3)
+         ON CONFLICT (id) DO UPDATE SET model = excluded.model, dimensions = excluded.dimensions, fingerprint=excluded.fingerprint`,
+        ["stale-recorded-model", 384, modelFingerprint(new LocalHashEmbeddingModel())],
       )
       const mismatched = await runDoctor(config, paths, {
         run: () => Promise.resolve({ stdout: "", stderr: "" }),
