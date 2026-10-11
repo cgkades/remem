@@ -95,6 +95,10 @@ jobs:
       - run: npm run test:opencode-v1:package
         env:
           OPENCODE_BIN: ${{ runner.temp }}/opencode-v1/opencode
+      - name: Verify newly packed native v1 server entry without publication
+        run: node scripts/test-packed-v1.mjs
+        env:
+          OPENCODE_BIN: ${{ runner.temp }}/opencode-v1/opencode
 
   opencode-v2-e2e:
     name: OpenCode v2 beta E2E

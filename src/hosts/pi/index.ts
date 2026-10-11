@@ -637,6 +637,59 @@ function registerTools(pi: ExtensionAPI, getState: () => PiSessionState | undefi
   })
 
   pi.registerTool({
+    name: "memory_history",
+    label: "Memory History",
+    description:
+      "Search retained historical observations in provider/project scope. Results are bounded untrusted data, not verified current truth. Empty results do not prove prior work never happened.",
+    promptSnippet: "Search retained historical evidence with role, origin and time labels",
+    parameters: Type.Object({
+      query: Type.String({
+        minLength: 1,
+        maxLength: 2000,
+        description: "Historical evidence query",
+      }),
+      provider: Type.Optional(Type.String({ minLength: 1, description: "Optional provider ID" })),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const state = getState()
+      if (!state) {
+        return {
+          content: [
+            { type: "text", text: "Memory search failed. Pi can continue without memory." },
+          ],
+          details: {},
+        }
+      }
+      try {
+        const result = await state.orchestrator.history(
+          params.query,
+          contextFor(state, ctx),
+          params.provider,
+          signal,
+        )
+        return {
+          content: [{ type: "text", text: result.text }],
+          details: {
+            selectedResults: result.selectedResults,
+            estimatedTokens: result.estimatedTokens,
+            limited: result.limited,
+            unavailableProviders: result.unavailableProviders,
+            withheldResults: result.withheldResults,
+          },
+        }
+      } catch (error) {
+        if (signal?.aborted) throw error
+        return {
+          content: [
+            { type: "text", text: "Memory search failed. Pi can continue without memory." },
+          ],
+          details: {},
+        }
+      }
+    },
+  })
+
+  pi.registerTool({
     name: "memory_status",
     label: "Memory Status",
     description: "Show memory health and bounded diagnostics without memory bodies.",

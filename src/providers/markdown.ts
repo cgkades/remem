@@ -11,6 +11,7 @@ import {
   tokenize,
 } from "../text.js"
 import { truncateToTokens } from "../token-budget.js"
+import { sourceIsSafe } from "../source-safety.js"
 import type {
   CatalogEntry,
   MemoryCapabilities,
@@ -609,7 +610,8 @@ export class MarkdownMemoryProvider implements MemoryProvider {
         stat,
         this.config.scope,
       )
-      if (document) documents.push(document)
+      if (document && sourceIsSafe(document)) documents.push(document)
+      else if (document) this.warnings.push("unsafe or unscreenable Markdown source withheld")
       else this.warnings.push("invalid Markdown scope")
     } catch {
       this.warnings.push("unreadable Markdown file")

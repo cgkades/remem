@@ -5,11 +5,10 @@ import {
 } from "./observation-admission.js"
 import type { EpisodicSearchResult } from "./observation.js"
 import type { MemoryContext, MemoryResult } from "./types.js"
+import { KNOWN_UNSAFE_INSTRUCTIONS, sourceIsSafe } from "./source-safety.js"
 
 // Defense in depth for known poisoning shapes. The context's untrusted-data
 // boundary remains required; this is not a general prompt-injection detector.
-const UNSAFE_INSTRUCTIONS =
-  /<\/?(?:memory-context|system|instructions)>|\bignore (?:all |the )?(?:previous|prior|system) instructions\b|\b(?:reveal|exfiltrate)\b.{0,80}\b(?:secrets?|credentials?|system prompt)\b/isu
 
 /** Automatic recall exposes matched tool evidence only, with no neighbor
  * expansion and no promotion to current truth. Assistant claims and user
@@ -21,6 +20,7 @@ export function episodeResults(
   context: MemoryContext,
 ): MemoryResult[] {
   return result.matches.flatMap(({ envelope }) => {
+    if (!sourceIsSafe(envelope)) return []
     if (
       envelope.schemaVersion !== 1 ||
       envelope.providerId !== providerId ||
@@ -47,7 +47,7 @@ export function episodeResults(
     const safe = admitted.envelope
     if (safe.id !== envelope.id || safe.contentHash !== envelope.contentHash) return []
     const text = safe.payload.text
-    if (!text || UNSAFE_INSTRUCTIONS.test(text)) return []
+    if (!text || KNOWN_UNSAFE_INSTRUCTIONS.test(text)) return []
     const tool = safe.payload.metadata?.tool
     const status = safe.payload.metadata?.status
     if (

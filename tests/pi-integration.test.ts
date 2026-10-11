@@ -478,6 +478,7 @@ describe("Pi host extension", () => {
 
     expect([...pi.tools.keys()].sort()).toEqual([
       "memory_explain",
+      "memory_history",
       "memory_review_status",
       "memory_search",
       "memory_status",

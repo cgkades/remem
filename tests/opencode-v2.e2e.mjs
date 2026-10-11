@@ -105,6 +105,11 @@ const TOOL_CALL_STEPS = [
   { id: "call_memory_status", name: "memory_status", arguments: "{}" },
   { id: "call_memory_explain", name: "memory_explain", arguments: "{}" },
   {
+    id: "call_memory_history",
+    name: "memory_history",
+    arguments: '{"query":"Phoenix checkpoint"}',
+  },
+  {
     id: "call_shell_failed",
     name: "shell",
     arguments: JSON.stringify({ command: "printf 'fixture process failed\\n'; exit 7" }),

@@ -172,7 +172,12 @@ async function main() {
     `v1 did not inject recalled memory: ${JSON.stringify(dispatch.messages)}`,
   )
   const tools = dispatch.tools ?? []
-  for (const name of ["memory_search", "memory_status", "memory_explain"]) {
+  // The explicit published-package compatibility lane tests the currently
+  // published release, which predates memory_history. Source/installed-pack
+  // lanes must prove the new tool; nothing is published to make this pass.
+  const expectedTools = ["memory_search", "memory_status", "memory_explain"]
+  if (pluginSpec !== "agentic-remem") expectedTools.push("memory_history")
+  for (const name of expectedTools) {
     assert(
       tools.some((tool) => tool.function?.name === name),
       `v1 did not register ${name}`,

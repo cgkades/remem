@@ -15,7 +15,7 @@ component, error, decision or procedure query. Try a bounded alternative using a
 alias before repeating an old investigation. Use `memory_status` to check configured provider
 health and `memory_explain` to inspect the retrieval decision. These tools have scope, result and
 context budgets; do not claim that an explicit search examined all transcripts or every episode.
-Use a host's explicit historical search only if it actually exposes that capability.
+Use `memory_history` on supported OpenCode and Pi hosts for explicitly requested retained historical evidence. It searches only the selected provider/project scope, returns bounded role/origin/time labels, and does not establish current truth. Empty results are not proof that prior work never happened. A provider without episodic capability returns unavailable guidance; never broaden capture permissions to fill a recall gap.
 
 Empty results do not prove that prior work never happened. Report which query/provider/scope was
 searched and any availability or budget limits. An expired, compacted, forgotten or unsupported

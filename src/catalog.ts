@@ -2,6 +2,7 @@ import { estimateTokens, truncateToTokens } from "./token-budget.js"
 import { compactWhitespace, normalizeText, stripControlCharacters } from "./text.js"
 import { OperationTimeoutError, withTimeout } from "./timeout.js"
 import type { CatalogEntry, MemoryContext, MemoryProvider, ProviderDescriptor } from "./types.js"
+import { sourceIsSafe, safeSourceLabel } from "./source-safety.js"
 
 export interface CatalogSnapshot {
   entries: CatalogEntry[]
@@ -59,6 +60,11 @@ export function renderCatalog(
   providers: ProviderDescriptor[] = [],
 ): CatalogSnapshot {
   const diagnostics: string[] = []
+  const originalCount = entries.length + providers.length
+  entries = entries.filter(sourceIsSafe)
+  providers = providers.filter(sourceIsSafe)
+  if (entries.length + providers.length < originalCount)
+    diagnostics.push("unsafe or unscreenable catalog sources withheld")
   const prefix = [
     "<memory-catalog>",
     "Long-term memory systems are available. This catalog is a compact recognition index, not the full memory.",
@@ -197,7 +203,7 @@ export class MemoryCatalog {
       try {
         if (provider.capabilities().catalog) candidates.push(provider)
       } catch {
-        diagnostics.push(`catalog provider ${provider.id} capabilities failed`)
+        diagnostics.push(`catalog provider ${safeSourceLabel(provider.id)} capabilities failed`)
       }
     }
     const settled = await Promise.allSettled(
@@ -212,13 +218,13 @@ export class MemoryCatalog {
       const provider = candidates[index]
       if (!provider) return
       if (result.status === "fulfilled") {
-        entries.push(...result.value)
+        entries.push(...result.value.filter(sourceIsSafe))
         return
       }
       diagnostics.push(
         result.reason instanceof OperationTimeoutError
-          ? `catalog provider ${provider.id} timed out`
-          : `catalog provider ${provider.id} failed`,
+          ? `catalog provider ${safeSourceLabel(provider.id)} timed out`
+          : `catalog provider ${safeSourceLabel(provider.id)} failed`,
       )
     })
 
@@ -245,7 +251,7 @@ export class MemoryCatalog {
       const provider = this.providers[index]
       if (!provider) return
       if (result.status === "fulfilled") descriptors.push(result.value)
-      else diagnostics.push(`catalog provider ${provider.id} descriptor failed`)
+      else diagnostics.push(`catalog provider ${safeSourceLabel(provider.id)} descriptor failed`)
     })
 
     const rendered = renderCatalog(mergeEntries(entries), this.maxTokens, descriptors)

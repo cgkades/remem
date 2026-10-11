@@ -293,6 +293,9 @@ export const EPISODIC_SEARCH_MAX_OUTPUT_TOKENS = 2000
 export const EPISODIC_SEARCH_MAX_QUERY_LENGTH = 10_000
 
 export interface EpisodicSearchOptions {
+  /** Host disclosure boundary: screen complete retained sources before fitting
+   * text to the response budget. General operator history remains unchanged. */
+  screenUnsafeSources?: boolean
   /** Internal automatic-injection path: require complete admissible historical
    * tool envelopes, skip unusable matches before consuming the output budget. */
   automaticRecall?: boolean
@@ -332,6 +335,7 @@ export interface EpisodicSearchMatch {
 }
 
 export interface EpisodicSearchResult {
+  withheldResults?: number
   matches: EpisodicSearchMatch[]
   /** True if the output-token budget was reached before every eligible match/neighbor could be included -- distinct from "no more matches exist". */
   budgetExhausted: boolean
