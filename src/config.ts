@@ -25,6 +25,13 @@ export interface SemanticPlannerConfig {
   deterministicHighConfidence: number
 }
 
+export interface LocalLearningModelConfig {
+  enabled: boolean
+  modelPath?: string
+  timeoutMs: number
+  maxNewTokens: number
+}
+
 export interface CaptureConfig {
   enabled: boolean
   /** Promote screened explicit user statements immediately instead of creating review candidates. */
@@ -84,6 +91,7 @@ export interface RememConfig extends OrchestratorConfig {
   providers: MemoryProviderConfig[]
   compaction: boolean
   capture: CaptureConfig
+  learningModel: LocalLearningModelConfig
   /** Phase 2 (plan/feature-memory-recovery-1.md): additive, host-neutral raw-evidence admission -- distinct from and does not replace `capture`. See src/observation-admission.ts. */
   evidenceAdmission: EvidenceAdmissionConfig
   embedding: EmbeddingPluginOptions
@@ -319,6 +327,18 @@ export function parseConfig(options: unknown): ParsedConfig {
   const budgetOptions = isRecord(root.budgets) ? root.budgets : {}
   const plannerOptions = isRecord(root.planner) ? root.planner : {}
   const captureOptions = isRecord(root.capture) ? root.capture : {}
+  if (
+    isRecord(root.learningModel) &&
+    root.learningModel.enabled === true &&
+    (typeof root.learningModel.modelPath !== "string" ||
+      !path.isAbsolute(root.learningModel.modelPath) ||
+      path.normalize(root.learningModel.modelPath) !== root.learningModel.modelPath)
+  )
+    diagnostics.push({
+      level: "warn",
+      message:
+        "learningModel requires an absolute normalized local model directory; model learning was disabled",
+    })
   const evidenceAdmissionOptions = isRecord(root.evidenceAdmission) ? root.evidenceAdmission : {}
 
   return {
@@ -347,6 +367,34 @@ export function parseConfig(options: unknown): ParsedConfig {
       maxResults: finiteNumber(root.maxResults, 8, 1, 100),
       debug: root.debug === true,
       compaction: root.compaction !== false,
+      learningModel: {
+        enabled:
+          isRecord(root.learningModel) &&
+          root.learningModel.enabled === true &&
+          typeof root.learningModel.modelPath === "string" &&
+          path.isAbsolute(root.learningModel.modelPath) &&
+          path.normalize(root.learningModel.modelPath) === root.learningModel.modelPath,
+        ...(isRecord(root.learningModel) &&
+        typeof root.learningModel.modelPath === "string" &&
+        path.isAbsolute(root.learningModel.modelPath) &&
+        path.normalize(root.learningModel.modelPath) === root.learningModel.modelPath
+          ? { modelPath: root.learningModel.modelPath }
+          : {}),
+        timeoutMs: finiteNumber(
+          isRecord(root.learningModel) ? root.learningModel.timeoutMs : undefined,
+          15_000,
+          100,
+          30_000,
+        ),
+        maxNewTokens: Math.floor(
+          finiteNumber(
+            isRecord(root.learningModel) ? root.learningModel.maxNewTokens : undefined,
+            120,
+            16,
+            256,
+          ),
+        ),
+      },
       capture: {
         enabled: captureOptions.enabled === true,
         autoPromote: captureOptions.autoPromote === true,

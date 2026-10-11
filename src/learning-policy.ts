@@ -4,10 +4,11 @@ import { admitEvidence, DEFAULT_EVIDENCE_ADMISSION_CONFIG } from "./observation-
 import { containsSensitiveCredential } from "./sensitive-data.js"
 import { PI_FILE_RECOVERY_RULE, verifiedProcedureFromEvidence } from "./verified-procedure.js"
 
-export const LEARNING_POLICY_VERSION = "scoped-evidence-learning-v2"
+export const LEARNING_POLICY_VERSION = "scoped-evidence-learning-v3"
 // Old approvals remain eligible only after full current evidence/policy revalidation.
 export const REVALIDATABLE_LEARNING_POLICY_VERSIONS: readonly string[] = [
   "scoped-evidence-learning-v1",
+  "scoped-evidence-learning-v2",
   LEARNING_POLICY_VERSION,
 ]
 export type LearningOutcome = "reject" | "episodic-only" | "auto-promote" | "require-review"
@@ -125,6 +126,8 @@ export function decideLearning(input: {
   }
   if (!evidence.length) return decide("require-review", "missing-source-evidence")
   if (!input.supportedExtraction) return decide("episodic-only", "unsupported-semantic-claim")
+  if (observation.payload.modelProposal !== undefined)
+    return decide("require-review", "model-source-selection-requires-review")
   if (input.hasConflict) return decide("require-review", "conflicting-current-knowledge")
   if (
     candidate.memory.institutional ||

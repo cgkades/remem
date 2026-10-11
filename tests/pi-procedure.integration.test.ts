@@ -53,7 +53,7 @@ integration("Pi canonical procedure lifecycle", () => {
       }),
     ).toMatchObject({
       status: "approved",
-      decision: { rule: "pi-file-recovery-v1", version: "scoped-evidence-learning-v2" },
+      decision: { rule: "pi-file-recovery-v1", version: "scoped-evidence-learning-v3" },
     })
     const restarted = new PostgresMemoryProvider(config, { pool })
     await Promise.all([

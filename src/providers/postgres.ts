@@ -1,3 +1,4 @@
+import { MODEL_PROPOSAL_VERSION, validateModelProposal } from "../model-proposal.js"
 import { embedQuery, embedDocument, modelFingerprint } from "../storage/embedding-space.js"
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
@@ -1618,6 +1619,7 @@ export class PostgresMemoryProvider
         throw new Error("candidate evidence is unavailable")
     }
     const ids: string[] = []
+    const canonicalSources: EvidenceEnvelope[] = []
     for (const evidenceId of [...new Set(refs)]) {
       const result = await client.query<EpisodicEventRow>(
         `SELECT * FROM remem.session_events
@@ -1649,6 +1651,7 @@ export class PostgresMemoryProvider
       // Legacy assertion extraction consumes original user text only. Tool
       // evidence may support a future verified procedure, not a user assertion.
       if (
+        observation.payload.modelProposal === undefined &&
         observation.kind !== "task-resolved" &&
         (envelope.role !== "user" ||
           envelope.origin !== "direct-user" ||
@@ -1656,7 +1659,10 @@ export class PostgresMemoryProvider
       )
         throw new Error("candidate evidence does not support this capture")
       ids.push(row.id)
+      canonicalSources.push(envelope)
     }
+    if (observation.payload.modelProposal !== undefined)
+      validateModelProposal(observation, candidate, canonicalSources)
     if (observation.payload.verificationRule !== undefined) {
       const window = await this.procedureEvidenceWindow(
         client,
@@ -1708,7 +1714,9 @@ export class PostgresMemoryProvider
       .filter((row): row is EpisodicEventRow => Boolean(row))
       .map(episodicRowToEnvelope)
     let supportedExtraction = Boolean(observation.payload.verificationRule)
-    if (!supportedExtraction) {
+    if (observation.payload.modelProposal !== undefined)
+      supportedExtraction = validateModelProposal(observation, candidate, evidence)
+    else if (!supportedExtraction) {
       const extracted = await new DeterministicCandidateExtractor(
         parseConfig({ capture: { maxInputCharacters: 20000, maxCandidateCharacters: 10000 } })
           .config.capture,
@@ -1931,7 +1939,9 @@ export class PostgresMemoryProvider
             candidate.id,
             observationIds,
             decision.version,
-            "evidence-linked-v1",
+            observation.payload.modelProposal !== undefined
+              ? MODEL_PROPOSAL_VERSION
+              : "evidence-linked-v1",
             decision.outcome,
             decision.reason,
             Number.isFinite(candidate.confidence) &&
@@ -2060,7 +2070,11 @@ export class PostgresMemoryProvider
           observationIds,
           approved ? "capture-auto-approved" : old ? "capture-refreshed" : "capture-persisted",
           decision?.version ?? "deterministic-consolidation-v1",
-          decision ? "evidence-linked-v1" : "legacy-or-capture-v1",
+          observation.payload.modelProposal !== undefined
+            ? MODEL_PROPOSAL_VERSION
+            : decision
+              ? "evidence-linked-v1"
+              : "legacy-or-capture-v1",
           decision?.outcome ?? null,
           decision?.reason ?? null,
         ],
@@ -2582,6 +2596,23 @@ export class PostgresMemoryProvider
     const row = result.rows[0]
     if (!row) return undefined
     return episodicRowToEnvelope(row)
+  }
+
+  async readModelEvidenceWindow(
+    context: MemoryContext,
+    signal?: AbortSignal,
+  ): Promise<EvidenceEnvelope[]> {
+    signal?.throwIfAborted()
+    if (!context.projectId || !context.sessionId) return []
+    const result = await this.pool.query<EpisodicEventRow>(
+      `SELECT * FROM remem.session_events WHERE provider_id=$1 AND project_id=$2 AND session_id=$3
+       AND evidence_id IS NOT NULL AND occurred_at >= now()-interval '24 hours'
+       AND ((role='user' AND origin='direct-user') OR (role='tool' AND origin='host-observed'))
+       ORDER BY created_at DESC,id DESC LIMIT 8`,
+      [this.id, context.projectId, context.sessionId],
+    )
+    signal?.throwIfAborted()
+    return result.rows.reverse().map(episodicRowToEnvelope)
   }
 
   async readProcedureEvidenceWindow(

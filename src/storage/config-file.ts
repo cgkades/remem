@@ -1,7 +1,13 @@
 import { randomBytes } from "node:crypto"
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
-import type { CaptureConfig, MemoryProviderConfig, PlannerConfig, TokenBudgets } from "../config.js"
+import type {
+  LocalLearningModelConfig,
+  CaptureConfig,
+  MemoryProviderConfig,
+  PlannerConfig,
+  TokenBudgets,
+} from "../config.js"
 import type { EvidenceAdmissionConfig } from "../observation-admission.js"
 import {
   EMBEDDING_DIMENSIONS,
@@ -56,6 +62,7 @@ export interface RememAppConfig {
   debug?: boolean
   compaction?: boolean
   capture?: Partial<CaptureConfig>
+  learningModel?: Partial<LocalLearningModelConfig>
   /** Phase 2 (plan/feature-memory-recovery-1.md): additive raw-evidence admission settings, distinct from `capture`. */
   evidenceAdmission?: Partial<EvidenceAdmissionConfig>
   embedding: EmbeddingAppConfig
@@ -158,6 +165,10 @@ export async function loadInstalledPluginOptions(options: unknown): Promise<unkn
       ...installed,
       ...options,
       providers: Object.hasOwn(options, "providers") ? options.providers : installed.providers,
+      learningModel:
+        isRecord(installed.learningModel) && isRecord(options.learningModel)
+          ? { ...installed.learningModel, ...options.learningModel }
+          : (options.learningModel ?? installed.learningModel),
       capture:
         isRecord(installed.capture) && isRecord(options.capture)
           ? { ...installed.capture, ...options.capture }

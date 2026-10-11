@@ -99,7 +99,7 @@ integration("server learning authorization and audit", () => {
       const lineage = await store.candidateLineage(candidate.id, context)
       expect(lineage).toMatchObject({
         state: "promoted",
-        policyVersion: "scoped-evidence-learning-v2",
+        policyVersion: "scoped-evidence-learning-v3",
         policyOutcome: "auto-promote",
       })
       const audit = await pool.query<{ policy_version: string; policy_outcome: string }>(
@@ -110,7 +110,7 @@ integration("server learning authorization and audit", () => {
       expect(
         audit.rows.every(
           (row) =>
-            row.policy_version === "scoped-evidence-learning-v2" &&
+            row.policy_version === "scoped-evidence-learning-v3" &&
             row.policy_outcome === "auto-promote",
         ),
       ).toBe(true)
@@ -244,7 +244,7 @@ integration("server learning authorization and audit", () => {
     )
     expect((await store.recoverLearningCandidates(context)).promoted).toBe(1)
     expect((await store.candidateLineage(f.candidate.id, context))?.policyVersion).toBe(
-      "scoped-evidence-learning-v2",
+      "scoped-evidence-learning-v3",
     )
     const unknown = await input("Unknown version worker uses local files.")
     await store.persistCandidate(unknown.observation, unknown.candidate, options)
