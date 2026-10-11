@@ -792,7 +792,9 @@ export default function remem(pi: ExtensionAPI): void {
       safeLoggerCall(logger, "warn", "evidence.adapter_failed", { host: "pi", count: 1 })
     }
   }
-  pi.on("turn_start", (_event, ctx) => evidenceEvent((adapter) => adapter.turnStarted(), ctx))
+  pi.on("turn_start", (event, ctx) =>
+    evidenceEvent((adapter) => adapter.turnStarted(event.turnIndex, event.timestamp), ctx),
+  )
   pi.on("message_end", (event, ctx) =>
     evidenceEvent(
       (adapter) => adapter.messageEnded(event.message, ctx.sessionManager.getSessionId()),
