@@ -11,6 +11,7 @@ const entry = (title: string): CatalogEntry => ({
   providerIds: ["p"],
   scope: { kind: "global" },
   importance: 0.5,
+  unresolved: false,
 })
 describe("explicit catalog recognition", () => {
   it("recognizes complete structured identifiers without relying on generic word overlap", () => {
