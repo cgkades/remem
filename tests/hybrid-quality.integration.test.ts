@@ -174,6 +174,21 @@ integration("PostgreSQL hybrid retrieval quality", () => {
       const expected = item.expected ? ids.get(item.expected) : undefined
       const actual = candidates.map((value) => value.record.id)
       const fused = reciprocalRanks(rows)
+      // Suppressing only the new topic arm reproduces the pre-PR provider
+      // behavior through the same planner/recall/synthesis pipeline.
+      const originalSearch = provider.search.bind(provider)
+      const baselineSearch = vi
+        .spyOn(provider, "search")
+        .mockImplementation((request) => originalSearch({ ...request, topics: [] }))
+      let baselineInjection
+      try {
+        baselineInjection = await new RememOrchestrator([provider], config).processPrompt(
+          item.prompt,
+          context,
+        )
+      } finally {
+        baselineSearch.mockRestore()
+      }
       const injection = await orchestrator.processPrompt(item.prompt, context)
       for (const bad of fixture.entries.filter((value) => forbidden.has(ids.get(value.id) ?? ""))) {
         expect(injection.memoryText).not.toContain(bad.content)
@@ -182,6 +197,15 @@ integration("PostgreSQL hybrid retrieval quality", () => {
         id: item.id,
         partition: item.partition,
         relevant: !!expected,
+        baselineInjectedRelevant:
+          !!item.expected &&
+          baselineInjection.memoryText.includes(
+            fixture.entries.find((value) => value.id === item.expected)!.content,
+          ),
+        baselineUnrelatedInjected: !item.expected && baselineInjection.trace.selectedResults > 0,
+        baselineEstimatedTokens:
+          baselineInjection.trace.catalogTokens + baselineInjection.trace.recallTokens,
+        baselineDispatchMs: baselineInjection.trace.totalDurationMs,
         hybrid: rankMetrics(actual, expected),
         rrf: rankMetrics(fused, expected),
         injectedRelevant:
@@ -220,6 +244,14 @@ integration("PostgreSQL hybrid retrieval quality", () => {
       offlineRrfPrecisionAt5: mean(relevant.map((value) => value.rrf.precisionAt5)),
       offlineRrfMRR: mean(relevant.map((value) => value.rrf.reciprocalRank)),
       relevantInjectionRate: mean(relevant.map((value) => (value.injectedRelevant ? 1 : 0))),
+      baselineRelevantInjectionRate: mean(
+        relevant.map((value) => (value.baselineInjectedRelevant ? 1 : 0)),
+      ),
+      baselineFalseInjectionRate: mean(
+        unrelated.map((value) => (value.baselineUnrelatedInjected ? 1 : 0)),
+      ),
+      baselineEstimatedTokenMax: Math.max(...cases.map((value) => value.baselineEstimatedTokens)),
+      baselineDispatchP95Ms: p95(cases.map((value) => value.baselineDispatchMs)),
       falseInjectionRate: mean(unrelated.map((value) => (value.unrelatedInjected ? 1 : 0))),
       forbiddenCandidates: 0,
       nonTargetSelected: cases.reduce((sum, value) => sum + value.nonTargetSelected, 0),
@@ -236,6 +268,8 @@ integration("PostgreSQL hybrid retrieval quality", () => {
         "hybrid-quality-case " + JSON.stringify({ ...item, rankingReasons: undefined }) + "\n",
       )
     expect(metrics.hybridRecallAt5).toBeGreaterThanOrEqual(0.8)
+    expect(metrics.relevantInjectionRate).toBeGreaterThan(metrics.baselineRelevantInjectionRate)
+    expect(metrics.relevantInjectionRate).toBeGreaterThanOrEqual(0.8)
     expect(metrics.falseInjectionRate).toBe(0)
     expect(metrics.estimatedTokenMax).toBeLessThanOrEqual(2300)
     expect(metrics.candidateP95Ms).toBeLessThan(config.providerTimeoutMs)
