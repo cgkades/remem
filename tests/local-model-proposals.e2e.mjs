@@ -148,10 +148,20 @@ try {
   )
   const preview = await store.previewForget(providerId, tool.envelope.id, context.projectId)
   await store.confirmForget(preview.id)
+  const forgotten = await fresh.candidateLineage(selected.id, context)
+  assert.equal(forgotten.state, "forgotten")
+  assert.equal(forgotten.availableObservationIds.length, 0)
+  await assert.rejects(
+    store.persistCandidate(
+      { ...selected.metadata.learningObservation, context },
+      candidateFromRow(selected),
+      { applyLearningPolicy: true },
+    ),
+  )
   assert.equal(
     (await pool.query("SELECT id FROM remem.memories")).rowCount,
-    0,
-    "Forgetting source removes derived memory",
+    1,
+    "Episode forgetting preserves independently reviewed semantic memory under existing scope",
   )
   assert.equal(
     (await fresh.readModelEvidenceWindow({ ...context, projectId: "foreign" })).length,
@@ -173,7 +183,9 @@ try {
     reviewedQuotePromotions: 1,
     unsafeCurrentMemories: 0,
     foreignRead: 0,
-    forgottenDerivedMemories: 0,
+    forgottenSourceAvailable: 0,
+    forgottenSourceReplayRejected: true,
+    independentlyReviewedMemoryRetained: 1,
     scope:
       "actual offline quotation selection and PG review lifecycle; no generative cross-session answer claim",
   }
