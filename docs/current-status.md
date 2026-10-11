@@ -1,9 +1,9 @@
 # Current implementation status
 
-**CURRENT source snapshot: October 10, 2026, `main` at `ffaadb70aebecb07c6009287a06a2b904c629450`.**
+**CURRENT source snapshot: October 10, 2026, `main` at `2585bdd98b6d3539f60492e589ac8417d1add59b`.**
 The [October recovery validation](recovery-validation-2026-10-10.md) records newer query/ranking,
-native fresh-session and migration evidence. Consult #115 and the containing commit for the
-concurrent-migration extension's final merge/CI state.
+native fresh-session and migration evidence. #115 is merged, #87 is closed, and the integrated source passed all nine jobs in run 38098052171.
+The final recovery checkpoint records current commit/next work.
 This describes verified behavior, not completion of every target milestone. Follow
 [PRODUCT-VISION](PRODUCT-VISION.md), [TARGET-ARCHITECTURE](TARGET-ARCHITECTURE.md) and accepted ADRs
 for intended behavior. Follow live [issues](https://github.com/cgkades/remem/issues) for remaining

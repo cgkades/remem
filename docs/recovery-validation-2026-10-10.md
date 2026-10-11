@@ -89,3 +89,18 @@ this is not a claim of broad native-tool learning parity with v2.
 No force push, bypassed failing gate, capture-default change, security weakening or npm publication
 occurred. Query/ranking claims are limited to measured fixtures. The broader product milestone is
 not declared complete. The current recovery handoff is [the repository checkpoint](../plan/RECOVERY-CHECKPOINT.md).
+
+## Final integrated result
+
+#115 merged as `2585bdd98b6d3539f60492e589ac8417d1add59b`, with a tree identical to
+accepted source `ef545b6af3cc3eb46c376e4dae87b8bbdc6c82f5`. #87 is closed. Final combined
+[run 38098052171](https://github.com/cgkades/remem/actions/runs/38098052171) passed all nine jobs.
+Node 22/24 each passed 757 tests in 56 files with real PostgreSQL and no skips, including the six
+migration regressions. Native v1/v2, Pi, package checks, both benchmarks and neural evaluation passed.
+
+The final native v2 run again produced five fresh-session successes with recall 1.0, correct
+procedure/provenance and zero unsupported/false injections; maximum memory block was 4,201 bytes
+and observed host dispatch p95 was 89.19 ms. Its numeric report is permanently preserved as
+`docs/evidence/recovery-native-learning-38098052171.json`. The earlier 95.80 ms result above is a
+dated repeat, not a latency promise; runner/cache variability is expected. No general model
+inference claim is added by either deterministic run. #44/#45 remain open with the limits above.

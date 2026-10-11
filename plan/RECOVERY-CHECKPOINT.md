@@ -21,36 +21,50 @@ commit identifies this checkpoint's exact branch/commit; do not trust an earlier
   `docs/evidence/recovery-native-learning-38097702520.json`. Root cause is original-user
   authority; native tools verify only missing-file check/create/recheck.
 
-## Current branch and verification
+## Completed integrated verification
 
-Branch `feat/resumable-concurrent-index`, PR #115. Verified source head before integration:
-`dc6f2a986e183f8af7193e2451b297ac9840bf13` (all eight jobs passed in run 38097812339).
-The containing commit merges current main/#114 and records this final report/checkpoint.
+#115 merged as `2585bdd98b6d3539f60492e589ac8417d1add59b`; #87 is closed. Main's tree
+was verified identical to accepted source head `ef545b6af3cc3eb46c376e4dae87b8bbdc6c82f5`.
+Run 38098052171 passed all nine jobs. Node 22/24 each passed 757 tests in 56 files with
+real PostgreSQL and no skips, including six migration interruption/concurrency/lock regressions.
+Native OpenCode v1/v2, Pi, package checks, both benchmarks and neural evaluation passed.
 
-#87 implements literal-true operator opt-in, immutable single-index statements, checksum/ownership
-receipts, invalid-index retry, completed-build reuse, atomic ledger finalization, bounded waits and
-doctor/operator diagnostics. Six real PostgreSQL migration regressions pass. A real advisory-lock/
-virtual-transaction deadlock was found and fixed with nonblocking probes and waits outside SQL.
-See `plan/CONCURRENT-MIGRATION-CHECKPOINT.md` and `docs/recovery-validation-2026-10-10.md`.
+Native v2 again passed five fresh sessions without prior transcript/memory commands: recall 1.0,
+correct procedure/provenance, unsupported/false injection 0, 4201-byte max context, observed
+host dispatch p95 89.19 ms. Evidence: `docs/evidence/recovery-native-learning-38098052171.json`.
+These are deterministic fixture results, not model inference or production latency promises.
 
-Local checks use matching lockfile dependencies. Initial proxy-environment test assumptions failed;
-with proxy variables unset, local format/lint/types/unit/build pass. Database tests skip locally
-because only root is mapped. Acceptance uses unskipped disposable PostgreSQL CI, not those skips.
+#87 includes literal-true operator opt-in, immutable single-index statements, checksum/ownership
+receipts, invalid-index retry, completed-build reuse, atomic ledger finalization, bounded waits
+and doctor/operator diagnostics. The measured virtual-transaction deadlock was fixed using
+nonblocking lock probes. No pending implementation verification or recovery blocker remains for
+#113/#114/#115. Initial failures were inspected and fixed, never bypassed.
 
-## Pending verification and next actions
+This final checkpoint is a documentation-only update on `main`, based on verified merge commit
+`2585bdd98b6d3539f60492e589ac8417d1add59b`. Its containing commit is the current checkpoint
+commit; resolve actual HEAD with GitHub/git before further work. Local final documentation
+formatting checks pass; code is unchanged from the fully verified source above. Historical branch
+`feat/resumable-concurrent-index` contains the accepted implementation and checkpoints.
 
-1. Inspect the containing commit's combined Node 22/24 PostgreSQL, native OpenCode v1/v2, Pi,
-   episodic/hybrid benchmark and neural jobs. Inspect failures, six migration recovery/locking
-   tests and native fresh-session metrics before merging #115 or closing #87. If already merged,
-   refresh actual main and do not repeat the implementation.
-2. Keep #44 open: exact-timezone automatic recognition miss, non-target selection quality,
-   untouched validation data and broader neural/production-size evidence remain.
-3. #45 remains open/unimplemented: complete immutable embedding-space fingerprints and staged
-   reindex/cutover recovery. Existing model/dimension matching and durable reembedding claims
-   must be reused rather than duplicated.
-4. General model-inferred causal learning/generative quality remain undeveloped or unmeasured.
-   No configured generative model was tested. Deterministic context reading and original-user
-   assertions are not independent inference verification.
+## Next work and remaining issues
+
+- #44 remains open: exact-timezone automatic recognition miss, non-target selection quality,
+  independent untouched validation data and broader neural/production-size evidence. The
+  benchmark cases already reviewed/tuned are regression data, not blind validation.
+- #45 remains open/unimplemented: complete immutable embedding-space fingerprints and staged
+  reindex/cutover recovery. Reuse existing model/dimension matching and durable claims. Design
+  the compatibility contract and test mismatch/query-document asymmetry/fallback/interruption
+  against PostgreSQL before introducing a cutover or declaring reindex completion.
+- General model-inferred causal learning and generative answer quality remain undeveloped or
+  unmeasured. No configured generative model was tested. Original-user assertions and a
+  deterministic context reader are not independent causal verification.
+- Next agent should refresh GitHub, read current architecture/ADRs and these preserved evidence
+  reports, then select a bounded #44 or #45 acceptance gap. Do not duplicate the three merged PRs.
+
+Local checks use matching lockfile dependencies. Initial proxy-environment tests failed on existing
+shared-state assumptions; with proxy variables unset, local checks pass (605 tests / 152 database
+skips on the combined source). PostgreSQL cannot run safely locally with only a mapped root UID;
+acceptance uses the unskipped disposable CI counts, not local skips.
 
 ## Constraints and persistent limits
 

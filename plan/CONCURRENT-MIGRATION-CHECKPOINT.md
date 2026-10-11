@@ -27,3 +27,11 @@ regressions; Node 24 reported 752 tests in 55 files, no skips. Native OpenCode v
 Pi, episodic benchmark and neural evaluation passed. Final follow-up narrows opt-in
 to literal true and documents the extension in the storage guide; rerun those checks
 for its containing commit. Integrate #114/current main before final merge and validation.
+
+## Final disposition
+
+Merged #115 as 2585bdd98b6d3539f60492e589ac8417d1add59b; #87 closed. Final integrated
+source ef545b6af3cc3eb46c376e4dae87b8bbdc6c82f5 passed all nine jobs in run 38098052171
+(Node 22/24 each 757 tests, no skips; six PostgreSQL migration regressions; native hosts,
+package and benchmark gates). Earlier pending statements are historical checkpoints.
+No unfinished work remains in this migration package; current handoff is plan/RECOVERY-CHECKPOINT.md.
