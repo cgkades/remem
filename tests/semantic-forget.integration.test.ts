@@ -238,6 +238,10 @@ integration("explicit semantic memory forgetting", () => {
       content: "We decided to keep the independent rollout audit.",
       scope: { kind: "project", id: context.projectId },
     })
+    // A managed write has its own source in addition to the shared original.
+    // Both support the retained record and neither is a private copy of the target.
+    const retainedSources = (await pool.query("SELECT * FROM remem.sources ORDER BY id")).rows
+    expect(retainedSources).toHaveLength(2)
     await pool.query(
       "INSERT INTO remem.memory_provenance(id,memory_id,source_id,captured_at,original) VALUES($1,$2,$3,now(),true)",
       [randomUUID(), independent.id, source.id],
@@ -258,7 +262,9 @@ integration("explicit semantic memory forgetting", () => {
     expect((await store.get(independent.id, context))?.content).toContain(
       "independent rollout audit",
     )
-    expect(await count("sources")).toBe(1)
+    expect((await pool.query("SELECT * FROM remem.sources ORDER BY id")).rows).toEqual(
+      retainedSources,
+    )
     expect(await store.readEvidence(config.id, f.evidence.id, context)).toBeDefined()
   })
   it("serializes competing confirmations and candidate replay without resurrection", async () => {
