@@ -339,6 +339,83 @@ integration("bounded retained evidence reflection", () => {
       ),
     ).rejects.toThrow()
   })
+  it("rolls back claim and completion progress when cancellation arrives during SQL", async () => {
+    await store.appendEvidence(source())
+    await pool.query(
+      "CREATE FUNCTION remem.pause_reflection() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.1); RETURN NEW; END $$",
+    )
+    await pool.query(
+      "CREATE TRIGGER pause_reflection BEFORE UPDATE ON remem.session_events FOR EACH ROW EXECUTE FUNCTION remem.pause_reflection()",
+    )
+    const cancelClaim = new AbortController()
+    const timer = setTimeout(() => cancelClaim.abort(), 30)
+    try {
+      await expect(
+        store.claimEvidenceExtraction(
+          context,
+          "opencode-v2",
+          admission.enabledOrigins,
+          version,
+          cancelClaim.signal,
+        ),
+      ).rejects.toThrow()
+    } finally {
+      clearTimeout(timer)
+    }
+    const progress = await pool.query<{ attempts: number; token: string | null }>(
+      "SELECT extraction_attempts attempts,extraction_claim_token token FROM remem.session_events",
+    )
+    expect(progress.rows[0]).toEqual({ attempts: 0, token: null })
+    const [claim] = await store.claimEvidenceExtraction(
+      context,
+      "opencode-v2",
+      admission.enabledOrigins,
+      version,
+    )
+    const cancelFinish = new AbortController()
+    const finishTimer = setTimeout(() => cancelFinish.abort(), 30)
+    try {
+      await expect(
+        store.finishEvidenceExtraction(claim!, version, cancelFinish.signal),
+      ).rejects.toThrow()
+    } finally {
+      clearTimeout(finishTimer)
+    }
+    expect(await store.reflectionStatus(context)).toEqual({ unprocessed: 1, claimed: 1 })
+    expect(
+      (
+        await pool.query<{ extracted: string | null }>(
+          "SELECT extracted_at extracted FROM remem.session_events",
+        )
+      ).rows[0]?.extracted,
+    ).toBeNull()
+  })
+  it("does not replay completed learning over edited or superseded current knowledge", async () => {
+    await store.appendEvidence(source())
+    await coordinator().reflect(context)
+    const old = (await pool.query<{ id: string }>("SELECT id FROM remem.memories")).rows[0]!
+    const currentText = "Phoenix worker uses isolated workspace checkpoint directories."
+    const successor = await store.supersede(old.id, {
+      type: "fact",
+      title: "Current Phoenix checkpoint root",
+      content: currentText,
+      scope: { kind: "project", id: context.projectId },
+    })
+    await pool.query("UPDATE remem.session_events SET extraction_version=NULL")
+    expect((await coordinator().reflect(context)).selected).toBe(0)
+    expect((await store.get(successor.id, context))?.content).toBe(currentText)
+    const results = await store.search({
+      query: "Phoenix checkpoint",
+      topics: [],
+      maxTokens: 2000,
+      reason: "current recall",
+      signal: new AbortController().signal,
+      context: { ...context, sessionId: "fresh-b" },
+      limit: 5,
+    })
+    expect(results.map((r) => r.record.content)).toContain(currentText)
+    expect(results.map((r) => r.record.content)).not.toContain(text)
+  })
   it("reports only bounded body-free scoped progress through memory_status", async () => {
     await store.appendEvidence(source())
     const orchestrator = new RememOrchestrator([store], parseConfig({}).config)

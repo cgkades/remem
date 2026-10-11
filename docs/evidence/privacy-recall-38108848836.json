@@ -470,9 +470,7 @@
       "cases": [
         {
           "id": "ticket",
-          "expected": [
-            "clock"
-          ],
+          "expected": ["clock"],
           "baseline": {
             "recall": 0,
             "precision": 0,
@@ -486,9 +484,7 @@
             "nonTarget": 0
           },
           "baselineIds": [],
-          "currentIds": [
-            "clock"
-          ],
+          "currentIds": ["clock"],
           "baselineCandidateP95Ms": 5.069960000000265,
           "candidateP95Ms": 4.92064100000016,
           "candidateBaseline": {
@@ -511,9 +507,7 @@
         },
         {
           "id": "ticket-sentence",
-          "expected": [
-            "retries"
-          ],
+          "expected": ["retries"],
           "baseline": {
             "recall": 0,
             "precision": 0,
@@ -527,9 +521,7 @@
             "nonTarget": 0
           },
           "baselineIds": [],
-          "currentIds": [
-            "retries"
-          ],
+          "currentIds": ["retries"],
           "baselineCandidateP95Ms": 5.655545000000075,
           "candidateP95Ms": 5.65889100000004,
           "candidateBaseline": {
@@ -552,9 +544,7 @@
         },
         {
           "id": "alias",
-          "expected": [
-            "retries"
-          ],
+          "expected": ["retries"],
           "baseline": {
             "recall": 1,
             "precision": 1,
@@ -567,12 +557,8 @@
             "falseInjection": false,
             "nonTarget": 0
           },
-          "baselineIds": [
-            "retries"
-          ],
-          "currentIds": [
-            "retries"
-          ],
+          "baselineIds": ["retries"],
+          "currentIds": ["retries"],
           "baselineCandidateP95Ms": 4.971084999999675,
           "candidateP95Ms": 4.952260000000024,
           "candidateBaseline": {
@@ -595,9 +581,7 @@
         },
         {
           "id": "alias-confuser",
-          "expected": [
-            "search"
-          ],
+          "expected": ["search"],
           "baseline": {
             "recall": 1,
             "precision": 1,
@@ -610,12 +594,8 @@
             "falseInjection": false,
             "nonTarget": 0
           },
-          "baselineIds": [
-            "search"
-          ],
-          "currentIds": [
-            "search"
-          ],
+          "baselineIds": ["search"],
+          "currentIds": ["search"],
           "baselineCandidateP95Ms": 4.658619999999701,
           "candidateP95Ms": 4.791548999999577,
           "candidateBaseline": {
@@ -638,10 +618,7 @@
         },
         {
           "id": "two-topics",
-          "expected": [
-            "billing",
-            "search"
-          ],
+          "expected": ["billing", "search"],
           "baseline": {
             "recall": 1,
             "precision": 1,
@@ -654,14 +631,8 @@
             "falseInjection": false,
             "nonTarget": 0
           },
-          "baselineIds": [
-            "billing",
-            "search"
-          ],
-          "currentIds": [
-            "billing",
-            "search"
-          ],
+          "baselineIds": ["billing", "search"],
+          "currentIds": ["billing", "search"],
           "baselineCandidateP95Ms": 5.403924000000188,
           "candidateP95Ms": 5.341657999999825,
           "candidateBaseline": {
@@ -684,9 +655,7 @@
         },
         {
           "id": "paraphrase",
-          "expected": [
-            "queue"
-          ],
+          "expected": ["queue"],
           "baseline": {
             "recall": 1,
             "precision": 1,
@@ -699,12 +668,8 @@
             "falseInjection": false,
             "nonTarget": 0
           },
-          "baselineIds": [
-            "queue"
-          ],
-          "currentIds": [
-            "queue"
-          ],
+          "baselineIds": ["queue"],
+          "currentIds": ["queue"],
           "baselineCandidateP95Ms": 4.9490029999997205,
           "candidateP95Ms": 4.677846000000045,
           "candidateBaseline": {
@@ -727,9 +692,7 @@
         },
         {
           "id": "supersession",
-          "expected": [
-            "retries"
-          ],
+          "expected": ["retries"],
           "baseline": {
             "recall": 1,
             "precision": 1,
@@ -742,12 +705,8 @@
             "falseInjection": false,
             "nonTarget": 0
           },
-          "baselineIds": [
-            "retries"
-          ],
-          "currentIds": [
-            "retries"
-          ],
+          "baselineIds": ["retries"],
+          "currentIds": ["retries"],
           "baselineCandidateP95Ms": 7.923253999999815,
           "candidateP95Ms": 4.707291000000168,
           "candidateBaseline": {
@@ -770,9 +729,7 @@
         },
         {
           "id": "deployment",
-          "expected": [
-            "tls"
-          ],
+          "expected": ["tls"],
           "baseline": {
             "recall": 1,
             "precision": 1,
@@ -785,12 +742,8 @@
             "falseInjection": false,
             "nonTarget": 0
           },
-          "baselineIds": [
-            "tls"
-          ],
-          "currentIds": [
-            "tls"
-          ],
+          "baselineIds": ["tls"],
+          "currentIds": ["tls"],
           "baselineCandidateP95Ms": 4.54689099999996,
           "candidateP95Ms": 4.734112000000096,
           "candidateBaseline": {
@@ -970,9 +923,7 @@
       "cases": [
         {
           "id": "ticket",
-          "expected": [
-            "clock"
-          ],
+          "expected": ["clock"],
           "baseline": {
             "recall": 0,
             "precision": 0,
@@ -986,9 +937,7 @@
             "nonTarget": 0
           },
           "baselineIds": [],
-          "currentIds": [
-            "clock"
-          ],
+          "currentIds": ["clock"],
           "baselineCandidateP95Ms": 11.909913000000415,
           "candidateP95Ms": 11.89146399999936,
           "candidateBaseline": {
@@ -1011,9 +960,7 @@
         },
         {
           "id": "ticket-sentence",
-          "expected": [
-            "retries"
-          ],
+          "expected": ["retries"],
           "baseline": {
             "recall": 1,
             "precision": 0.2,
@@ -1026,16 +973,8 @@
             "falseInjection": false,
             "nonTarget": 0
           },
-          "baselineIds": [
-            "retries",
-            "background",
-            "background",
-            "background",
-            "background"
-          ],
-          "currentIds": [
-            "retries"
-          ],
+          "baselineIds": ["retries", "background", "background", "background", "background"],
+          "currentIds": ["retries"],
           "baselineCandidateP95Ms": 15.905493999999635,
           "candidateP95Ms": 13.687383000000409,
           "candidateBaseline": {
@@ -1058,9 +997,7 @@
         },
         {
           "id": "alias",
-          "expected": [
-            "retries"
-          ],
+          "expected": ["retries"],
           "baseline": {
             "recall": 1,
             "precision": 0.2,
@@ -1073,16 +1010,8 @@
             "falseInjection": false,
             "nonTarget": 0
           },
-          "baselineIds": [
-            "retries",
-            "background",
-            "background",
-            "background",
-            "background"
-          ],
-          "currentIds": [
-            "retries"
-          ],
+          "baselineIds": ["retries", "background", "background", "background", "background"],
+          "currentIds": ["retries"],
           "baselineCandidateP95Ms": 11.293545999999878,
           "candidateP95Ms": 12.188564000000042,
           "candidateBaseline": {
@@ -1105,9 +1034,7 @@
         },
         {
           "id": "alias-confuser",
-          "expected": [
-            "search"
-          ],
+          "expected": ["search"],
           "baseline": {
             "recall": 0,
             "precision": 0,
@@ -1120,16 +1047,8 @@
             "falseInjection": false,
             "nonTarget": 0
           },
-          "baselineIds": [
-            "background",
-            "background",
-            "background",
-            "background",
-            "background"
-          ],
-          "currentIds": [
-            "search"
-          ],
+          "baselineIds": ["background", "background", "background", "background", "background"],
+          "currentIds": ["search"],
           "baselineCandidateP95Ms": 15.849173999999948,
           "candidateP95Ms": 13.571124999999483,
           "candidateBaseline": {
@@ -1152,10 +1071,7 @@
         },
         {
           "id": "two-topics",
-          "expected": [
-            "billing",
-            "search"
-          ],
+          "expected": ["billing", "search"],
           "baseline": {
             "recall": 0,
             "precision": 0,
@@ -1168,17 +1084,8 @@
             "falseInjection": false,
             "nonTarget": 0
           },
-          "baselineIds": [
-            "background",
-            "background",
-            "background",
-            "background",
-            "background"
-          ],
-          "currentIds": [
-            "billing",
-            "search"
-          ],
+          "baselineIds": ["background", "background", "background", "background", "background"],
+          "currentIds": ["billing", "search"],
           "baselineCandidateP95Ms": 13.92167999999947,
           "candidateP95Ms": 16.51018000000022,
           "candidateBaseline": {
@@ -1201,9 +1108,7 @@
         },
         {
           "id": "paraphrase",
-          "expected": [
-            "queue"
-          ],
+          "expected": ["queue"],
           "baseline": {
             "recall": 1,
             "precision": 0.2,
@@ -1216,16 +1121,8 @@
             "falseInjection": false,
             "nonTarget": 0
           },
-          "baselineIds": [
-            "queue",
-            "background",
-            "background",
-            "background",
-            "background"
-          ],
-          "currentIds": [
-            "queue"
-          ],
+          "baselineIds": ["queue", "background", "background", "background", "background"],
+          "currentIds": ["queue"],
           "baselineCandidateP95Ms": 12.241065000000162,
           "candidateP95Ms": 12.662105999999767,
           "candidateBaseline": {
@@ -1248,9 +1145,7 @@
         },
         {
           "id": "supersession",
-          "expected": [
-            "retries"
-          ],
+          "expected": ["retries"],
           "baseline": {
             "recall": 0,
             "precision": 0,
@@ -1263,16 +1158,8 @@
             "falseInjection": false,
             "nonTarget": 0
           },
-          "baselineIds": [
-            "background",
-            "background",
-            "background",
-            "background",
-            "background"
-          ],
-          "currentIds": [
-            "retries"
-          ],
+          "baselineIds": ["background", "background", "background", "background", "background"],
+          "currentIds": ["retries"],
           "baselineCandidateP95Ms": 15.160143999999491,
           "candidateP95Ms": 13.316773000000467,
           "candidateBaseline": {
@@ -1295,9 +1182,7 @@
         },
         {
           "id": "deployment",
-          "expected": [
-            "tls"
-          ],
+          "expected": ["tls"],
           "baseline": {
             "recall": 1,
             "precision": 0.2,
@@ -1310,16 +1195,8 @@
             "falseInjection": false,
             "nonTarget": 0
           },
-          "baselineIds": [
-            "tls",
-            "background",
-            "background",
-            "background",
-            "background"
-          ],
-          "currentIds": [
-            "tls"
-          ],
+          "baselineIds": ["tls", "background", "background", "background", "background"],
+          "currentIds": ["tls"],
           "baselineCandidateP95Ms": 12.709332000000359,
           "candidateP95Ms": 10.341445000000022,
           "candidateBaseline": {
@@ -1507,14 +1384,7 @@
       "localReadBlocks": 0,
       "tempReadBlocks": 0,
       "tempWrittenBlocks": 0,
-      "nodes": [
-        "Limit",
-        "Sort",
-        "Subquery Scan",
-        "WindowAgg",
-        "Sort",
-        "Seq Scan"
-      ]
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
     },
     {
       "size": 5000,
@@ -1557,14 +1427,7 @@
       "localReadBlocks": 0,
       "tempReadBlocks": 0,
       "tempWrittenBlocks": 0,
-      "nodes": [
-        "Limit",
-        "Sort",
-        "Subquery Scan",
-        "WindowAgg",
-        "Sort",
-        "Seq Scan"
-      ]
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
     },
     {
       "size": 5000,
@@ -1606,14 +1469,7 @@
       "localReadBlocks": 0,
       "tempReadBlocks": 0,
       "tempWrittenBlocks": 0,
-      "nodes": [
-        "Limit",
-        "Sort",
-        "Subquery Scan",
-        "WindowAgg",
-        "Sort",
-        "Seq Scan"
-      ]
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
     },
     {
       "size": 5000,
@@ -1656,14 +1512,7 @@
       "localReadBlocks": 0,
       "tempReadBlocks": 0,
       "tempWrittenBlocks": 0,
-      "nodes": [
-        "Limit",
-        "Sort",
-        "Subquery Scan",
-        "WindowAgg",
-        "Sort",
-        "Seq Scan"
-      ]
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
     },
     {
       "size": 5000,
@@ -1704,14 +1553,7 @@
       "localReadBlocks": 0,
       "tempReadBlocks": 0,
       "tempWrittenBlocks": 0,
-      "nodes": [
-        "Limit",
-        "Sort",
-        "Subquery Scan",
-        "WindowAgg",
-        "Sort",
-        "Seq Scan"
-      ]
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
     },
     {
       "size": 5000,
@@ -1751,14 +1593,7 @@
       "localReadBlocks": 0,
       "tempReadBlocks": 0,
       "tempWrittenBlocks": 0,
-      "nodes": [
-        "Limit",
-        "Sort",
-        "Subquery Scan",
-        "WindowAgg",
-        "Sort",
-        "Seq Scan"
-      ]
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
     },
     {
       "size": 5000,
@@ -1799,14 +1634,7 @@
       "localReadBlocks": 3250,
       "tempReadBlocks": 2933,
       "tempWrittenBlocks": 2939,
-      "nodes": [
-        "Limit",
-        "Sort",
-        "Subquery Scan",
-        "WindowAgg",
-        "Sort",
-        "Seq Scan"
-      ]
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
     },
     {
       "size": 50000,
@@ -1849,14 +1677,7 @@
       "localReadBlocks": 3250,
       "tempReadBlocks": 2933,
       "tempWrittenBlocks": 2939,
-      "nodes": [
-        "Limit",
-        "Sort",
-        "Subquery Scan",
-        "WindowAgg",
-        "Sort",
-        "Seq Scan"
-      ]
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
     },
     {
       "size": 50000,
@@ -1898,14 +1719,7 @@
       "localReadBlocks": 3250,
       "tempReadBlocks": 2933,
       "tempWrittenBlocks": 2939,
-      "nodes": [
-        "Limit",
-        "Sort",
-        "Subquery Scan",
-        "WindowAgg",
-        "Sort",
-        "Seq Scan"
-      ]
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
     },
     {
       "size": 50000,
@@ -1948,13 +1762,7 @@
       "localReadBlocks": 3595,
       "tempReadBlocks": 0,
       "tempWrittenBlocks": 0,
-      "nodes": [
-        "Limit",
-        "Sort",
-        "Subquery Scan",
-        "WindowAgg",
-        "Index Scan"
-      ]
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Index Scan"]
     },
     {
       "size": 50000,
@@ -1995,13 +1803,7 @@
       "localReadBlocks": 3595,
       "tempReadBlocks": 0,
       "tempWrittenBlocks": 0,
-      "nodes": [
-        "Limit",
-        "Sort",
-        "Subquery Scan",
-        "WindowAgg",
-        "Index Scan"
-      ]
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Index Scan"]
     },
     {
       "size": 50000,
@@ -2041,13 +1843,7 @@
       "localReadBlocks": 3595,
       "tempReadBlocks": 0,
       "tempWrittenBlocks": 0,
-      "nodes": [
-        "Limit",
-        "Sort",
-        "Subquery Scan",
-        "WindowAgg",
-        "Index Scan"
-      ]
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Index Scan"]
     },
     {
       "size": 50000,
