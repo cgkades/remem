@@ -1,0 +1,937 @@
+{
+  "run": 38099164079,
+  "head": "8ef3c747d04185e24cca13a93e1d685ba093f9db",
+  "baseline": "0dc565310475964c7c2ac030dda4a31b4c7ee664",
+  "regression": {
+    "embedding": "deterministic local hash; not a neural quality claim",
+    "relevantCases": 10,
+    "unrelatedCases": 4,
+    "hybridRecallAt5": 0.9,
+    "hybridPrecisionAt5": 0.6233333333333334,
+    "hybridMRR": 0.85,
+    "topicAwareRecallAt5": 1,
+    "topicAwareMRR": 0.95,
+    "offlineRrfRecallAt5": 0.9,
+    "offlineRrfPrecisionAt5": 0.6233333333333334,
+    "offlineRrfMRR": 0.85,
+    "relevantInjectionRate": 1,
+    "baselineRelevantInjectionRate": 0.9,
+    "baselineFalseInjectionRate": 0,
+    "baselineEstimatedTokenMax": 2288,
+    "baselineDispatchP95Ms": 14,
+    "falseInjectionRate": 0,
+    "forbiddenCandidates": 0,
+    "nonTargetSelected": 3,
+    "estimatedTokenMax": 2286,
+    "candidateP95Ms": 4.489404000000036,
+    "dispatchP95Ms": 6
+  },
+  "reports": [
+    {
+      "model": "remem-local-hash-v1",
+      "corpusRows": 5010,
+      "cases": [
+        {
+          "id": "ticket",
+          "expected": ["clock"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": ["clock"],
+          "baselineCandidateP95Ms": 4.383625000000393,
+          "candidateP95Ms": 4.337337999999363,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1742,
+          "dispatchMs": 12
+        },
+        {
+          "id": "ticket-sentence",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 4.527143000000251,
+          "candidateP95Ms": 4.515741999999591,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1757,
+          "dispatchMs": 6
+        },
+        {
+          "id": "alias",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["retries"],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 4.396429000000353,
+          "candidateP95Ms": 4.270383999999467,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1757,
+          "currentTokens": 1757,
+          "dispatchMs": 7
+        },
+        {
+          "id": "alias-confuser",
+          "expected": ["search"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["search"],
+          "currentIds": ["search"],
+          "baselineCandidateP95Ms": 4.336257000000842,
+          "candidateP95Ms": 4.28123400000004,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1735,
+          "currentTokens": 1735,
+          "dispatchMs": 6
+        },
+        {
+          "id": "two-topics",
+          "expected": ["billing", "search"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["billing", "search"],
+          "currentIds": ["billing", "search"],
+          "baselineCandidateP95Ms": 4.783650999999736,
+          "candidateP95Ms": 4.586613999999827,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1978,
+          "currentTokens": 1978,
+          "dispatchMs": 7
+        },
+        {
+          "id": "paraphrase",
+          "expected": ["queue"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["queue"],
+          "currentIds": ["queue"],
+          "baselineCandidateP95Ms": 4.324555999999575,
+          "candidateP95Ms": 4.347657999999683,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1747,
+          "currentTokens": 1747,
+          "dispatchMs": 8
+        },
+        {
+          "id": "supersession",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["retries"],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 4.424081000000115,
+          "candidateP95Ms": 4.271726999999373,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1757,
+          "currentTokens": 1757,
+          "dispatchMs": 6
+        },
+        {
+          "id": "deployment",
+          "expected": ["tls"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["tls"],
+          "currentIds": ["tls"],
+          "baselineCandidateP95Ms": 4.320917999999438,
+          "candidateP95Ms": 4.242902999999387,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1750,
+          "currentTokens": 1750,
+          "dispatchMs": 7
+        },
+        {
+          "id": "unrelated-food",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 3.9878280000002633,
+          "candidateP95Ms": 3.9995099999996455,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 2
+        },
+        {
+          "id": "unrelated-math",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 6.193947000000662,
+          "candidateP95Ms": 6.165184000000409,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 2
+        },
+        {
+          "id": "unknown-ticket",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 3.89975400000003,
+          "candidateP95Ms": 3.8762109999997847,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 2
+        },
+        {
+          "id": "unrelated-poem",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 4.155961000000389,
+          "candidateP95Ms": 3.9828489999999874,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 1
+        }
+      ],
+      "baselineCandidateP95Ms": 6.193947000000662,
+      "candidateP95Ms": 6.165184000000409,
+      "dispatchP95Ms": 12
+    },
+    {
+      "model": "bge-small-en-v1.5",
+      "corpusRows": 5010,
+      "cases": [
+        {
+          "id": "ticket",
+          "expected": ["clock"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": ["clock"],
+          "baselineCandidateP95Ms": 10.310496000000057,
+          "candidateP95Ms": 9.571155999999974,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1742,
+          "dispatchMs": 24
+        },
+        {
+          "id": "ticket-sentence",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["retries", "background", "background", "background", "background"],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 12.08818699999938,
+          "candidateP95Ms": 10.990853000001152,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2587,
+          "currentTokens": 1757,
+          "dispatchMs": 19
+        },
+        {
+          "id": "alias",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["retries", "background", "background", "background", "background"],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 10.719374999998763,
+          "candidateP95Ms": 9.67259599999852,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2587,
+          "currentTokens": 1757,
+          "dispatchMs": 18
+        },
+        {
+          "id": "alias-confuser",
+          "expected": ["search"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["background", "background", "background", "background", "background"],
+          "currentIds": ["search"],
+          "baselineCandidateP95Ms": 46.00686200000018,
+          "candidateP95Ms": 20.800342000000455,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2567,
+          "currentTokens": 1735,
+          "dispatchMs": 17
+        },
+        {
+          "id": "two-topics",
+          "expected": ["billing", "search"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["background", "background", "background", "background", "background"],
+          "currentIds": ["billing", "search"],
+          "baselineCandidateP95Ms": 13.50030599999991,
+          "candidateP95Ms": 13.089669999999387,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2598,
+          "currentTokens": 1978,
+          "dispatchMs": 20
+        },
+        {
+          "id": "paraphrase",
+          "expected": ["queue"],
+          "baseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["queue", "background", "background", "background", "background"],
+          "currentIds": ["queue"],
+          "baselineCandidateP95Ms": 12.087335000000166,
+          "candidateP95Ms": 12.057209999999031,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2577,
+          "currentTokens": 1747,
+          "dispatchMs": 18
+        },
+        {
+          "id": "supersession",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["background", "background", "background", "background", "background"],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 10.467178000000786,
+          "candidateP95Ms": 12.74051099999997,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2578,
+          "currentTokens": 1757,
+          "dispatchMs": 18
+        },
+        {
+          "id": "deployment",
+          "expected": ["tls"],
+          "baseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["tls", "background", "background", "background", "background"],
+          "currentIds": ["tls"],
+          "baselineCandidateP95Ms": 9.188204000000042,
+          "candidateP95Ms": 10.123508000000584,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2580,
+          "currentTokens": 1750,
+          "dispatchMs": 18
+        },
+        {
+          "id": "unrelated-food",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 10.124288000000888,
+          "candidateP95Ms": 9.726124999999229,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 11
+        },
+        {
+          "id": "unrelated-math",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 11.302643000000899,
+          "candidateP95Ms": 10.144748000000618,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 11
+        },
+        {
+          "id": "unknown-ticket",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 9.479816999999457,
+          "candidateP95Ms": 9.14673699999912,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 11
+        },
+        {
+          "id": "unrelated-poem",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 12.052029999998922,
+          "candidateP95Ms": 12.784401999999318,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 11
+        }
+      ],
+      "baselineCandidateP95Ms": 46.00686200000018,
+      "candidateP95Ms": 20.800342000000455,
+      "dispatchP95Ms": 24
+    }
+  ]
+}
