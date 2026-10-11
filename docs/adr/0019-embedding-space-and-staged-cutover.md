@@ -1,6 +1,6 @@
 # ADR 0019: Paired embedding spaces and staged reindex cutover
 
-Status: proposed (accept after real PostgreSQL/native acceptance gates).
+Status: accepted after real PostgreSQL, native host and required neural acceptance in run 38099912562.
 
 Model names and dimensions leave incompatible revisions, pooling, quantization and query/document instruction pairs indistinguishable. Existing durable batch claims help recovery but do not prove compatible corpus coverage.
 
