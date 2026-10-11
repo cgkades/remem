@@ -800,6 +800,7 @@ export class PostgresMemoryProvider
         FROM candidates
         JOIN remem.memories m ON m.id = candidates.id
         LEFT JOIN remem.sources s ON s.id = m.source_id
+        WHERE NOT $15::boolean OR m.title = ANY($14::text[])
         ORDER BY GREATEST(candidates.lexical_score, candidates.semantic_score) DESC,
           m.updated_at DESC
         LIMIT $7
@@ -819,6 +820,7 @@ export class PostgresMemoryProvider
         perResultCharacters,
         Math.max(32, request.limit * 4),
         request.topics.filter((topic) => typeof topic === "string").slice(0, 8),
+        request.catalogOnly === true && request.topics.length > 0,
       ],
     )
     request.signal.throwIfAborted()
