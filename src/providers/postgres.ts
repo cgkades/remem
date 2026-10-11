@@ -1,5 +1,10 @@
+import type { EvidenceOrigin } from "../observation-admission.js"
 import { MODEL_PROPOSAL_VERSION, validateModelProposal } from "../model-proposal.js"
 import { sourceIsSafe } from "../source-safety.js"
+import {
+  EVIDENCE_REFLECTION_VERSION,
+  type EvidenceExtractionClaim,
+} from "../evidence-reflection.js"
 import { embedQuery, embedDocument, modelFingerprint } from "../storage/embedding-space.js"
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
@@ -3568,6 +3573,124 @@ export class PostgresMemoryProvider
       undefined,
       this.id,
     ).run()
+  }
+
+  async claimEvidenceExtraction(
+    context: MemoryContext,
+    host: string,
+    origins: readonly EvidenceOrigin[],
+    version: string,
+    signal?: AbortSignal,
+  ): Promise<EvidenceExtractionClaim[]> {
+    signal?.throwIfAborted()
+    if (
+      !context.projectId ||
+      !["pi", "opencode-v2"].includes(host) ||
+      !version.startsWith(EVIDENCE_REFLECTION_VERSION + ":")
+    )
+      return []
+    const token = randomUUID()
+    const client = await this.pool.connect()
+    try {
+      await client.query("BEGIN")
+      await client.query("SET LOCAL statement_timeout='1000ms'")
+      const rows = await client.query<EpisodicEventRow>(
+        `
+        WITH eligible AS (
+          SELECT e.id FROM remem.session_events e
+          WHERE e.provider_id=$1 AND e.project_id=$2 AND e.host=$3
+            AND e.schema_version=1 AND e.origin=ANY($4::text[])
+            AND e.role IN ('user','tool') AND e.occurred_at >= now()-interval '24 hours'
+            AND e.occurred_at <= now()+interval '5 minutes'
+            AND e.extraction_version IS DISTINCT FROM $5
+            AND (e.extraction_claim_until IS NULL OR e.extraction_claim_until <= now())
+            AND NOT EXISTS (SELECT 1 FROM remem.candidate_lineage l
+              WHERE l.provider_id=$1 AND l.observation_ids @> ARRAY[e.id])
+            AND NOT EXISTS (SELECT 1 FROM remem.forget_tombstones t
+              WHERE t.provider_id=$1 AND t.project_id=$2 AND t.target_kind='evidence' AND t.target_id=e.evidence_id)
+          ORDER BY e.occurred_at,e.id LIMIT 8 FOR UPDATE OF e SKIP LOCKED
+        )
+        UPDATE remem.session_events e SET extraction_claim_token=$6,
+          extraction_claim_until=now()+interval '30 seconds',
+          extraction_attempts=LEAST(2147483647::bigint,e.extraction_attempts::bigint+1)::integer
+        FROM eligible WHERE e.id=eligible.id RETURNING e.*
+      `,
+        [this.id, context.projectId, host, origins, version, token],
+      )
+      signal?.throwIfAborted()
+      await client.query("COMMIT")
+      return rows.rows.map((row) => ({
+        envelope: {
+          ...episodicRowToEnvelope(row),
+          context: { ...context, projectId: row.project_id, sessionId: row.session_id },
+        },
+        token,
+      }))
+    } catch (error) {
+      await client.query("ROLLBACK")
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
+  async finishEvidenceExtraction(
+    claim: EvidenceExtractionClaim,
+    version: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    signal?.throwIfAborted()
+    if (
+      claim.envelope.providerId !== this.id ||
+      !version.startsWith(EVIDENCE_REFLECTION_VERSION + ":")
+    )
+      return false
+    const client = await this.pool.connect()
+    try {
+      await client.query("BEGIN")
+      await client.query("SET LOCAL statement_timeout='1000ms'")
+      const result = await client.query(
+        `UPDATE remem.session_events SET extraction_version=$6,
+        extraction_claim_token=NULL,extraction_claim_until=NULL,extracted_at=now()
+        WHERE provider_id=$1 AND project_id=$2 AND evidence_id=$3 AND content_hash=$4
+          AND extraction_claim_token=$5 AND extraction_claim_until>now()
+          AND NOT EXISTS (SELECT 1 FROM remem.forget_tombstones t
+            WHERE t.provider_id=$1 AND t.project_id=$2 AND t.target_kind='evidence' AND t.target_id=$3)`,
+        [
+          this.id,
+          claim.envelope.context.projectId,
+          claim.envelope.id,
+          claim.envelope.contentHash,
+          claim.token,
+          version,
+        ],
+      )
+      signal?.throwIfAborted()
+      await client.query("COMMIT")
+      return result.rowCount === 1
+    } catch (error) {
+      await client.query("ROLLBACK")
+      throw error
+    } finally {
+      client.release()
+    }
+  }
+
+  async reflectionStatus(
+    context: MemoryContext,
+  ): Promise<{ unprocessed: number; claimed: number }> {
+    if (!context.projectId) return { unprocessed: 0, claimed: 0 }
+    const result = await this.pool.query<{ unprocessed: number; claimed: number }>(
+      `SELECT
+      count(*) FILTER (WHERE extraction_version IS NULL)::int AS unprocessed,
+      count(*) FILTER (WHERE extraction_claim_until>now())::int AS claimed
+      FROM remem.session_events e WHERE provider_id=$1 AND project_id=$2 AND schema_version=1
+        AND occurred_at >= now()-interval '24 hours' AND role IN ('user','tool')
+        AND NOT EXISTS (SELECT 1 FROM remem.candidate_lineage l
+          WHERE l.provider_id=$1 AND l.observation_ids @> ARRAY[e.id])`,
+      [this.id, context.projectId],
+    )
+    return result.rows[0] ?? { unprocessed: 0, claimed: 0 }
   }
 
   async recoverLearningCandidates(
