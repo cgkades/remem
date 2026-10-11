@@ -24,6 +24,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   catalog aliases from losing their memory when full-prompt recall misses. Scope and supersession
   gates are retained; ranking reasons distinguish topic and full-text matches. Refs [#44](https://github.com/cgkades/remem/issues/44).
 
+- Episodic search now filters and limits matches before scoped neighbor lookup, preserving equal-time
+  ordering and budgets while avoiding a full-history window sort. No new index is required. Refs [#89](https://github.com/cgkades/remem/issues/89).
+
 - Generic retrieval uses a fixed eligibility policy boundary while retaining mandatory scope and
   supersession checks and existing explain reasons. Missing/failed applicability denies eligibility.
   Refs [#48](https://github.com/cgkades/remem/issues/48).
