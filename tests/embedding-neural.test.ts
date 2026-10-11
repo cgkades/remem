@@ -1,3 +1,4 @@
+import type { FeatureExtractionPipeline } from "../src/storage/embedding-neural.js"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import * as transformers from "@huggingface/transformers"
 import * as undici from "undici"
@@ -30,6 +31,10 @@ vi.mock("@huggingface/transformers", () => ({
   pipeline: vi.fn().mockResolvedValue(vi.fn().mockResolvedValue({ data: new Float32Array(384) })),
 }))
 
+const pipelineMock = vi.mocked(
+  transformers.pipeline as unknown as (...args: unknown[]) => Promise<FeatureExtractionPipeline>,
+)
+
 describe("createEmbeddingModel", () => {
   afterEach(() => {
     // fakeTransformersEnv is mutated in place by defaultLoadPipeline; reset it
@@ -39,7 +44,7 @@ describe("createEmbeddingModel", () => {
     delete fakeTransformersEnv.allowLocalModels
     delete fakeTransformersEnv.allowRemoteModels
     delete fakeTransformersEnv.cacheDir
-    vi.mocked(transformers.pipeline).mockClear()
+    pipelineMock.mockClear()
   })
 
   it("returns LocalHashEmbeddingModel for backend 'hash'", async () => {
@@ -108,7 +113,7 @@ describe("createEmbeddingModel", () => {
     // the mocked @huggingface/transformers module above, to confirm that
     // providing modelPath genuinely prevents any network fetch attempt —
     // not just that the string is forwarded.
-    vi.mocked(transformers.pipeline).mockImplementationOnce(() => {
+    pipelineMock.mockImplementationOnce(() => {
       expect(fakeTransformersEnv.localModelPath).toBe(
         new URL("./fixtures/embedding-assets", import.meta.url).pathname,
       )
@@ -128,7 +133,7 @@ describe("createEmbeddingModel", () => {
     const previousCacheDir = process.env.REMEM_TRANSFORMERS_CACHE_DIR
     process.env.REMEM_TRANSFORMERS_CACHE_DIR = ".cache/test-transformers"
     try {
-      vi.mocked(transformers.pipeline).mockImplementationOnce(() => {
+      pipelineMock.mockImplementationOnce(() => {
         expect(fakeTransformersEnv.cacheDir).toBe(".cache/test-transformers")
         expect(fakeTransformersEnv.allowLocalModels).toBe(false)
         return Promise.resolve(vi.fn().mockResolvedValue({ data: new Float32Array(384) })) as never
@@ -169,7 +174,7 @@ describe("createEmbeddingModel", () => {
     const started = new Promise<void>((resolve) => {
       entered = resolve
     })
-    vi.mocked(transformers.pipeline).mockImplementationOnce(async () => {
+    pipelineMock.mockImplementationOnce(async () => {
       seen.push({
         local: fakeTransformersEnv.localModelPath,
         allowLocal: fakeTransformersEnv.allowLocalModels,
@@ -184,7 +189,7 @@ describe("createEmbeddingModel", () => {
       modelPath: new URL("./fixtures/embedding-assets", import.meta.url).pathname,
     })
     await started
-    vi.mocked(transformers.pipeline).mockImplementationOnce(() => {
+    pipelineMock.mockImplementationOnce(() => {
       seen.push({
         local: fakeTransformersEnv.localModelPath,
         allowLocal: fakeTransformersEnv.allowLocalModels,
