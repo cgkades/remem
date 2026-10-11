@@ -17,6 +17,7 @@ const RELATED_PROMPT = "Let's continue the Phoenix database work. Then call memo
 const CORRECTION_PROMPT =
   "Correct the prior Phoenix answer: rollback plans are required. Call memory_submit_correction."
 const REVIEW_PROMPT = "Show the pending correction review status with memory_review_status."
+const EXPLAIN_PROMPT = "Explain the persisted project learning history with memory_explain."
 const CORRECTION_TEXT = "Rollback plans are required for Phoenix."
 const SENTINEL = "use logical replication"
 const repository = fileURLToPath(new URL("..", import.meta.url))
@@ -55,13 +56,19 @@ function startMockModelServer() {
         (message) =>
           message.role === "user" && JSON.stringify(message.content).includes(CORRECTION_PROMPT),
       )
+      const explainIndex = body.messages.findLastIndex(
+        (message) =>
+          message.role === "user" && JSON.stringify(message.content).includes(EXPLAIN_PROMPT),
+      )
       const name =
-        reviewIndex >= 0
-          ? "memory_review_status"
-          : correctionIndex >= 0
-            ? "memory_submit_correction"
-            : "memory_status"
-      const turnIndex = Math.max(reviewIndex, correctionIndex, 0)
+        explainIndex >= 0
+          ? "memory_explain"
+          : reviewIndex >= 0
+            ? "memory_review_status"
+            : correctionIndex >= 0
+              ? "memory_submit_correction"
+              : "memory_status"
+      const turnIndex = Math.max(reviewIndex, correctionIndex, explainIndex, 0)
       const hasToolResult = body.messages
         .slice(turnIndex + 1)
         .some((message) => message.role === "tool")
@@ -232,12 +239,13 @@ async function run() {
         "--no-themes",
         "--no-session",
         "--tools",
-        "memory_status,memory_submit_correction,memory_review_status",
+        "memory_status,memory_submit_correction,memory_review_status,memory_explain",
         "--no-builtin-tools",
         "-p",
         RELATED_PROMPT,
         CORRECTION_PROMPT,
         REVIEW_PROMPT,
+        EXPLAIN_PROMPT,
       ],
       {
         env: {
@@ -295,6 +303,11 @@ async function run() {
     const tools = mock.requests
       .flatMap((request) => request.messages.filter((message) => message.role === "tool"))
       .map((message) => JSON.parse(message.content))
+    const explanation = mock.requests
+      .flatMap((request) => request.messages)
+      .find((message) => message.role === "tool" && message.tool_call_id === "call_memory_explain")
+    if (!explanation || !Array.isArray(JSON.parse(explanation.content).learning))
+      throw new Error("native memory_explain did not return bounded learning diagnostics")
     const submitted = tools.find(
       (result) => typeof result?.id === "string" && typeof result?.state === "string",
     )

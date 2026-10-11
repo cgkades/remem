@@ -606,10 +606,11 @@ function registerTools(pi: ExtensionAPI, getState: () => PiSessionState | undefi
   pi.registerTool({
     name: "memory_explain",
     label: "Memory Explain",
-    description: "Explain the latest memory retrieval decision without exposing memory bodies.",
+    description:
+      "Explain the latest retrieval decision and bounded persisted project learning history without exposing memory bodies.",
     promptSnippet: "Explain Remem's latest memory retrieval decision",
     parameters: Type.Object({}),
-    execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
       const state = getState()
       if (!state) {
         return Promise.resolve({
@@ -618,10 +619,12 @@ function registerTools(pi: ExtensionAPI, getState: () => PiSessionState | undefi
         })
       }
       const trace = state.orchestrator.explain(ctx.sessionManager.getSessionId())
-      return Promise.resolve({
-        content: [{ type: "text", text: JSON.stringify(trace, null, 2) }],
-        details: {},
-      })
+      return reply(
+        JSON.stringify({
+          ...trace,
+          learning: await state.orchestrator.learning(contextFor(state, ctx), signal),
+        }),
+      )
     },
   })
 }

@@ -1,5 +1,7 @@
 # Durable ReMem progress checkpoint
 
+Continuation authorized after this recovery: new core issues #118–#125 are tracked in `plan/DEVELOPMENT-CHECKPOINT.md`; #118 implementation/verification is in draft PR #126. The empty-backlog statement below describes the prior completed checkpoint, not the new backlog. Refresh GitHub before resuming.
+
 Updated October 11, 2026. Branch: `main`. Verified implementation merge: `49e91facdd5446d7d2ec28694c601a6d8039e08b`.
 The containing commit is the current documentation checkpoint; refresh GitHub/git HEAD before resuming.
 This update changes documentation only. Accepted PR #117 head `0806bace6c318f90b396082f92e1e9c78e447023`

@@ -1,5 +1,7 @@
 # Current implementation status
 
+Continuation: remaining core work is tracked in issues #118–#125 and [the active development checkpoint](../plan/DEVELOPMENT-CHECKPOINT.md). The completed issue contracts below remain valid; they do not finish the broader product milestones. Persistent diagnostics in #118 are under implementation, not yet verified/merged.
+
 **CURRENT source snapshot: October 11, 2026, `main` at `49e91facdd5446d7d2ec28694c601a6d8039e08b`.**
 [Open-issue validation](open-issues-validation-2026-10-11.md) records the completed retrieval and
 embedding acceptance, measured neural/hash results, real PostgreSQL reindex recovery and native
