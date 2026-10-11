@@ -127,20 +127,43 @@ integration("fresh real-PostgreSQL retrieval validation", () => {
             nonTarget: found.filter((id) => !expected.includes(id)).length,
           })
           const durations = []
+          const baselineDurations = []
+          let beforeCandidates: string[] = []
+          let afterCandidates: string[] = []
+          const labels = (results: Awaited<ReturnType<typeof originalSearch>>) =>
+            results.map(
+              (result) => [...ids].find(([, id]) => id === result.record.id)?.[0] ?? "background",
+            )
           for (let repeat = 0; repeat < 10; repeat++) {
+            const beforeStart = performance.now()
+            beforeCandidates = labels(
+              await originalSearch({
+                query: item.prompt,
+                topics: baseline.plan.topics,
+                catalogOnly: false,
+                context,
+                limit: 5,
+                maxTokens: 1300,
+                reason: "baseline latency",
+                signal: new AbortController().signal,
+              }),
+            )
+            baselineDurations.push(performance.now() - beforeStart)
             const start = performance.now()
-            await originalSearch({
-              query: item.prompt,
-              topics: current.plan.topics,
-              catalogOnly: current.plan.matches.some(
-                (match) => current.plan.topics.includes(match.entry.title) && match.score >= 0.9,
-              ),
-              context,
-              limit: 5,
-              maxTokens: 1300,
-              reason: "latency benchmark",
-              signal: new AbortController().signal,
-            })
+            afterCandidates = labels(
+              await originalSearch({
+                query: item.prompt,
+                topics: current.plan.topics,
+                catalogOnly: current.plan.matches.some(
+                  (match) => current.plan.topics.includes(match.entry.title) && match.score >= 0.9,
+                ),
+                context,
+                limit: 5,
+                maxTokens: 1300,
+                reason: "latency benchmark",
+                signal: new AbortController().signal,
+              }),
+            )
             durations.push(performance.now() - start)
           }
           expect(after).not.toContain("foreign")
@@ -155,7 +178,30 @@ integration("fresh real-PostgreSQL retrieval validation", () => {
             current: metric(after),
             baselineIds: before,
             currentIds: after,
+            baselineCandidateP95Ms: percentile(baselineDurations),
             candidateP95Ms: percentile(durations),
+            candidateBaseline: {
+              ...metric(beforeCandidates),
+              mrr: expected.length
+                ? Math.max(
+                    0,
+                    ...expected.map((id) =>
+                      beforeCandidates.includes(id) ? 1 / (beforeCandidates.indexOf(id) + 1) : 0,
+                    ),
+                  )
+                : 0,
+            },
+            candidateCurrent: {
+              ...metric(afterCandidates),
+              mrr: expected.length
+                ? Math.max(
+                    0,
+                    ...expected.map((id) =>
+                      afterCandidates.includes(id) ? 1 / (afterCandidates.indexOf(id) + 1) : 0,
+                    ),
+                  )
+                : 0,
+            },
             baselineTokens: baseline.trace.catalogTokens + baseline.trace.recallTokens,
             currentTokens: current.trace.catalogTokens + current.trace.recallTokens,
             dispatchMs: current.trace.totalDurationMs,
@@ -165,6 +211,7 @@ integration("fresh real-PostgreSQL retrieval validation", () => {
           model: model.id,
           corpusRows: 5010,
           cases: rows,
+          baselineCandidateP95Ms: percentile(rows.map((row) => row.baselineCandidateP95Ms)),
           candidateP95Ms: percentile(rows.map((row) => row.candidateP95Ms)),
           dispatchP95Ms: percentile(rows.map((row) => row.dispatchMs)),
         })
@@ -181,6 +228,12 @@ integration("fresh real-PostgreSQL retrieval validation", () => {
       for (const report of reports) {
         process.stdout.write("retrieval-validation " + JSON.stringify(report) + "\n")
         expect(report.cases.filter((row) => row.current.falseInjection)).toHaveLength(0)
+        for (const row of report.cases.filter((row) => row.expected.length > 0)) {
+          expect(row.current.recall, `${report.model}/${row.id} relevant recall`).toBe(1)
+          expect(row.current.precision, `${report.model}/${row.id} recall excerpt precision`).toBe(
+            1,
+          )
+        }
         expect(
           report.cases.reduce((sum, row) => sum + row.current.nonTarget, 0),
         ).toBeLessThanOrEqual(report.cases.reduce((sum, row) => sum + row.baseline.nonTarget, 0))
