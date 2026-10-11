@@ -239,7 +239,46 @@ try {
     "SELECT DISTINCT session_id FROM remem.session_events WHERE evidence_id IS NOT NULL AND host='pi'",
   )
   assert.ok(sourceSessions.rowCount >= 6, "Fresh native sessions must have independent IDs")
+  // Independent recovery acceptance: native A retains proof with semantic
+  // capture disabled; fresh B enables the explicitly configured mode. No
+  // old callbacks, tool messages or transcript are delivered to B.
+  await pool.query("DROP SCHEMA IF EXISTS remem CASCADE")
+  await runMigrations(pool)
+  await rm(path.join(workspace, "aurora-checkpoint.txt"))
+  const recoveryConfig = JSON.parse(await readFile(configFile, "utf8"))
+  recoveryConfig.capture.enabled = false
+  await writeFile(configFile, JSON.stringify(recoveryConfig))
+  await session(firstPrompt)
+  assert.equal((await pool.query("SELECT id FROM remem.memories")).rowCount, 0)
+  assert.equal((await pool.query("SELECT id FROM remem.candidate_memories")).rowCount, 0)
+  assert.equal(
+    (await pool.query("SELECT id FROM remem.session_events WHERE schema_version=1")).rowCount,
+    4,
+  )
+  recoveryConfig.capture.enabled = true
+  await writeFile(configFile, JSON.stringify(recoveryConfig))
+  const recovered = await session(continuePrompt)
+  assert.ok(recovered.output.includes("Recall verified"))
+  assert.ok(!JSON.stringify(recovered.requests[0].messages).includes(firstPrompt))
+  assert.equal(recovered.requests[0].messages.filter((m) => m.role === "tool").length, 0)
+  const recoveredProcedure = await pool.query("SELECT type,content FROM remem.memories")
+  assert.equal(recoveredProcedure.rows.length, 1)
+  assert.equal(recoveredProcedure.rows[0].type, "procedure")
+  assert.ok(recoveredProcedure.rows[0].content.includes("identical native read"))
+  const recoveredAgain = await session(continuePrompt)
+  assert.ok(recoveredAgain.output.includes("Recall verified"))
+  assert.equal((await pool.query("SELECT id FROM remem.memories")).rowCount, 1)
   const report = {
+    retainedEvidenceRecovery: {
+      retainedSources: 4,
+      initialCandidates: 0,
+      initialSemanticMemories: 0,
+      recoveredSemanticMemories: 1,
+      duplicateSemanticMemories: 0,
+      transcriptSupplied: false,
+      freshSessionRecall: true,
+      processMs: recovered.ms,
+    },
     gate: "native-pi-automatic-learning",
     host: "pi@0.85.0",
     backend: "real PostgreSQL",

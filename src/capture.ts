@@ -17,6 +17,7 @@ import {
   type ResolvedTaskEpisode,
 } from "./procedure.js"
 import { containsSensitiveCredential } from "./sensitive-data.js"
+import { sourceIsSafe } from "./source-safety.js"
 import { withTimeout } from "./timeout.js"
 import type { MemoryContext, MemoryProvider, RememLogger } from "./types.js"
 
@@ -204,6 +205,7 @@ export class DeterministicCandidateExtractor implements CandidateExtractor {
   extract(observations: SessionObservation[], _signal?: AbortSignal): Promise<CandidateMemory[]> {
     const candidates: CandidateMemory[] = []
     for (const observation of observations) {
+      if (!sourceIsSafe(observation.payload)) continue
       const procedure = extractProcedureCandidate(observation, this.config)
       if (procedure) {
         candidates.push(procedure)

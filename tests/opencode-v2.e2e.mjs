@@ -1265,7 +1265,7 @@ async function main() {
         [learnedScope.rows[0].scope_id],
       )
       const requiredRefs = procedureRefs.rows.map((row) => `hooks-postgres:${row.evidence_id}`)
-      if (requiredRefs.length !== 8)
+      if (requiredRefs.length !== 4)
         throw new Error("investigation procedure source window changed")
       const qualityRuns = []
       const verifyAnswer = async (session, requests, elapsed) => {
@@ -1376,7 +1376,7 @@ async function main() {
         if (
           rows.rows.length !== 1 ||
           rows.rows[0].status !== "promoted" ||
-          rows.rows[0].observation_ids.length !== 8 ||
+          rows.rows[0].observation_ids.length !== 4 ||
           !rows.rows[0].content.includes(PROCEDURE_ACTION)
         )
           throw new Error(`native procedure contract changed: ${JSON.stringify(rows.rows)}`)
@@ -1419,7 +1419,7 @@ async function main() {
         JSON.stringify({
           gate: "host-verified-procedure",
           promotedCandidates: 1,
-          canonicalSources: 8,
+          canonicalSources: 4,
           automaticPromotions: 1,
           freshSessionRecall: true,
           rule: "native-shell-recovery-v1",

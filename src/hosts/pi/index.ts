@@ -351,6 +351,7 @@ async function buildSessionState(
           })
       },
     )
+    await evidence?.reflect(location)
     const evidenceAdapter =
       evidence && primaryPostgres
         ? new PiEvidenceAdapter(evidence, primaryPostgres.id, location)

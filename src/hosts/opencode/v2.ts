@@ -440,6 +440,7 @@ export const RememPlugin = Plugin.define({
           })
         },
       )
+      await evidence?.reflect(location)
       if (evidence) {
         const primary = parsed.config.providers.find(
           (provider) => provider.type === "postgres" && provider.primary,

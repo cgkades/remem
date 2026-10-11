@@ -9,6 +9,7 @@ import type {
 import { MemoryDiagnostics } from "./diagnostics.js"
 import { historicalRecall, type HistoricalRecallResult } from "./historical-recall.js"
 import { sourceIsSafe } from "./source-safety.js"
+import { isEvidenceReflectionStore, type EvidenceReflectionStore } from "./evidence-reflection.js"
 import {
   isLearningDiagnosticsStore,
   type LearningDiagnosticsStore,
@@ -535,6 +536,26 @@ export class RememOrchestrator {
       },
       budgets: this.config.budgets,
       candidates: candidates.filter((candidate) => candidate !== undefined),
+      reflection: await Promise.all(
+        this.providers
+          .filter((provider): provider is MemoryProvider & EvidenceReflectionStore =>
+            isEvidenceReflectionStore(provider),
+          )
+          .slice(0, 4)
+          .map(async (provider) => {
+            try {
+              return {
+                providerId: provider.id,
+                status: "available",
+                ...(await withTimeout(this.config.providerTimeoutMs, () =>
+                  provider.reflectionStatus(context),
+                )),
+              }
+            } catch {
+              return { providerId: provider.id, status: "unavailable" }
+            }
+          }),
+      ),
       learning: (await this.learning(context)).map(
         ({ providerId, status, entries, gaps, limited }) => ({
           providerId,

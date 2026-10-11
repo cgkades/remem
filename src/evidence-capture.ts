@@ -1,4 +1,10 @@
-import type { RememConfig } from "./config.js"
+import type { CaptureConfig, RememConfig } from "./config.js"
+import {
+  EVIDENCE_REFLECTION_VERSION,
+  isEvidenceReflectionStore,
+  extractRetainedCanonicalEvidence,
+} from "./evidence-reflection.js"
+import { LEARNING_POLICY_VERSION } from "./learning-policy.js"
 import {
   admitEvidence,
   type AdmissionAuthority,
@@ -6,9 +12,14 @@ import {
   type EvidenceEnvelope,
   type RawEvidenceCandidate,
 } from "./observation-admission.js"
-import { isCapacityStore, isEpisodicStore, type EpisodicStore } from "./observation.js"
+import {
+  isCapacityStore,
+  isEpisodicStore,
+  isObservationStore,
+  type EpisodicStore,
+} from "./observation.js"
 import { withTimeout } from "./timeout.js"
-import type { MemoryProvider, RememLogger } from "./types.js"
+import type { MemoryContext, MemoryProvider, RememLogger } from "./types.js"
 import { CaptureGapRecorder, isLearningDiagnosticsStore } from "./learning-diagnostics.js"
 
 /** Host-neutral evidence queue. Admission precedes all persistence and is
@@ -17,8 +28,12 @@ export class EvidenceCaptureCoordinator {
   private readonly queue: EvidenceEnvelope[] = []
   private draining: Promise<void> | undefined
   private closed = false
+  private disposing = false
   private readonly shutdown = new AbortController()
   private readonly gaps: CaptureGapRecorder | undefined
+  private reflectionPromise:
+    Promise<{ selected: number; processed: number; failed: number }> | undefined
+  private reflectionContext: MemoryContext | undefined
 
   constructor(
     private readonly store: EpisodicStore,
@@ -30,6 +45,7 @@ export class EvidenceCaptureCoordinator {
       envelope: EvidenceEnvelope,
       signal: AbortSignal,
     ) => void | Promise<void>,
+    private readonly reflectionConfig?: CaptureConfig,
   ) {
     this.gaps = isLearningDiagnosticsStore(store)
       ? new CaptureGapRecorder(
@@ -57,7 +73,7 @@ export class EvidenceCaptureCoordinator {
   }
 
   enqueue(candidate: RawEvidenceCandidate): string | undefined {
-    if (this.closed) return undefined
+    if (this.closed || this.disposing) return undefined
     const result = admitEvidence(candidate, this.authority, this.config)
     if (result.outcome !== "admitted") {
       if (result.outcome === "rejected") this.diagnostic(result.reason)
@@ -68,13 +84,93 @@ export class EvidenceCaptureCoordinator {
       return undefined
     }
     this.queue.push(result.envelope)
+    this.reflectionContext = result.envelope.context
     if (!this.draining) this.draining = this.drain()
     return result.envelope.id
   }
 
   async idle(): Promise<void> {
     await this.draining
+    await this.reflectionPromise
     await this.gaps?.idle()
+  }
+
+  reflect(
+    context: MemoryContext,
+    parentSignal?: AbortSignal,
+  ): Promise<{ selected: number; processed: number; failed: number }> {
+    parentSignal?.throwIfAborted()
+    if (this.reflectionPromise) return this.reflectionPromise
+    const store = this.store
+    const capture = this.reflectionConfig
+    if (
+      this.closed ||
+      !capture?.enabled ||
+      !this.config.enabled ||
+      !isEvidenceReflectionStore(store) ||
+      !isObservationStore(store)
+    )
+      return Promise.resolve({ selected: 0, processed: 0, failed: 0 })
+    this.reflectionContext = context
+    const version = `${EVIDENCE_REFLECTION_VERSION}:${LEARNING_POLICY_VERSION}:${capture.autoPromote ? "auto" : "review"}`
+    const report = { selected: 0, processed: 0, failed: 0 }
+    this.reflectionPromise = withTimeout(
+      Math.min(5000, Math.max(100, this.timeoutMs)),
+      async (signal) => {
+        await this.draining
+        signal.throwIfAborted()
+        const claims = await store.claimEvidenceExtraction(
+          context,
+          this.authority.host,
+          this.config.enabledOrigins,
+          version,
+          signal,
+        )
+        report.selected = claims.length
+        for (const claim of claims) {
+          signal.throwIfAborted()
+          const admitted = admitEvidence(claim.envelope, this.authority, this.config)
+          if (
+            admitted.outcome !== "admitted" ||
+            admitted.envelope.contentHash !== claim.envelope.contentHash
+          ) {
+            report.failed++
+            continue
+          }
+          try {
+            await extractRetainedCanonicalEvidence(
+              store as typeof store & MemoryProvider,
+              admitted.envelope,
+              capture,
+              signal,
+            )
+            if (await store.finishEvidenceExtraction(claim, version, signal)) report.processed++
+            else report.failed++
+          } catch (error) {
+            if (signal.aborted) throw error
+            report.failed++
+          }
+        }
+        return report
+      },
+      parentSignal ?? this.shutdown.signal,
+    )
+      .catch((error: unknown) => {
+        if (parentSignal?.aborted) throw error
+        report.failed++
+        return report
+      })
+      .finally(() => {
+        this.reflectionPromise = undefined
+        try {
+          void Promise.resolve(
+            this.logger.log("debug", "evidence.reflection", { ...report }),
+          ).catch(() => undefined)
+        } catch {
+          /* Diagnostics never block a host. */
+        }
+      })
+    return this.reflectionPromise
   }
 
   private async drain(): Promise<void> {
@@ -171,6 +267,14 @@ export class EvidenceCaptureCoordinator {
   }
 
   async dispose(): Promise<void> {
+    this.disposing = true
+    if (this.reflectionContext) {
+      try {
+        await this.reflect(this.reflectionContext)
+      } catch {
+        this.diagnostic("reflection-interrupted")
+      }
+    }
     this.closed = true
     try {
       await withTimeout(this.timeoutMs, () => this.idle())
@@ -217,5 +321,6 @@ export function createEvidenceCaptureCoordinator(
     config.providerTimeoutMs,
     logger,
     onPersisted,
+    config.capture,
   )
 }
