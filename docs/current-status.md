@@ -1,6 +1,6 @@
 # Current implementation status
 
-Continuation: remaining core work is tracked in issues #118–#125 and [the active development checkpoint](../plan/DEVELOPMENT-CHECKPOINT.md). The completed issue contracts below remain valid; they do not finish the broader product milestones. Persistent diagnostics #118, optional offline model proposals #119 and native Pi learning #120 are verified and merged in PR126/128/127. #121–#125 and #129 remain open. Model proposal acceptance is narrow quotation selection with explicit review, not generative answer-quality acceptance.
+Continuation: remaining core work is tracked in issues #118–#125 and [the active development checkpoint](../plan/DEVELOPMENT-CHECKPOINT.md). The completed issue contracts below remain valid; they do not finish the broader product milestones. Persistent diagnostics #118, optional offline model proposals #119 and native Pi learning #120 are verified and merged in PR126/128/127. #121/#122/#124/#125 and #129 remain open. Privacy/disclosure and explicit historical search #123 are verified in PR130. Model proposal acceptance is narrow quotation selection with explicit review, not generative answer-quality acceptance.
 
 **CURRENT source snapshot: October 11, 2026, `main` at `49e91facdd5446d7d2ec28694c601a6d8039e08b`.**
 [Open-issue validation](open-issues-validation-2026-10-11.md) records the completed retrieval and
