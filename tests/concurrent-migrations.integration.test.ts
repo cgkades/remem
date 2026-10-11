@@ -68,7 +68,7 @@ integration("resumable concurrent index migrations", () => {
         await pool.query<{ definition: string }>(
           "SELECT pg_get_indexdef('remem.fixture_order_idx'::regclass) AS definition",
         )
-      ).rows[0].definition,
+      ).rows[0]?.definition,
     ).toContain("(id)")
     await pool.query("DROP INDEX remem.fixture_order_idx")
     await runMigrations(pool, directory, { allowNonTransactional: true })
@@ -89,7 +89,8 @@ integration("resumable concurrent index migrations", () => {
     await pool.query("DROP TRIGGER fail_ledger ON remem.schema_migrations")
     const oid = (
       await pool.query<{ oid: number }>("SELECT 'remem.fixture_order_idx'::regclass::oid AS oid")
-    ).rows[0].oid
+    ).rows[0]?.oid
+    expect(oid).toBeDefined()
     expect(await migrationStatus(pool, directory)).toMatchObject({
       currentVersion: 1,
       unfinished: [2],
@@ -100,7 +101,7 @@ integration("resumable concurrent index migrations", () => {
     await runMigrations(pool, directory, { allowNonTransactional: true })
     expect(
       (await pool.query<{ oid: number }>("SELECT 'remem.fixture_order_idx'::regclass::oid AS oid"))
-        .rows[0].oid,
+        .rows[0]?.oid,
     ).toBe(oid)
   })
 
