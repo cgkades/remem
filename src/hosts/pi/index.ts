@@ -1,3 +1,9 @@
+import {
+  createEvidenceCaptureCoordinator,
+  type EvidenceCaptureCoordinator,
+} from "../../evidence-capture.js"
+import { verifiedProcedureFromEvidence } from "../../verified-procedure.js"
+import { PiEvidenceAdapter } from "./evidence.js"
 import { randomUUID } from "node:crypto"
 import type { ExtensionAPI, ExtensionContext, InputSource } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
@@ -44,6 +50,8 @@ interface PiSessionState {
   orchestrator: RememOrchestrator
   providers: MemoryProvider[]
   capture?: CaptureCoordinator | undefined
+  evidence?: EvidenceCaptureCoordinator | undefined
+  evidenceAdapter?: PiEvidenceAdapter | undefined
   primaryPostgres?: PostgresMemoryProvider | undefined
   lastReembedAttempt?: number | undefined
   /**
@@ -293,15 +301,60 @@ async function buildSessionState(
     const orchestrator = new RememOrchestrator(created.providers, parsed.config, logger, {
       embeddingModel,
       reviewQueue,
+      episodicRecall: parsed.config.evidenceAdmission.enabled,
     })
     const capture = createCaptureCoordinator(created.providers, parsed.config, logger)
     await capture?.recover(location)
+    const evidence = createEvidenceCaptureCoordinator(
+      created.providers,
+      parsed.config,
+      { host: "pi", projectId: location.projectId },
+      logger,
+      async (envelope, signal) => {
+        if (capture && envelope.role === "tool" && primaryPostgres?.id === envelope.providerId) {
+          const context = {
+            ...envelope.context,
+            directory: location.directory,
+            worktree: location.worktree,
+          }
+          const window = await primaryPostgres.readProcedureEvidenceWindow(
+            envelope.providerId,
+            envelope.id,
+            context,
+          )
+          signal.throwIfAborted()
+          const episode = verifiedProcedureFromEvidence(window, context)
+          if (episode) capture.enqueueResolvedTask(episode)
+        }
+        signal.throwIfAborted()
+        if (
+          envelope.role === "user" &&
+          envelope.origin === "direct-user" &&
+          envelope.context.sessionId &&
+          envelope.payload.text
+        )
+          capture?.enqueue({
+            host: "pi",
+            context: envelope.context,
+            sessionId: envelope.context.sessionId,
+            ...(envelope.messageId ? { messageId: envelope.messageId } : {}),
+            text: envelope.payload.text,
+            evidenceRefs: [{ providerId: envelope.providerId, eventId: envelope.id }],
+          })
+      },
+    )
+    const evidenceAdapter =
+      evidence && primaryPostgres
+        ? new PiEvidenceAdapter(evidence, primaryPostgres.id, location)
+        : undefined
     return {
       location,
       config: parsed.config,
       orchestrator,
       providers: created.providers,
       capture,
+      evidence,
+      evidenceAdapter,
       primaryPostgres,
       dispatchCount: 0,
       statusUI,
@@ -318,7 +371,10 @@ async function teardownSessionState(state: PiSessionState | undefined): Promise<
   if (!state) return
   state.statusAbort?.abort()
   state.clearStatus?.()
-  await Promise.allSettled([state.capture?.dispose(), disposeProviders(state.providers)])
+  state.evidenceAdapter?.dispose()
+  await state.evidence?.dispose()
+  await state.capture?.dispose()
+  await disposeProviders(state.providers)
 }
 
 // Advisory UI only: no raw provider IDs, prompts, bodies or diagnostics are rendered.
@@ -693,7 +749,8 @@ export default function remem(pi: ExtensionAPI): void {
   pi.on("input", (event, ctx) => {
     if (!state) return
     const sessionId = ctx.sessionManager.getSessionId()
-    if (isCaptureEligibleInputSource(event.source)) {
+    state.evidenceAdapter?.input(event.text, event.source)
+    if (!state.evidenceAdapter && isCaptureEligibleInputSource(event.source)) {
       try {
         state.capture?.enqueue({
           host: "pi",
@@ -723,6 +780,44 @@ export default function remem(pi: ExtensionAPI): void {
       })
     }
   })
+
+  const evidenceEvent = (
+    fn: (adapter: PiEvidenceAdapter, ctx: ExtensionContext) => void,
+    ctx: ExtensionContext,
+  ) => {
+    if (!state?.evidenceAdapter) return
+    try {
+      fn(state.evidenceAdapter, ctx)
+    } catch {
+      safeLoggerCall(logger, "warn", "evidence.adapter_failed", { host: "pi", count: 1 })
+    }
+  }
+  pi.on("turn_start", (_event, ctx) => evidenceEvent((adapter) => adapter.turnStarted(), ctx))
+  pi.on("message_end", (event, ctx) =>
+    evidenceEvent(
+      (adapter) => adapter.messageEnded(event.message, ctx.sessionManager.getSessionId()),
+      ctx,
+    ),
+  )
+  pi.on("tool_execution_start", (event, ctx) =>
+    evidenceEvent(
+      (adapter) => adapter.toolStarted(event.toolCallId, event.toolName, event.args),
+      ctx,
+    ),
+  )
+  pi.on("tool_execution_end", (event, ctx) =>
+    evidenceEvent(
+      (adapter) =>
+        adapter.toolEnded(
+          event.toolCallId,
+          event.toolName,
+          event.result,
+          event.isError,
+          ctx.sessionManager.getSessionId(),
+        ),
+      ctx,
+    ),
+  )
 
   pi.on("session_before_tree", async (event, ctx) => {
     if (!state || !state.config.compaction || !event.preparation.userWantsSummary) return

@@ -203,7 +203,7 @@ integration("host verified procedure learning", () => {
       {
         status: "pending",
         policy_outcome: "require-review",
-        policy_version: "scoped-evidence-learning-v1",
+        policy_version: "scoped-evidence-learning-v2",
       },
     ])
   })
