@@ -1,5 +1,7 @@
 # October 10 recovery validation
 
+Historical snapshot: #44 and #45 were subsequently resolved on October 11 by verified PRs #116/#117. See [the newer acceptance report](open-issues-validation-2026-10-11.md) and [current checkpoint](../plan/RECOVERY-CHECKPOINT.md); the remaining-work statements below describe the earlier checkpoint.
+
 GitHub persisted state replaced the failed Work session's assumptions. Main was refreshed at
 `da886e1728e9b0f52397d0b2ca2028de4beb0bad`. Recovered #113 and #114 were inspected against
 source, diffs, divergence, review timelines, CI failures and downloaded benchmark artifacts before

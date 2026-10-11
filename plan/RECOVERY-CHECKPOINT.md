@@ -1,75 +1,72 @@
-# ReMem recovery checkpoint — October 10, 2026
+# Durable ReMem progress checkpoint
 
-GitHub is authoritative. Refresh main, PR heads, issues and CI before resuming. The containing
-commit identifies this checkpoint's exact branch/commit; do not trust an earlier Work session.
+Updated October 11, 2026. Branch: `main`. Verified implementation merge: `49e91facdd5446d7d2ec28694c601a6d8039e08b`.
+The containing commit is the current documentation checkpoint; refresh GitHub/git HEAD before resuming.
+This update changes documentation only. Accepted PR #117 head `0806bace6c318f90b396082f92e1e9c78e447023`
+has the same implementation as final measured source `4bc3510ab9e273e091c391618ac96d6db0787341`.
 
 ## Completed work
 
-- Audited refreshed main `da886e1728e9b0f52397d0b2ca2028de4beb0bad`, all PRs/issues/branches,
-  architecture/ADRs, harnesses, reviews, CI and downloaded benchmark artifacts. Surviving old
-  checkout had no uncommitted changes. #46 is already merged; no duplicate was built.
-- #113 merged as `68f20eb7eb4f4d2c3d8b26da2528ebc9bbd47911`; #89 closed. Run 38097076698
-  passed all eight jobs. Sparse p95 147.66→3.27 ms at 50k synthetic scoped events, with identity
-  equivalence and no new index. Full plans: `docs/evidence/episodic-query-ci-37989515031.zip`.
-- #114 merged as `ffaadb70aebecb07c6009287a06a2b904c629450`, current main at integration.
-  Run 38097702520 passed all nine jobs. A high topic score hid a per-case Kafka regression;
-  the bounded .50 fallback/per-case gate preserves baseline successes. Direct recall@5 .90→1.00,
-  MRR .85→.95, injection .80→.90, precision .6233→.5900, unrelated injection 0/4. RRF ties
-  baseline. Report: `docs/evidence/hybrid-quality-ci-38097518316.json`; no neural dependency added.
-- Native v2 five-session learning gate passed without old transcripts/memory commands: required
-  recall 1.0, correct procedure/provenance, unsupported/false injection 0. Durable evidence:
-  `docs/evidence/recovery-native-learning-38097702520.json`. Root cause is original-user
-  authority; native tools verify only missing-file check/create/recheck.
+| Work                                                                | Persisted completion                                         | Evidence                                                                                                                                                                    |
+| ------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| #113 / #89: episodic search-first optimization                      | Merge `68f20eb7eb4f4d2c3d8b26da2528ebc9bbd47911`; #89 closed | 5k/50k query identity checks, plans/buffers, latency and index-cost report; `docs/episodic-query-performance.md` and retained ZIP                                           |
+| #114: hybrid candidate quality baseline and bounded topic fallback  | Merge `ffaadb70aebecb07c6009287a06a2b904c629450`             | Real PostgreSQL before/after, per-case non-regression, RRF comparison; `docs/hybrid-retrieval-quality.md`                                                                   |
+| #115 / #87: resumable opt-in concurrent index migrations            | Merge `2585bdd98b6d3539f60492e589ac8417d1add59b`; #87 closed | Real ownership/checksum/invalid-index/ledger-failure/termination tests; nonblocking advisory probes fix measured deadlock                                                   |
+| #116 / #44: exact-ID recognition and explicit automatic selection   | Merge `1b74daf2a4bbbdca6b5f91133116534a8f613ec0`; #44 closed | Fresh 12-case 5,010-row hash/real-neural comparison and preserved baseline successes; `docs/retrieval-quality-completion.md`                                                |
+| #117 / #45: embedding fingerprints and full-coverage staged reindex | Merge `49e91facdd5446d7d2ec28694c601a6d8039e08b`; #45 closed | Seven real PG cutover/recovery cases, paired encoder/fallback/offline digest controls, required actual-neural and native gates; `docs/open-issues-validation-2026-10-11.md` |
 
-## Completed integrated verification
+#46 was an already-merged PR, not an unfinished issue. GitHub's open issue/PR lists were refreshed;
+no currently open issues or PRs remain after these verified merges. Historical branch checkpoints
+preserve intermediate failures/decisions; this file is the current handoff.
 
-#115 merged as `2585bdd98b6d3539f60492e589ac8417d1add59b`; #87 is closed. Main's tree
-was verified identical to accepted source head `ef545b6af3cc3eb46c376e4dae87b8bbdc6c82f5`.
-Run 38098052171 passed all nine jobs. Node 22/24 each passed 757 tests in 56 files with
-real PostgreSQL and no skips, including six migration interruption/concurrency/lock regressions.
-Native OpenCode v1/v2, Pi, package checks, both benchmarks and neural evaluation passed.
+## Completed verification
 
-Native v2 again passed five fresh sessions without prior transcript/memory commands: recall 1.0,
-correct procedure/provenance, unsupported/false injection 0, 4201-byte max context, observed
-host dispatch p95 89.19 ms. Evidence: `docs/evidence/recovery-native-learning-38098052171.json`.
-These are deterministic fixture results, not model inference or production latency promises.
+- Accepted source run 38100705774 and final documentation run 38100944479 each pass all nine jobs.
+  Node 22/24 each pass 774 tests in 59 files with real PostgreSQL, zero skipped. Format/lint/types,
+  build, package dry-run/smoke, episodic plans, hybrid regression, native OpenCode v1.18.27/v1.18.29/package,
+  v2 beta, Pi adapter and Pi Docker gates pass.
+- Required actual-neural artifact inspected:7 passed, zero failed/pending. A prior startup fallback
+  correctly failed the required gate; its cause was not established. Added redacted diagnostics and
+  serialized shared-cache evaluation; no fallback/skipped run is substituted for neural acceptance.
+- Fingerprinted 5k hash/neural fixture: every baseline success preserved, expected automatic recall
+  and precision 1.0, negative injection 0/4, neural unwanted excerpts 31→0. Existing 14-case regression
+  unwanted excerpts 8→3 and relevant injection .90→1.00. Timing varies; no consistent speedup/SLO claim.
+- Five fresh native v2 sessions again receive no prior transcript or manual memory commands:
+  recall 1.0, correct answer/procedure/provenance, unsupported assertions and false injection 0,
+  maximum 4,201-byte recall context. Deterministic context-reader/host-evidence proof, not generative
+  causal inference. Source, numeric results and limits are permanently retained in
+  `docs/evidence/open-issues-validation-38100705774.json`.
+- Consecutive/concurrent neural loads serialize and restore shared loader settings; remote loads
+  reject unidentified local assets and preserve external remote-download prohibitions.
+- Same-label/dimension mismatch cannot enter returned similarity candidates. Unknown legacy vectors
+  remain lexical. Both vector surfaces stage and promote atomically only at full retained-source
+  coverage; expired claims, source drift, cancellation, inference/SQL/cutover failure and retry are tested.
 
-#87 includes literal-true operator opt-in, immutable single-index statements, checksum/ownership
-receipts, invalid-index retry, completed-build reuse, atomic ledger finalization, bounded waits
-and doctor/operator diagnostics. The measured virtual-transaction deadlock was fixed using
-nonblocking lock probes. No pending implementation verification or recovery blocker remains for
-#113/#114/#115. Initial failures were inspected and fixed, never bypassed.
+## Pending verification and blockers
 
-This final checkpoint is a documentation-only update on `main`, based on verified merge commit
-`2585bdd98b6d3539f60492e589ac8417d1add59b`. Its containing commit is the current checkpoint
-commit; resolve actual HEAD with GitHub/git before further work. Local final documentation
-formatting checks pass; code is unchanged from the fully verified source above. Historical branch
-`feat/resumable-concurrent-index` contains the accepted implementation and checkpoints.
+None for the closed issue acceptance contracts. Existing installations still need standard migration 0015
+and `remem reembed` until `coverage.cutover` is completed; settings or batch completion alone is not
+compatible corpus coverage. No user production database or npm registry was modified.
 
-## Next work and remaining issues
+Local database tests skip because the container only maps root and cannot safely run PostgreSQL.
+Acceptance uses the unskipped disposable CI evidence. The inherited proxy environment makes two
+local proxy tests order-dependent; all the same tests pass when those ambient variables are removed.
+All inspected implementation failures were resolved; gates were not bypassed.
 
-- #44 remains open: exact-timezone automatic recognition miss, non-target selection quality,
-  independent untouched validation data and broader neural/production-size evidence. The
-  benchmark cases already reviewed/tuned are regression data, not blind validation.
-- #45 remains open/unimplemented: complete immutable embedding-space fingerprints and staged
-  reindex/cutover recovery. Reuse existing model/dimension matching and durable claims. Design
-  the compatibility contract and test mismatch/query-document asymmetry/fallback/interruption
-  against PostgreSQL before introducing a cutover or declaring reindex completion.
-- General model-inferred causal learning and generative answer quality remain undeveloped or
-  unmeasured. No configured generative model was tested. Original-user assertions and a
-  deterministic context reader are not independent causal verification.
-- Next agent should refresh GitHub, read current architecture/ADRs and these preserved evidence
-  reports, then select a bounded #44 or #45 acceptance gap. Do not duplicate the three merged PRs.
+## Next actions and supported limits
 
-Local checks use matching lockfile dependencies. Initial proxy-environment tests failed on existing
-shared-state assumptions; with proxy variables unset, local checks pass (605 tests / 152 database
-skips on the combined source). PostgreSQL cannot run safely locally with only a mapped root UID;
-acceptance uses the unskipped disposable CI counts, not local skips.
+1. Refresh GitHub state, read current architecture/ADRs and the preserved evidence before new work.
+   Do not duplicate the five merged PRs or infer unpersisted state from this Work session.
+2. Choose a new bounded product requirement if development continues: general model-inferred learning,
+   broader host evidence/Pi parity, persisted learning diagnostics or catalog evolution. These are
+   beyond the completed issue contracts and remain incomplete/unmeasured.
+3. Preserve capture/admission defaults and authority boundaries. Keep 384-dimensional compatibility,
+   explicitly version changed embedding algorithms/assets and use consistent intended worker configuration.
+   Old differently configured processes become lexical-only after cutover; historical stages can use disk.
+4. Treat warm fixture latency/precision as measured samples, not production guarantees or blind
+   generalization. Evidence can expire/compact; callbacks lost before persistence lack a durable outbox;
+   content filters are conservative protections rather than arbitrary poisoning resistance.
 
-## Constraints and persistent limits
-
-No force push, failing-gate bypass, capture-default change, security weakening or npm publication.
-Existing numbered SQL/default transactions remain unchanged; no production index was added.
-Migration 0008's stored-column rewrite still needs maintenance. Evidence can compact/expire;
-callbacks lost before persistence lack a durable outbox. This verifies supported deterministic
-slices, not production SLOs, arbitrary poisoning resistance or the broader product milestone.
+No force push, failing-test bypass, capture-default change, security weakening or npm publication.
+Applied SQL history remains immutable. Concurrent index work does not remove migration 0008's
+maintenance requirement; no unmeasured production index was added.

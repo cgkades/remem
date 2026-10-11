@@ -23,4 +23,8 @@ Current branch: `fix/retrieval-recognition`; current commit is the containing co
 
 ## Retrieval acceptance evidence
 
-Run 38099164079: fresh real PostgreSQL hash/neural comparison measures candidates and automatic selections, counts background distractors, preserves every baseline success and rejects all four negative prompts. Hash automatic recall .75→1; neural .50→1, unwanted neural selections31→0. Existing 14-case regression automatic recall1.0, non-target3 (previous8). Exact timezone ID fixed. Numerical evidence and actual limits in docs/retrieval-quality-completion.md. Latest source commit is recorded in the evidence file; this commit adds documentation only. Await all nine job conclusions and then merge #116; #45 remains underway separately in #117.
+Run 38099164079: fresh real PostgreSQL hash/neural comparison measures candidates and automatic selections, counts background distractors, preserves every baseline success and rejects all four negative prompts. Hash automatic recall .75→1; neural .50→1, unwanted neural selections31→0. Existing 14-case regression automatic recall 1.0, non-target3 (previous8). Exact timezone ID fixed. Numerical evidence and actual limits in docs/retrieval-quality-completion.md. Latest source commit is recorded in the evidence file; this commit adds documentation only. Await all nine job conclusions and then merge #116; #45 remains underway separately in #117.
+
+## Final disposition (October 11)
+
+#116 merged as `1b74daf2a4bbbdca6b5f91133116534a8f613ec0`; #44 closed. #117 merged as `49e91facdd5446d7d2ec28694c601a6d8039e08b`; #45 closed. All 774 tests with real PostgreSQL and all nine combined/final jobs passed. The live issue/PR lists are empty; no acceptance verification remains pending. Current authoritative handoff: `plan/RECOVERY-CHECKPOINT.md`. Earlier pending sections above are historical.

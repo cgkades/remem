@@ -1,9 +1,11 @@
 # Current implementation status
 
-**CURRENT source snapshot: October 10, 2026, `main` at `2585bdd98b6d3539f60492e589ac8417d1add59b`.**
-The [October recovery validation](recovery-validation-2026-10-10.md) records newer query/ranking,
-native fresh-session and migration evidence. #115 is merged, #87 is closed, and the integrated source passed all nine jobs in run 38098052171.
-The final recovery checkpoint records current commit/next work.
+**CURRENT source snapshot: October 11, 2026, `main` at `49e91facdd5446d7d2ec28694c601a6d8039e08b`.**
+[Open-issue validation](open-issues-validation-2026-10-11.md) records the completed retrieval and
+embedding acceptance, measured neural/hash results, real PostgreSQL reindex recovery and native
+fresh-session evidence. #113–#117 are merged; #89, #87, #44 and #45 are closed. All nine final jobs pass,
+including 774 tests with PostgreSQL with no skips and the required actual-neural evaluation.
+The [durable checkpoint](../plan/RECOVERY-CHECKPOINT.md) records current commit and next work.
 This describes verified behavior, not completion of every target milestone. Follow
 [PRODUCT-VISION](PRODUCT-VISION.md), [TARGET-ARCHITECTURE](TARGET-ARCHITECTURE.md) and accepted ADRs
 for intended behavior. Follow live [issues](https://github.com/cgkades/remem/issues) for remaining
@@ -33,7 +35,7 @@ README is dated, and newly merged source is not automatically a new npm release.
 
 ## Verified gates
 
-[PR #105](https://github.com/cgkades/remem/pull/105), including merged policy
+The original policy/recovery gate was [PR #105](https://github.com/cgkades/remem/pull/105), including merged policy
 [#104](https://github.com/cgkades/remem/pull/104) and recovery
 [#106](https://github.com/cgkades/remem/pull/106), passed all seven CI jobs at head
 `33205371b45cb9abbd24f9d333ec30c59b0a415e`
@@ -41,6 +43,8 @@ README is dated, and newly merged source is not automatically a new npm release.
 passed 717 tests in 52 files with PostgreSQL, none skipped, plus format/lint/type/build/package
 checks. Native OpenCode v1/v2, Pi and separate neural evaluation jobs passed. A local run without
 PostgreSQL passed 581 tests and skipped 136; skipped tests are not completion evidence.
+
+The final October 11 run38100705774 revalidates 774 PostgreSQL tests with no skips and the native measurement below. The original callback timing remains a separately measured historical fixture.
 
 The installed-package native v2 investigation contains an incorrect hypothesis, ineffective
 troubleshooting, a tool-verified presence-check recovery, an original-user causal conclusion and
@@ -55,7 +59,7 @@ superseded record is only a negative control. See [acceptance specification](inv
 | Procedure / provenance                   | Correct / correct, eight canonical procedure sources | Complete check/action/recheck and source links                                                             |
 | Unsupported assertions / false injection | 0 / 0                                                | Fixture controls include obsolete, secret, poisoned, unrelated and foreign-project content                 |
 | Maximum recalled context                 | 4,201 UTF-8 bytes                                    | Conservative token upper bound, not tokenizer output; excludes global recognition catalog hints            |
-| Fresh dispatch p95                       | 65.19 ms                                             | Five host prompt-to-response samples, including retrieval and mock dispatch; not isolated database latency |
+| Fresh dispatch p95                       | 66.73 ms                                             | Five host prompt-to-response samples, including retrieval and mock dispatch; not isolated database latency |
 | Capture callback p95                     | 17.90 ms                                             | Ten PostgreSQL callback samples on Node 24, separate fixture                                               |
 | Interrupted promotion                    | Recovery and concurrent replay tests pass            | Scoped approved learning resumes without manual approval or callback replay                                |
 
@@ -73,7 +77,13 @@ Changing defaults or broadening observed sources requires a reviewed disclosure/
 design, preserving existing opt-outs.
 
 Remaining work includes broader host-supported outcomes, Pi evidence parity, persisted learning
-diagnostics, shared guidance for bounded historical search, embedding identity completion (#45),
-measured hybrid retrieval improvements (#44), and catalog/current-state evolution. The complete
-product milestone stays open for those broader criteria. Optional model-quality evaluation requires
+diagnostics, shared guidance for bounded historical search, catalog/current-state evolution and broader real-user retrieval quality. Embedding identity and
+measured hybrid retrieval acceptance (#45/#44) are complete; no currently open GitHub issues remain.
+The broader product vision still requires the capabilities above. Optional model-quality evaluation requires
 a selected configured model and must be reported separately from these deterministic gates.
+
+Embedding compatibility is now an explicit paired-space fingerprint contract, with lexical-only
+unknown legacy vectors, provider-isolated stages and full-coverage atomic cutover. See
+[operator recovery](embedding-compatibility.md) and [ADR 0019](adr/0019-embedding-space-and-staged-cutover.md).
+Persisted settings and batch completion do not prove compatible generation coverage. All existing
+capture/privacy/authority defaults remain unchanged; no npm release was published.
