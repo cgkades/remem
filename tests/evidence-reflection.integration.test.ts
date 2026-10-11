@@ -227,18 +227,12 @@ integration("bounded retained evidence reflection", () => {
       (await coordinator({ host: "pi", projectId: piContext.projectId }).reflect(piContext))
         .processed,
     ).toBe(4)
-    expect(
-      (
-        await pool.query<{ type: string; content: string }>(
-          "SELECT type,content FROM remem.memories",
-        )
-      ).rows,
-    ).toEqual([
-      expect.objectContaining({
-        type: "procedure",
-        content: expect.stringContaining("identical native read"),
-      }),
-    ])
+    const memories = await pool.query<{ type: string; content: string }>(
+      "SELECT type,content FROM remem.memories",
+    )
+    expect(memories.rows).toHaveLength(1)
+    expect(memories.rows[0]?.type).toBe("procedure")
+    expect(memories.rows[0]?.content).toContain("identical native read")
     expect(
       (await coordinator({ host: "pi", projectId: piContext.projectId }).reflect(piContext))
         .selected,
