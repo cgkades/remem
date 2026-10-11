@@ -1,3 +1,4 @@
+import { embedQuery, embedDocument, modelFingerprint } from "../storage/embedding-space.js"
 import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import { episodeResults } from "../episodic-recall.js"
@@ -615,7 +616,7 @@ export class PostgresMemoryProvider
     // for lexical/keyword catalog matching without it.
     let embedding: number[] | undefined
     try {
-      embedding = await this.embeddingModel.embed(summary)
+      embedding = await embedDocument(this.embeddingModel, summary)
     } catch {
       // Fall through with no embedding.
     }
@@ -626,7 +627,9 @@ export class PostgresMemoryProvider
       categories: ["decisions", "preferences", "procedures", "incidents", "tasks", "history"],
       aliases: ["local memory", "managed memory", "prior work"],
       scopeKinds: ["global", "workspace", "project", "session"],
-      ...(embedding ? { embedding } : {}),
+      ...(embedding
+        ? { embedding, embeddingFingerprint: modelFingerprint(this.embeddingModel) }
+        : {}),
     }
   }
 
@@ -638,7 +641,7 @@ export class PostgresMemoryProvider
           ce.scope_kind, ce.scope_id, ce.unresolved, ce.source,
           m.metadata->'institutional' AS institutional,
           CASE WHEN m.freshness = 'stale' THEN ce.importance * 0.5 ELSE ce.importance END AS importance,
-          CASE WHEN ce.embedding_model = $6 AND ce.embedding_dimensions = $7
+          CASE WHEN ce.embedding_model = $6 AND ce.embedding_dimensions = $7 AND ce.embedding_fingerprint = $8
             THEN ce.embedding::text ELSE NULL END AS embedding
         FROM remem.catalog_entries ce
         LEFT JOIN remem.memories m ON m.id = ce.memory_id
@@ -659,6 +662,7 @@ export class PostgresMemoryProvider
         this.config.catalogLimit,
         this.embeddingModel.id,
         this.embeddingModel.dimensions,
+        modelFingerprint(this.embeddingModel) ?? null,
       ],
     )
     signal.throwIfAborted()
@@ -678,7 +682,12 @@ export class PostgresMemoryProvider
           unresolved: row.unresolved,
           ...(row.source ? { source: row.source } : {}),
           ...(row.parent_id ? { parentId: row.parent_id } : {}),
-          ...(row.embedding ? { embedding: parseVector(row.embedding) } : {}),
+          ...(row.embedding
+            ? {
+                embedding: parseVector(row.embedding),
+                embeddingFingerprint: modelFingerprint(this.embeddingModel),
+              }
+            : {}),
           ...(institutional ? { institutional } : {}),
         },
       ]
@@ -696,7 +705,9 @@ export class PostgresMemoryProvider
     request.signal.throwIfAborted()
     let embedding: string | null = null
     try {
-      embedding = vectorLiteral(await this.embeddingModel.embed(request.query, request.signal))
+      embedding = vectorLiteral(
+        await embedQuery(this.embeddingModel, request.query, request.signal),
+      )
     } catch {
       request.signal.throwIfAborted()
     }
@@ -734,7 +745,7 @@ export class PostgresMemoryProvider
           JOIN remem.memories m ON m.id = me.memory_id
           CROSS JOIN settings
           WHERE $6::vector IS NOT NULL
-          AND me.model = $10 AND me.dimensions = $11
+          AND me.model = $10 AND me.dimensions = $11 AND me.fingerprint = $15
           AND m.provider_id = $1 AND (
             m.scope_kind = 'global' OR
             (m.scope_kind = 'workspace' AND m.scope_id = $2) OR
@@ -819,6 +830,7 @@ export class PostgresMemoryProvider
         perResultCharacters,
         Math.max(32, request.limit * 4),
         request.topics.filter((topic) => typeof topic === "string").slice(0, 8),
+        modelFingerprint(this.embeddingModel) ?? null,
       ],
     )
     request.signal.throwIfAborted()
@@ -989,6 +1001,7 @@ export class PostgresMemoryProvider
            source = CASE WHEN replacement.source = $3 THEN $4 ELSE replacement.source END,
            embedding_model = replacement.embedding_model,
            embedding_dimensions = replacement.embedding_dimensions,
+           embedding_fingerprint = replacement.embedding_fingerprint,
            embedding = replacement.embedding,
            updated_at = now()
          FROM remem.catalog_entries replacement
@@ -3364,16 +3377,20 @@ export class PostgresMemoryProvider
     }
   }
 
-  async reembedStale(batchSize = 25) {
+  async reembedStale(batchSize = 25, signal?: AbortSignal) {
+    const fingerprint = modelFingerprint(this.embeddingModel)
+    if (!fingerprint) throw new TypeError("reindex requires a canonical embedding space identity")
     return new PostgresReembedRunner(
       this.pool,
-      (text, signal) => this.embeddingModel.embed(text, signal),
+      (text, signal) => embedDocument(this.embeddingModel, text, signal),
       {
+        providerId: this.id,
+        fingerprint,
         modelId: this.embeddingModel.id,
         dimensions: this.embeddingModel.dimensions,
         batchSize,
       },
-    ).run()
+    ).run(signal)
   }
 
   async health(): Promise<ProviderHealth> {
@@ -3416,10 +3433,14 @@ export class PostgresMemoryProvider
   private async recordEmbeddingSettings(): Promise<void> {
     try {
       await this.pool.query(
-        `INSERT INTO remem.embedding_settings (id, model, dimensions, updated_at)
-         VALUES (true, $1, $2, now())
-         ON CONFLICT (id) DO UPDATE SET model = $1, dimensions = $2, updated_at = now()`,
-        [this.embeddingModel.id, this.embeddingModel.dimensions],
+        `INSERT INTO remem.embedding_settings (id, model, dimensions, fingerprint, updated_at)
+         VALUES (true, $1, $2, $3, now())
+         ON CONFLICT (id) DO UPDATE SET model = $1, dimensions = $2, fingerprint = $3, updated_at = now()`,
+        [
+          this.embeddingModel.id,
+          this.embeddingModel.dimensions,
+          modelFingerprint(this.embeddingModel) ?? null,
+        ],
       )
     } catch {
       // Auxiliary bookkeeping only; a failure here must never affect
@@ -3543,19 +3564,30 @@ export class PostgresMemoryProvider
     let catalogEmbedding: number[] | undefined
     try {
       const embedding =
-        memory.embedding ??
-        (await this.embeddingModel.embed(
+        (memory.embeddingFingerprint &&
+        memory.embeddingFingerprint === modelFingerprint(this.embeddingModel)
+          ? memory.embedding
+          : undefined) ??
+        (await embedDocument(
+          this.embeddingModel,
           [memory.title, memory.summary, memory.content, aliases.join(" "), tags.join(" ")]
             .filter(Boolean)
             .join("\n"),
           options.signal,
         ))
       await client.query(
-        `INSERT INTO remem.memory_embeddings (memory_id, model, dimensions, embedding)
-         VALUES ($1, $2, $3, $4::vector)`,
-        [id, this.embeddingModel.id, this.embeddingModel.dimensions, vectorLiteral(embedding)],
+        `INSERT INTO remem.memory_embeddings (memory_id, model, dimensions, embedding, fingerprint)
+         VALUES ($1, $2, $3, $4::vector, $5)`,
+        [
+          id,
+          this.embeddingModel.id,
+          this.embeddingModel.dimensions,
+          vectorLiteral(embedding),
+          modelFingerprint(this.embeddingModel) ?? null,
+        ],
       )
-      catalogEmbedding = await this.embeddingModel.embed(
+      catalogEmbedding = await embedDocument(
+        this.embeddingModel,
         [memory.title, memory.summary, aliases.join(" "), tags.join(" ")]
           .filter(Boolean)
           .join("\n"),
@@ -3568,8 +3600,8 @@ export class PostgresMemoryProvider
     await client.query(
       `INSERT INTO remem.catalog_entries (
          id, provider_id, memory_id, title, summary, aliases, tags, scope_kind, scope_id,
-         importance, unresolved, source, embedding_model, embedding_dimensions, embedding
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::vector)`,
+         importance, unresolved, source, embedding_model, embedding_dimensions, embedding, embedding_fingerprint
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::vector,$16)`,
       [
         randomUUID(),
         this.id,
@@ -3586,6 +3618,7 @@ export class PostgresMemoryProvider
         catalogEmbedding ? this.embeddingModel.id : null,
         catalogEmbedding ? this.embeddingModel.dimensions : null,
         catalogEmbedding ? vectorLiteral(catalogEmbedding) : null,
+        catalogEmbedding ? (modelFingerprint(this.embeddingModel) ?? null) : null,
       ],
     )
     options.signal?.throwIfAborted()

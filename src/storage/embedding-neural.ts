@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto"
+import { readdir, readFile } from "node:fs/promises"
+import path from "node:path"
+import type { EmbeddingSpace } from "./embedding-space.js"
 import { ProxyAgent, setGlobalDispatcher } from "undici"
 import { LocalHashEmbeddingModel } from "./embedding.js"
 import { EMBEDDING_DIMENSIONS, HUGGING_FACE_MODEL, NEURAL_MODEL_ID } from "./embedding-model-ids.js"
@@ -30,7 +34,7 @@ export interface EmbeddingModelFactoryOptions {
 
 const MODEL_ID = NEURAL_MODEL_ID
 const MODEL_DIMENSIONS = EMBEDDING_DIMENSIONS
-const HUGGING_FACE_REVISION = "ea104dacec62c0de699686887e3f920caeb4f3e3"
+export const HUGGING_FACE_REVISION = "ea104dacec62c0de699686887e3f920caeb4f3e3"
 
 // Module-level guard: setGlobalDispatcher replaces the process-wide undici
 // dispatcher without closing/destroying the one it replaces, so repeated
@@ -77,7 +81,23 @@ export class BgeSmallEmbeddingModel implements EmbeddingModel {
   readonly id = MODEL_ID
   readonly dimensions = MODEL_DIMENSIONS
 
-  constructor(private readonly extractor: FeatureExtractionPipeline) {}
+  readonly space: EmbeddingSpace
+  constructor(
+    private readonly extractor: FeatureExtractionPipeline,
+    asset = `hf:${HUGGING_FACE_MODEL}@${HUGGING_FACE_REVISION}`,
+  ) {
+    this.space = {
+      schemaVersion: 1,
+      backend: "transformers.js-onnx",
+      asset,
+      dimensions: MODEL_DIMENSIONS,
+      pooling: "mean",
+      normalization: "l2",
+      dtype: "q8",
+      query: { mode: "text", instruction: "" },
+      document: { mode: "text", instruction: "" },
+    }
+  }
 
   async embed(text: string, signal?: AbortSignal): Promise<number[]> {
     signal?.throwIfAborted()
@@ -107,11 +127,14 @@ export async function createEmbeddingModel(
   if (config.backend !== "neural") return new LocalHashEmbeddingModel()
   try {
     const loadPipeline = options.loadPipeline ?? defaultLoadPipeline
+    const assetBefore = config.modelPath ? await localAssetIdentity(config.modelPath) : undefined
     const extractor = await loadPipeline(config.modelPath)
     // Fail fast here rather than lazily on first embed() so callers see the
     // fallback decision immediately instead of on a random later request.
     await extractor("remem embedding model warmup", { pooling: "mean", normalize: true })
-    return new BgeSmallEmbeddingModel(extractor)
+    const asset = config.modelPath ? await localAssetIdentity(config.modelPath) : undefined
+    if (asset !== assetBefore) throw new TypeError("local embedding assets changed while loading")
+    return new BgeSmallEmbeddingModel(extractor, asset)
   } catch (error) {
     try {
       options.onFallback?.(error)
@@ -120,4 +143,32 @@ export async function createEmbeddingModel(
     }
     return new LocalHashEmbeddingModel()
   }
+}
+
+/** Content identity of offline assets; paths and mtimes are not embedding identities. */
+async function localAssetIdentity(root: string): Promise<string> {
+  const digest = createHash("sha256")
+  let files = 0
+  async function visit(relative: string): Promise<void> {
+    const entries = await readdir(path.join(root, relative), { withFileTypes: true })
+    entries.sort((a, b) => a.name.localeCompare(b.name, "en"))
+    for (const entry of entries) {
+      const name = path.join(relative, entry.name)
+      if (entry.isSymbolicLink())
+        throw new TypeError("local embedding assets must not contain symlinks")
+      if (entry.isDirectory()) await visit(name)
+      else if (entry.isFile()) {
+        digest.update(name.replaceAll(path.sep, "/") + "\0")
+        digest.update(
+          createHash("sha256")
+            .update(await readFile(path.join(root, name)))
+            .digest(),
+        )
+        files++
+      }
+    }
+  }
+  await visit("")
+  if (files === 0) throw new TypeError("local embedding asset directory is empty")
+  return "sha256:" + digest.digest("hex")
 }

@@ -89,10 +89,15 @@ describe("createEmbeddingModel", () => {
       .fn()
       .mockResolvedValue(vi.fn().mockResolvedValue({ data: new Float32Array(384) }))
     await createEmbeddingModel(
-      { backend: "neural", modelPath: "/opt/models/bge-small" },
+      {
+        backend: "neural",
+        modelPath: new URL("./fixtures/embedding-assets", import.meta.url).pathname,
+      },
       { loadPipeline },
     )
-    expect(loadPipeline).toHaveBeenCalledWith("/opt/models/bge-small")
+    expect(loadPipeline).toHaveBeenCalledWith(
+      new URL("./fixtures/embedding-assets", import.meta.url).pathname,
+    )
   })
 
   it("defaultLoadPipeline disables remote model downloads when modelPath is set (air-gapped escape hatch)", async () => {
@@ -100,8 +105,13 @@ describe("createEmbeddingModel", () => {
     // the mocked @huggingface/transformers module above, to confirm that
     // providing modelPath genuinely prevents any network fetch attempt —
     // not just that the string is forwarded.
-    await createEmbeddingModel({ backend: "neural", modelPath: "/opt/models/bge-small" })
-    expect(fakeTransformersEnv.localModelPath).toBe("/opt/models/bge-small")
+    await createEmbeddingModel({
+      backend: "neural",
+      modelPath: new URL("./fixtures/embedding-assets", import.meta.url).pathname,
+    })
+    expect(fakeTransformersEnv.localModelPath).toBe(
+      new URL("./fixtures/embedding-assets", import.meta.url).pathname,
+    )
     expect(fakeTransformersEnv.allowRemoteModels).toBe(false)
   })
 

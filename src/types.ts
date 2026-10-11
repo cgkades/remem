@@ -1,3 +1,4 @@
+import type { EmbeddingSpace } from "./storage/embedding-space.js"
 export type MemoryScopeKind = "global" | "workspace" | "project" | "session"
 
 export interface MemoryScope {
@@ -130,6 +131,7 @@ export interface CatalogEntry {
   unresolved: boolean
   source?: string
   parentId?: string
+  embeddingFingerprint?: string | undefined
   embedding?: number[]
   institutional?: InstitutionalMemory
 }
@@ -141,6 +143,7 @@ export interface ProviderDescriptor {
   categories: string[]
   aliases: string[]
   scopeKinds: MemoryScopeKind[]
+  embeddingFingerprint?: string | undefined
   embedding?: number[]
 }
 
@@ -206,6 +209,7 @@ export interface MemoryWrite {
   relationships?: MemoryRelationship[]
   unresolved?: boolean
   provenance?: MemoryProvenance[]
+  embeddingFingerprint?: string | undefined
   embedding?: number[]
   metadata?: Record<string, unknown>
   institutional?: InstitutionalMemory
@@ -251,6 +255,9 @@ export interface MemoryProvider {
 }
 
 export interface EmbeddingModel {
+  readonly space?: EmbeddingSpace
+  embedQuery?(text: string, signal?: AbortSignal): Promise<number[]>
+  embedDocument?(text: string, signal?: AbortSignal): Promise<number[]>
   readonly id: string
   readonly dimensions: number
   embed(text: string, signal?: AbortSignal): Promise<number[]>
