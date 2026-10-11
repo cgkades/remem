@@ -157,7 +157,7 @@ try {
     (await fresh.readModelEvidenceWindow({ ...context, projectId: "foreign" })).length,
     0,
   )
-  const controller = new AbortController()
+  const controller = new globalThis.AbortController()
   controller.abort()
   await assert.rejects(generator.generate("[]", controller.signal))
   const report = {
