@@ -54,6 +54,10 @@ export function sourceIsSafe(value: unknown): boolean {
       return true
     } catch {
       return false
+    } finally {
+      // Shared plain data is a DAG, not a cycle. Bound repeated visits while
+      // rejecting only references already on the active recursion path.
+      seen.delete(item)
     }
   }
   return inspect(value, "", 0)

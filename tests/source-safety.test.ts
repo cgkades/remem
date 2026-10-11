@@ -91,6 +91,8 @@ describe("whole-source disclosure boundaries", () => {
     const cyclic: Record<string, unknown> = {}
     cyclic.self = cyclic
     expect(sourceIsSafe(cyclic)).toBe(false)
+    const shared = { reviewedAt: "2026-10-11" }
+    expect(sourceIsSafe({ institutional: shared, metadata: { institutional: shared } })).toBe(true)
     expect(sourceIsSafe(Array.from({ length: 5000 }, () => "plain"))).toBe(false)
     expect(sourceIsSafe("file:///workspace/a-long-ordinary-source-path/project-README.md")).toBe(
       true,
