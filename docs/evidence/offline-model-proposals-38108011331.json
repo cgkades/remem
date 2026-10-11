@@ -1,0 +1,24 @@
+{
+  "gate": "actual-offline-model-proposals",
+  "model": "onnx-community/Qwen2.5-0.5B-Instruct",
+  "revision": "22942cb7d7ba4cc81bb4673549ca4d4614469b5e",
+  "runtime": "transformers.js@3.8.1",
+  "dtype": "q4",
+  "device": "cpu",
+  "measurements": [
+    {
+      "elapsedMs": 7415.561532,
+      "identity": "sha256:32e4a944c9f66416b3c9b237854bfe16ee5f83a0e93ae85f684a995c0d6c0629",
+      "proposals": 1
+    }
+  ],
+  "positiveSourceSelected": true,
+  "automaticModelPromotions": 0,
+  "reviewedQuotePromotions": 1,
+  "unsafeCurrentMemories": 0,
+  "foreignRead": 0,
+  "forgottenSourceAvailable": 0,
+  "forgottenSourceReplayRejected": true,
+  "independentlyReviewedMemoryRetained": 1,
+  "scope": "actual offline quotation selection and PG review lifecycle; no generative cross-session answer claim"
+}
