@@ -150,14 +150,14 @@ async function availablePort(preferred: number): Promise<number> {
   throw new Error("no loopback port is available for managed PostgreSQL")
 }
 
-async function migrate(config: RememAppConfig) {
+async function migrate(config: RememAppConfig, allowNonTransactional = false) {
   const pool = new Pool({
     connectionString: config.storage.connectionString,
     max: 1,
     connectionTimeoutMillis: 5_000,
   })
   try {
-    return await runMigrations(pool)
+    return await runMigrations(pool, undefined, { allowNonTransactional })
   } finally {
     await pool.end()
   }
@@ -664,7 +664,8 @@ Commands:
   --version | -V (must be the only argument)
   init [--mode managed|external] [--database-url URL] [--opencode|--opencode-v1] [--pi] [--capture]
     --opencode-v1 enables automatic capture and promotion; --capture enables review-based capture
-  start | stop | status | doctor | migrate
+  start | stop | status | doctor
+  migrate [--allow-nontransactional]
   candidates [--status STATUS]
   review <CANDIDATE_ID> --approve|--reject
   correction-candidates [--state STATE]
@@ -952,7 +953,7 @@ export async function runCli(args: string[], dependencies: CliDependencies = {})
       return 0
     }
     if (parsed.command === "migrate") {
-      const result = await migrate(config)
+      const result = await migrate(config, parsed.flags.get("allow-nontransactional") === true)
       output(
         `Schema version ${result.currentVersion}; applied ${result.applied.length} migration(s).`,
       )

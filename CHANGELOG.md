@@ -20,6 +20,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Explicit opt-in concurrent index migrations now retain checksum/ownership receipts and safely
+  resume interrupted builds or ledger finalization. Existing migrations remain transactional;
+  see `docs/concurrent-migrations.md`. Refs [#87](https://github.com/cgkades/remem/issues/87).
+
 - Episodic search now filters and limits matches before scoped neighbor lookup, preserving equal-time
   ordering and budgets while avoiding a full-history window sort. No new index is required. Refs [#89](https://github.com/cgkades/remem/issues/89).
 
