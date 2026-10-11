@@ -396,7 +396,7 @@ integration("bounded retained evidence reflection", () => {
     const old = (await pool.query<{ id: string }>("SELECT id FROM remem.memories")).rows[0]!
     const currentText = "Phoenix worker uses isolated workspace checkpoint directories."
     const successor = await store.supersede(old.id, {
-      type: "fact",
+      type: "semantic",
       title: "Current Phoenix checkpoint root",
       content: currentText,
       scope: { kind: "project", id: context.projectId },
