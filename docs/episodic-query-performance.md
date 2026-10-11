@@ -52,3 +52,22 @@ at 5,000 scoped events, versus 4,046,848 bytes and 123.06 ms at 50,000 (run 3798
 Existing table/index sizes were 3,588,096 / 1,638,400 bytes and 26,624,000 / 11,665,408 bytes.
 Build timings use ordinary creation on a connection-local temporary table; they are not a concurrent
 deployment estimate. Index maintenance/write amplification is a qualitative cost, not measured here.
+
+## Recovery audit confirmation (October 10, 2026)
+
+The latest implementation run [37989515031](https://github.com/cgkades/remem/actions/runs/37989515031)
+at `95ef5227fac91cd2a368ad26fdb4a33a601bbf77` passed all eight jobs. Its downloaded
+artifact is retained permanently in `docs/evidence/episodic-query-ci-37989515031.zip`
+(SHA-256 `5402d293d84604990929350947603eb0f5f0750a795930aa5e642d4a82afc6f2`).
+It contains the full JSON plans, 20-sample timings, identity assertions and size/build measurements.
+
+At 50,000 scoped events, original/search-first p95 was 147.66/3.27 ms (sparse),
+267.67/119.70 ms (dense), and 156.09/2.78 ms (absent). Window sorts spilled
+2,933 read / 2,939 written temporary blocks; search-first spilled none. The optional index
+added 4,046,848 bytes and took 135.13 ms to build in this run. These repeat the original
+selection evidence while illustrating runner variation. A dense match still scans/ranks
+a large matching corpus; neither bounded results nor lateral LIMIT 1 imply bounded database work.
+
+Recovery checks also confirmed current-session/automatic role restrictions, credential and
+poisoning controls, cancellation, capacity limits and interruption recovery remain covered by
+the ordinary PostgreSQL/native-host suites. No security or capture policy changed.
