@@ -110,9 +110,9 @@ integration("fresh real-PostgreSQL retrieval validation", () => {
             embeddingModel: model,
           }).processPrompt(item.prompt, context)
           const selected = (text: string) =>
-            fixture.entries
-              .filter((value) => text.includes(`Source: validation:${ids.get(value.id)} `))
-              .map((value) => value.id)
+            [...text.matchAll(/Source: validation:([a-f0-9-]+) /gu)].map(
+              (match) => [...ids].find(([, id]) => id === match[1])?.[0] ?? "background",
+            )
           const before = selected(baseline.memoryText)
           const after = selected(current.memoryText)
           const expected = item.expected
