@@ -1,0 +1,2077 @@
+{
+  "source": "6297479ceaa10e5b628bb45cfa00bf7ea0123464",
+  "merge": "c128fefb0f6b1e898135606c7179e2af9558484b",
+  "run": 38111926442,
+  "jobs": [
+    {
+      "id": 114389095566,
+      "name": "OpenCode v2 beta E2E",
+      "conclusion": "success"
+    },
+    {
+      "id": 114389095639,
+      "name": "OpenCode v1.18.27 E2E",
+      "conclusion": "success"
+    },
+    {
+      "id": 114389095654,
+      "name": "Pi host E2E (Docker, mock model)",
+      "conclusion": "success"
+    },
+    {
+      "id": 114389095660,
+      "name": "Node.js 24",
+      "conclusion": "success"
+    },
+    {
+      "id": 114389095705,
+      "name": "Pi host adapter",
+      "conclusion": "success"
+    },
+    {
+      "id": 114389095740,
+      "name": "Actual offline model proposals",
+      "conclusion": "success"
+    },
+    {
+      "id": 114389095750,
+      "name": "Pi native PostgreSQL learning",
+      "conclusion": "success"
+    },
+    {
+      "id": 114389095829,
+      "name": "Deterministic PostgreSQL hybrid quality",
+      "conclusion": "success"
+    },
+    {
+      "id": 114389095864,
+      "name": "Neural embedding evaluation",
+      "conclusion": "success"
+    },
+    {
+      "id": 114389095894,
+      "name": "Episodic query benchmark",
+      "conclusion": "success"
+    },
+    {
+      "id": 114389095973,
+      "name": "Node.js 22",
+      "conclusion": "success"
+    }
+  ],
+  "tests": {
+    "node22": 863,
+    "node24": 863,
+    "files": 71,
+    "skipped": 0,
+    "semanticForgetRealPG": 9
+  },
+  "assertedByRealPGTests": {
+    "privateTarget": {
+      "memoryDeleted": 1,
+      "candidatesDeleted": 1,
+      "privateSourcesDeleted": 1,
+      "evidenceDeleted": 1,
+      "activeAndStagedVectorsBefore": 2,
+      "vectorsAfter": 0,
+      "catalogAfter": 0,
+      "semanticFreshRecall": 0,
+      "historicalFreshRecall": 0,
+      "bodyFreePreviewAndAudit": true,
+      "replayAndLegacyWriterRejected": true
+    },
+    "sharedTarget": {
+      "selectedMemoriesDeleted": 1,
+      "independentMemoriesRetained": 1,
+      "completeSourceRowsRetained": 2,
+      "sharedEvidenceRetained": 1,
+      "privateSourcesDeleted": 0,
+      "evidenceDeleted": 0
+    },
+    "concurrency": {
+      "successfulConfirmations": 1,
+      "memoriesAfterReplay": 0
+    },
+    "rollbackAndCancellation": {
+      "deletionAndTombstonesRolledBack": true,
+      "previewUsableAfterFailure": true
+    },
+    "supersession": {
+      "successorRetained": 1
+    },
+    "restore": {
+      "actualPgDumpAndPgRestore": true,
+      "memories": 0,
+      "candidates": 0,
+      "sources": 0,
+      "canonicalEvidence": 0,
+      "replayRejected": true
+    },
+    "scopeChangedExpiryBounds": {
+      "providerProjectIsolation": true,
+      "episodeConfirmationSeparate": true,
+      "changedAssociationsRejected": true,
+      "expiredPreviewRejected": true,
+      "projectionRows1001Rejected": true
+    }
+  },
+  "openCode": [
+    {
+      "gate": "cross-session-investigation",
+      "repeats": 5,
+      "baseline": {
+        "recallAtK": 0,
+        "answerCorrect": false,
+        "dispatchRoundTripMs": 363.87736399999994
+      },
+      "k": 5,
+      "recallAtK": 1,
+      "answerCorrect": true,
+      "unsupportedAssertions": 0,
+      "falseInjection": 0,
+      "provenanceCorrect": true,
+      "procedureAccuracy": true,
+      "maxContextBytes": 3833,
+      "contextTokens": {
+        "upperBound": 3833,
+        "measurement": "UTF-8 bytes; not actual tokenizer output"
+      },
+      "dispatchRoundTripP95Ms": 74.28295700000308,
+      "latencyMeasurement": "host prompt through model response; includes retrieval and dispatch",
+      "modelQuality": "not evaluated; deterministic context reader"
+    },
+    {
+      "gate": "host-verified-procedure",
+      "promotedCandidates": 1,
+      "canonicalSources": 4,
+      "automaticPromotions": 1,
+      "freshSessionRecall": true,
+      "rule": "native-shell-recovery-v1",
+      "procedureQuality": "observed recovery sequence; root-cause/model quality not evaluated"
+    },
+    {
+      "gate": "host-evidence-slice",
+      "recallAt4": 1,
+      "falseInjection": 0,
+      "provenanceCorrect": true,
+      "dispatchRoundTripMs": 74.28295700000308,
+      "modelQuality": "not evaluated (deterministic mock)"
+    }
+  ],
+  "pi": [
+    {
+      "retainedEvidenceRecovery": {
+        "retainedSources": 4,
+        "initialCandidates": 0,
+        "initialSemanticMemories": 0,
+        "recoveredSemanticMemories": 1,
+        "duplicateSemanticMemories": 0,
+        "transcriptSupplied": false,
+        "freshSessionRecall": true,
+        "processMs": 538.3170849999997
+      },
+      "gate": "native-pi-automatic-learning",
+      "host": "pi@0.85.0",
+      "backend": "real PostgreSQL",
+      "repeats": 5,
+      "recallAt5": 1,
+      "provenanceCorrect": true,
+      "procedureAccuracy": true,
+      "falseInjection": 0,
+      "unsupportedAssertions": 0,
+      "maxRequestBytes": 4921,
+      "sessionRoundTripP95Ms": 491.1531609999997,
+      "latencyMeasurement": "fresh native process startup through response/shutdown; includes retrieval",
+      "modelQuality": "not evaluated; deterministic local driver/reader",
+      "supportedOutcome": "bounded missing-file read/write/identical read; no shell exit inference"
+    }
+  ],
+  "actualQuoteModel": [
+    {
+      "gate": "actual-offline-model-proposals",
+      "model": "onnx-community/Qwen2.5-0.5B-Instruct",
+      "revision": "22942cb7d7ba4cc81bb4673549ca4d4614469b5e",
+      "runtime": "transformers.js@3.8.1",
+      "dtype": "q4",
+      "device": "cpu",
+      "measurements": [
+        {
+          "elapsedMs": 7572.439316999999,
+          "identity": "sha256:32e4a944c9f66416b3c9b237854bfe16ee5f83a0e93ae85f684a995c0d6c0629",
+          "proposals": 1
+        }
+      ],
+      "positiveSourceSelected": true,
+      "automaticModelPromotions": 0,
+      "reviewedQuotePromotions": 1,
+      "unsafeCurrentMemories": 0,
+      "foreignRead": 0,
+      "forgottenSourceAvailable": 0,
+      "forgottenSourceReplayRejected": true,
+      "independentlyReviewedMemoryRetained": 1,
+      "scope": "actual offline quotation selection and PG review lifecycle; no generative cross-session answer claim"
+    }
+  ],
+  "hybrid": [
+    {
+      "embedding": "deterministic local hash; not a neural quality claim",
+      "relevantCases": 10,
+      "unrelatedCases": 4,
+      "hybridRecallAt5": 0.9,
+      "hybridPrecisionAt5": 0.6233333333333334,
+      "hybridMRR": 0.85,
+      "topicAwareRecallAt5": 1,
+      "topicAwareMRR": 0.95,
+      "offlineRrfRecallAt5": 0.9,
+      "offlineRrfPrecisionAt5": 0.6233333333333334,
+      "offlineRrfMRR": 0.85,
+      "relevantInjectionRate": 1,
+      "baselineRelevantInjectionRate": 0.9,
+      "baselineFalseInjectionRate": 0,
+      "baselineEstimatedTokenMax": 2288,
+      "baselineDispatchP95Ms": 33,
+      "falseInjectionRate": 0,
+      "forbiddenCandidates": 0,
+      "nonTargetSelected": 3,
+      "estimatedTokenMax": 2286,
+      "candidateP95Ms": 5.408808000000022,
+      "dispatchP95Ms": 23
+    },
+    {
+      "id": "existing-0",
+      "partition": "baseline",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 2286,
+      "baselineDispatchMs": 33,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 0.2,
+        "reciprocalRank": 0.5
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 0.2,
+        "reciprocalRank": 0.5
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 0.2,
+        "reciprocalRank": 0.5
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 2,
+      "selectedCount": 3,
+      "estimatedTokens": 2286,
+      "dispatchMs": 23
+    },
+    {
+      "id": "existing-1",
+      "partition": "baseline",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1830,
+      "baselineDispatchMs": 17,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 1,
+      "estimatedTokens": 1830,
+      "dispatchMs": 6
+    },
+    {
+      "id": "existing-2",
+      "partition": "baseline",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1814,
+      "baselineDispatchMs": 17,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 1,
+      "estimatedTokens": 1814,
+      "dispatchMs": 6
+    },
+    {
+      "id": "existing-3",
+      "partition": "baseline",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 2162,
+      "baselineDispatchMs": 17,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 0.3333333333333333,
+        "reciprocalRank": 1
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 0.3333333333333333,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 0.3333333333333333,
+        "reciprocalRank": 1
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 1,
+      "selectedCount": 2,
+      "estimatedTokens": 2162,
+      "dispatchMs": 7
+    },
+    {
+      "id": "existing-4",
+      "partition": "baseline",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1837,
+      "baselineDispatchMs": 17,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 1,
+      "estimatedTokens": 1837,
+      "dispatchMs": 6
+    },
+    {
+      "id": "existing-5",
+      "partition": "baseline",
+      "relevant": false,
+      "baselineInjectedRelevant": false,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1388,
+      "baselineDispatchMs": 16,
+      "hybrid": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "topicAware": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "rrf": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "injectedRelevant": false,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 0,
+      "estimatedTokens": 1388,
+      "dispatchMs": 5
+    },
+    {
+      "id": "existing-6",
+      "partition": "baseline",
+      "relevant": false,
+      "baselineInjectedRelevant": false,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1388,
+      "baselineDispatchMs": 17,
+      "hybrid": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "topicAware": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "rrf": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "injectedRelevant": false,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 0,
+      "estimatedTokens": 1388,
+      "dispatchMs": 5
+    },
+    {
+      "id": "existing-7",
+      "partition": "baseline",
+      "relevant": false,
+      "baselineInjectedRelevant": false,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1388,
+      "baselineDispatchMs": 15,
+      "hybrid": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "topicAware": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "rrf": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "injectedRelevant": false,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 0,
+      "estimatedTokens": 1388,
+      "dispatchMs": 5
+    },
+    {
+      "id": "exact-bedrock",
+      "partition": "holdout",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 2288,
+      "baselineDispatchMs": 17,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 0.2,
+        "reciprocalRank": 1
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 0.2,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 0.2,
+        "reciprocalRank": 1
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 1,
+      "estimatedTokens": 1867,
+      "dispatchMs": 6
+    },
+    {
+      "id": "exact-graphql",
+      "partition": "holdout",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 2062,
+      "baselineDispatchMs": 17,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 0.5,
+        "reciprocalRank": 1
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 0.5,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 0.5,
+        "reciprocalRank": 1
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 1,
+      "estimatedTokens": 1833,
+      "dispatchMs": 6
+    },
+    {
+      "id": "paraphrase-cutover",
+      "partition": "holdout",
+      "relevant": true,
+      "baselineInjectedRelevant": false,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 2013,
+      "baselineDispatchMs": 17,
+      "hybrid": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 0.3333333333333333,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 1,
+      "estimatedTokens": 1830,
+      "dispatchMs": 6
+    },
+    {
+      "id": "stale-conflict",
+      "partition": "holdout",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1837,
+      "baselineDispatchMs": 17,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 1,
+      "estimatedTokens": 1837,
+      "dispatchMs": 6
+    },
+    {
+      "id": "exact-timezone",
+      "partition": "holdout",
+      "relevant": true,
+      "baselineInjectedRelevant": true,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1777,
+      "baselineDispatchMs": 18,
+      "hybrid": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "topicAware": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "rrf": {
+        "recallAt5": 1,
+        "precisionAt5": 1,
+        "reciprocalRank": 1
+      },
+      "injectedRelevant": true,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 1,
+      "estimatedTokens": 1777,
+      "dispatchMs": 6
+    },
+    {
+      "id": "unrelated-recipe",
+      "partition": "holdout",
+      "relevant": false,
+      "baselineInjectedRelevant": false,
+      "baselineUnrelatedInjected": false,
+      "baselineEstimatedTokens": 1388,
+      "baselineDispatchMs": 15,
+      "hybrid": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "topicAware": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "rrf": {
+        "recallAt5": 0,
+        "precisionAt5": 0,
+        "reciprocalRank": 0
+      },
+      "injectedRelevant": false,
+      "unrelatedInjected": false,
+      "nonTargetSelected": 0,
+      "selectedCount": 0,
+      "estimatedTokens": 1388,
+      "dispatchMs": 5
+    }
+  ],
+  "retrieval": [
+    {
+      "model": "remem-local-hash-v1",
+      "corpusRows": 5010,
+      "cases": [
+        {
+          "id": "ticket",
+          "expected": ["clock"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": ["clock"],
+          "baselineCandidateP95Ms": 5.054184000000532,
+          "candidateP95Ms": 4.821617999999944,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1742,
+          "dispatchMs": 32
+        },
+        {
+          "id": "ticket-sentence",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 4.23842599999989,
+          "candidateP95Ms": 4.862644999999247,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1757,
+          "dispatchMs": 23
+        },
+        {
+          "id": "alias",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["retries"],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 4.57277300000078,
+          "candidateP95Ms": 4.583733000000393,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1757,
+          "currentTokens": 1757,
+          "dispatchMs": 23
+        },
+        {
+          "id": "alias-confuser",
+          "expected": ["search"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["search"],
+          "currentIds": ["search"],
+          "baselineCandidateP95Ms": 4.87604999999985,
+          "candidateP95Ms": 4.7898779999995895,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1735,
+          "currentTokens": 1735,
+          "dispatchMs": 22
+        },
+        {
+          "id": "two-topics",
+          "expected": ["billing", "search"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["billing", "search"],
+          "currentIds": ["billing", "search"],
+          "baselineCandidateP95Ms": 5.171903999999813,
+          "candidateP95Ms": 5.066798000000745,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1978,
+          "currentTokens": 1978,
+          "dispatchMs": 24
+        },
+        {
+          "id": "paraphrase",
+          "expected": ["queue"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["queue"],
+          "currentIds": ["queue"],
+          "baselineCandidateP95Ms": 5.023747000000185,
+          "candidateP95Ms": 4.5664899999992485,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1747,
+          "currentTokens": 1747,
+          "dispatchMs": 24
+        },
+        {
+          "id": "supersession",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 1,
+            "precision": 0.5,
+            "falseInjection": false,
+            "nonTarget": 1
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["retries", "queue"],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 4.846513999999843,
+          "candidateP95Ms": 4.830124000000069,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 0.5,
+            "falseInjection": false,
+            "nonTarget": 1,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1973,
+          "currentTokens": 1757,
+          "dispatchMs": 23
+        },
+        {
+          "id": "deployment",
+          "expected": ["tls"],
+          "baseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["tls"],
+          "currentIds": ["tls"],
+          "baselineCandidateP95Ms": 6.5300560000005134,
+          "candidateP95Ms": 5.600096000000121,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1750,
+          "currentTokens": 1750,
+          "dispatchMs": 32
+        },
+        {
+          "id": "unrelated-food",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 4.551561999999649,
+          "candidateP95Ms": 4.198171000000002,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 17
+        },
+        {
+          "id": "unrelated-math",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 4.083856999999625,
+          "candidateP95Ms": 4.045546000000286,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 18
+        },
+        {
+          "id": "unknown-ticket",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 6.038978000000498,
+          "candidateP95Ms": 5.590809999999692,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 18
+        },
+        {
+          "id": "unrelated-poem",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 4.367959000000155,
+          "candidateP95Ms": 5.155704000000696,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 18
+        }
+      ],
+      "baselineCandidateP95Ms": 6.5300560000005134,
+      "candidateP95Ms": 5.600096000000121,
+      "dispatchP95Ms": 32
+    },
+    {
+      "model": "bge-small-en-v1.5",
+      "corpusRows": 5010,
+      "cases": [
+        {
+          "id": "ticket",
+          "expected": ["clock"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": ["clock"],
+          "baselineCandidateP95Ms": 12.471840999998676,
+          "candidateP95Ms": 11.42511199999899,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1742,
+          "dispatchMs": 49
+        },
+        {
+          "id": "ticket-sentence",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["retries", "background", "background", "background", "background"],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 11.834147999999914,
+          "candidateP95Ms": 13.050725000000966,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2589,
+          "currentTokens": 1757,
+          "dispatchMs": 47
+        },
+        {
+          "id": "alias",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["retries", "background", "background", "background", "background"],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 19.26231899999948,
+          "candidateP95Ms": 35.39589699999851,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2589,
+          "currentTokens": 1757,
+          "dispatchMs": 46
+        },
+        {
+          "id": "alias-confuser",
+          "expected": ["search"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["background", "background", "background", "background", "background"],
+          "currentIds": ["search"],
+          "baselineCandidateP95Ms": 11.61042599999928,
+          "candidateP95Ms": 12.089185000000725,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2571,
+          "currentTokens": 1735,
+          "dispatchMs": 46
+        },
+        {
+          "id": "two-topics",
+          "expected": ["billing", "search"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["background", "background", "background", "background", "background"],
+          "currentIds": ["billing", "search"],
+          "baselineCandidateP95Ms": 12.740241999999853,
+          "candidateP95Ms": 11.658668000000034,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2602,
+          "currentTokens": 1978,
+          "dispatchMs": 50
+        },
+        {
+          "id": "paraphrase",
+          "expected": ["queue"],
+          "baseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["queue", "background", "background", "background", "background"],
+          "currentIds": ["queue"],
+          "baselineCandidateP95Ms": 14.409669000000576,
+          "candidateP95Ms": 12.196523000000525,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2579,
+          "currentTokens": 1747,
+          "dispatchMs": 49
+        },
+        {
+          "id": "supersession",
+          "expected": ["retries"],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["background", "background", "background", "background", "background"],
+          "currentIds": ["retries"],
+          "baselineCandidateP95Ms": 13.977441000000908,
+          "candidateP95Ms": 11.616186999999627,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2582,
+          "currentTokens": 1757,
+          "dispatchMs": 46
+        },
+        {
+          "id": "deployment",
+          "expected": ["tls"],
+          "baseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4
+          },
+          "current": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": ["tls", "background", "background", "background", "background"],
+          "currentIds": ["tls"],
+          "baselineCandidateP95Ms": 10.247054999999818,
+          "candidateP95Ms": 11.701669000000038,
+          "candidateBaseline": {
+            "recall": 1,
+            "precision": 0.2,
+            "falseInjection": false,
+            "nonTarget": 4,
+            "mrr": 1
+          },
+          "candidateCurrent": {
+            "recall": 1,
+            "precision": 1,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 1
+          },
+          "baselineTokens": 2582,
+          "currentTokens": 1750,
+          "dispatchMs": 46
+        },
+        {
+          "id": "unrelated-food",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 17.720197000000553,
+          "candidateP95Ms": 39.36666299999888,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 39
+        },
+        {
+          "id": "unrelated-math",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 15.404029999999693,
+          "candidateP95Ms": 12.439260999999533,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 98
+        },
+        {
+          "id": "unknown-ticket",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 11.008869000001141,
+          "candidateP95Ms": 17.369699000000764,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": true,
+            "nonTarget": 5,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 40
+        },
+        {
+          "id": "unrelated-poem",
+          "expected": [],
+          "baseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "current": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0
+          },
+          "baselineIds": [],
+          "currentIds": [],
+          "baselineCandidateP95Ms": 9.756806999999753,
+          "candidateP95Ms": 14.336771999998746,
+          "candidateBaseline": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "candidateCurrent": {
+            "recall": 0,
+            "precision": 0,
+            "falseInjection": false,
+            "nonTarget": 0,
+            "mrr": 0
+          },
+          "baselineTokens": 1345,
+          "currentTokens": 1345,
+          "dispatchMs": 46
+        }
+      ],
+      "baselineCandidateP95Ms": 19.26231899999948,
+      "candidateP95Ms": 39.36666299999888,
+      "dispatchP95Ms": 98
+    }
+  ],
+  "episodes": [
+    {
+      "size": 5000,
+      "queryName": "benchmarkneedle",
+      "label": "window",
+      "p95Ms": 11.125045,
+      "executionMs": 10.639,
+      "planningMs": 0.134,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 438,
+      "localReadBlocks": 0,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
+    },
+    {
+      "size": 5000,
+      "queryName": "benchmarkneedle",
+      "label": "search-first",
+      "p95Ms": 2.1098100000000386,
+      "executionMs": 0.885,
+      "planningMs": 0.254,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 147,
+      "localReadBlocks": 0,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": [
+        "Sort",
+        "Limit",
+        "Sort",
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan",
+        "Nested Loop",
+        "Nested Loop",
+        "CTE Scan",
+        "Limit",
+        "Incremental Sort",
+        "Index Scan",
+        "Limit",
+        "Incremental Sort",
+        "Index Scan"
+      ]
+    },
+    {
+      "size": 5000,
+      "queryName": "routine",
+      "label": "window",
+      "p95Ms": 19.766635000000065,
+      "executionMs": 19.356,
+      "planningMs": 0.133,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 438,
+      "localReadBlocks": 0,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
+    },
+    {
+      "size": 5000,
+      "queryName": "routine",
+      "label": "search-first",
+      "p95Ms": 11.173858999999993,
+      "executionMs": 9.898,
+      "planningMs": 0.253,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 509,
+      "localReadBlocks": 0,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": [
+        "Sort",
+        "Limit",
+        "Sort",
+        "Seq Scan",
+        "Nested Loop",
+        "Nested Loop",
+        "CTE Scan",
+        "Limit",
+        "Incremental Sort",
+        "Index Scan",
+        "Limit",
+        "Incremental Sort",
+        "Index Scan"
+      ]
+    },
+    {
+      "size": 5000,
+      "queryName": "absentmarker",
+      "label": "window",
+      "p95Ms": 10.786272000000054,
+      "executionMs": 10.585,
+      "planningMs": 0.13,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 438,
+      "localReadBlocks": 0,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
+    },
+    {
+      "size": 5000,
+      "queryName": "absentmarker",
+      "label": "search-first",
+      "p95Ms": 1.6201800000001185,
+      "executionMs": 0.766,
+      "planningMs": 0.218,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 110,
+      "localReadBlocks": 0,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": [
+        "Sort",
+        "Limit",
+        "Sort",
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan",
+        "Nested Loop",
+        "Nested Loop",
+        "CTE Scan",
+        "Limit",
+        "Incremental Sort",
+        "Index Scan",
+        "Limit",
+        "Incremental Sort",
+        "Index Scan"
+      ]
+    },
+    {
+      "size": 5000,
+      "queryName": "benchmarkneedle",
+      "label": "window+composite-index",
+      "p95Ms": 12.81563099999994,
+      "executionMs": 10.286,
+      "planningMs": 0.135,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 438,
+      "localReadBlocks": 0,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
+    },
+    {
+      "size": 5000,
+      "queryName": "benchmarkneedle",
+      "label": "search-first+composite-index",
+      "p95Ms": 2.528684999999996,
+      "executionMs": 1.153,
+      "planningMs": 0.375,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 147,
+      "localReadBlocks": 0,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": [
+        "Sort",
+        "Limit",
+        "Sort",
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan",
+        "Nested Loop",
+        "Nested Loop",
+        "CTE Scan",
+        "Limit",
+        "Index Only Scan",
+        "Limit",
+        "Index Only Scan"
+      ]
+    },
+    {
+      "size": 5000,
+      "queryName": "routine",
+      "label": "window+composite-index",
+      "p95Ms": 26.73250999999982,
+      "executionMs": 21.683,
+      "planningMs": 0.147,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 438,
+      "localReadBlocks": 0,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
+    },
+    {
+      "size": 5000,
+      "queryName": "routine",
+      "label": "search-first+composite-index",
+      "p95Ms": 12.845225999999911,
+      "executionMs": 10.789,
+      "planningMs": 0.282,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 499,
+      "localReadBlocks": 0,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": [
+        "Sort",
+        "Limit",
+        "Sort",
+        "Seq Scan",
+        "Nested Loop",
+        "Nested Loop",
+        "CTE Scan",
+        "Limit",
+        "Index Only Scan",
+        "Limit",
+        "Index Only Scan"
+      ]
+    },
+    {
+      "size": 5000,
+      "queryName": "absentmarker",
+      "label": "window+composite-index",
+      "p95Ms": 16.154872999999952,
+      "executionMs": 10.981,
+      "planningMs": 0.168,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 438,
+      "localReadBlocks": 0,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
+    },
+    {
+      "size": 5000,
+      "queryName": "absentmarker",
+      "label": "search-first+composite-index",
+      "p95Ms": 1.8410770000000412,
+      "executionMs": 0.765,
+      "planningMs": 0.243,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 110,
+      "localReadBlocks": 0,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": [
+        "Sort",
+        "Limit",
+        "Sort",
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan",
+        "Nested Loop",
+        "Nested Loop",
+        "CTE Scan",
+        "Limit",
+        "Index Only Scan",
+        "Limit",
+        "Index Only Scan"
+      ]
+    },
+    {
+      "size": 50000,
+      "queryName": "benchmarkneedle",
+      "label": "window",
+      "p95Ms": 146.69765299999926,
+      "executionMs": 158.618,
+      "planningMs": 0.17,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 0,
+      "localReadBlocks": 3250,
+      "tempReadBlocks": 2933,
+      "tempWrittenBlocks": 2939,
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
+    },
+    {
+      "size": 50000,
+      "queryName": "benchmarkneedle",
+      "label": "search-first",
+      "p95Ms": 3.065306999999848,
+      "executionMs": 2.228,
+      "planningMs": 0.211,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 432,
+      "localReadBlocks": 0,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": [
+        "Sort",
+        "Limit",
+        "Sort",
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan",
+        "Nested Loop",
+        "Nested Loop",
+        "CTE Scan",
+        "Limit",
+        "Incremental Sort",
+        "Index Scan",
+        "Limit",
+        "Incremental Sort",
+        "Index Scan"
+      ]
+    },
+    {
+      "size": 50000,
+      "queryName": "routine",
+      "label": "window",
+      "p95Ms": 238.1760890000005,
+      "executionMs": 240.262,
+      "planningMs": 0.173,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 0,
+      "localReadBlocks": 3250,
+      "tempReadBlocks": 2933,
+      "tempWrittenBlocks": 2939,
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
+    },
+    {
+      "size": 50000,
+      "queryName": "routine",
+      "label": "search-first",
+      "p95Ms": 99.50599899999906,
+      "executionMs": 98.876,
+      "planningMs": 0.273,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 77,
+      "localReadBlocks": 3253,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": [
+        "Sort",
+        "Limit",
+        "Sort",
+        "Seq Scan",
+        "Nested Loop",
+        "Nested Loop",
+        "CTE Scan",
+        "Limit",
+        "Incremental Sort",
+        "Index Scan",
+        "Limit",
+        "Incremental Sort",
+        "Index Scan"
+      ]
+    },
+    {
+      "size": 50000,
+      "queryName": "absentmarker",
+      "label": "window",
+      "p95Ms": 150.3237130000016,
+      "executionMs": 148.203,
+      "planningMs": 0.191,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 0,
+      "localReadBlocks": 3250,
+      "tempReadBlocks": 2933,
+      "tempWrittenBlocks": 2939,
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Sort", "Seq Scan"]
+    },
+    {
+      "size": 50000,
+      "queryName": "absentmarker",
+      "label": "search-first",
+      "p95Ms": 2.693041999998968,
+      "executionMs": 2.062,
+      "planningMs": 0.213,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 289,
+      "localReadBlocks": 0,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": [
+        "Sort",
+        "Limit",
+        "Sort",
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan",
+        "Nested Loop",
+        "Nested Loop",
+        "CTE Scan",
+        "Limit",
+        "Incremental Sort",
+        "Index Scan",
+        "Limit",
+        "Incremental Sort",
+        "Index Scan"
+      ]
+    },
+    {
+      "size": 50000,
+      "queryName": "benchmarkneedle",
+      "label": "window+composite-index",
+      "p95Ms": 77.76713999999993,
+      "executionMs": 74.989,
+      "planningMs": 0.154,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 3069,
+      "localReadBlocks": 3595,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Index Scan"]
+    },
+    {
+      "size": 50000,
+      "queryName": "benchmarkneedle",
+      "label": "search-first+composite-index",
+      "p95Ms": 3.58297500000117,
+      "executionMs": 2.272,
+      "planningMs": 0.249,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 421,
+      "localReadBlocks": 0,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": [
+        "Sort",
+        "Limit",
+        "Sort",
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan",
+        "Nested Loop",
+        "Nested Loop",
+        "CTE Scan",
+        "Limit",
+        "Index Only Scan",
+        "Limit",
+        "Index Only Scan"
+      ]
+    },
+    {
+      "size": 50000,
+      "queryName": "routine",
+      "label": "window+composite-index",
+      "p95Ms": 175.7631250000013,
+      "executionMs": 164.478,
+      "planningMs": 0.164,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 3069,
+      "localReadBlocks": 3595,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Index Scan"]
+    },
+    {
+      "size": 50000,
+      "queryName": "routine",
+      "label": "search-first+composite-index",
+      "p95Ms": 96.95769799999835,
+      "executionMs": 101.558,
+      "planningMs": 0.309,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 76,
+      "localReadBlocks": 3253,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": [
+        "Sort",
+        "Limit",
+        "Sort",
+        "Seq Scan",
+        "Nested Loop",
+        "Nested Loop",
+        "CTE Scan",
+        "Limit",
+        "Index Only Scan",
+        "Limit",
+        "Index Only Scan"
+      ]
+    },
+    {
+      "size": 50000,
+      "queryName": "absentmarker",
+      "label": "window+composite-index",
+      "p95Ms": 70.66805599999861,
+      "executionMs": 82.239,
+      "planningMs": 0.134,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 3069,
+      "localReadBlocks": 3595,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": ["Limit", "Sort", "Subquery Scan", "WindowAgg", "Index Scan"]
+    },
+    {
+      "size": 50000,
+      "queryName": "absentmarker",
+      "label": "search-first+composite-index",
+      "p95Ms": 3.205975999997463,
+      "executionMs": 1.921,
+      "planningMs": 0.266,
+      "sharedHitBlocks": 0,
+      "localHitBlocks": 289,
+      "localReadBlocks": 0,
+      "tempReadBlocks": 0,
+      "tempWrittenBlocks": 0,
+      "nodes": [
+        "Sort",
+        "Limit",
+        "Sort",
+        "Bitmap Heap Scan",
+        "Bitmap Index Scan",
+        "Nested Loop",
+        "Nested Loop",
+        "CTE Scan",
+        "Limit",
+        "Index Only Scan",
+        "Limit",
+        "Index Only Scan"
+      ]
+    }
+  ],
+  "limits": [
+    "Explicit project target selection only",
+    "Shared independently supported evidence remains as disclosed",
+    "Offline/cross-database backups and already-dispatched context cannot be erased by this command",
+    "No generative cross-session quality claim; issue124 remains open"
+  ]
+}
