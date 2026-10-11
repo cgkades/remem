@@ -119,7 +119,7 @@ describe("createEmbeddingModel", () => {
       )
       expect(fakeTransformersEnv.allowRemoteModels).toBe(false)
       expect(fakeTransformersEnv.allowLocalModels).toBe(true)
-      return Promise.resolve(vi.fn().mockResolvedValue({ data: new Float32Array(384) })) as never
+      return Promise.resolve(vi.fn().mockResolvedValue({ data: new Float32Array(384) }))
     })
     await createEmbeddingModel({
       backend: "neural",
@@ -136,7 +136,7 @@ describe("createEmbeddingModel", () => {
       pipelineMock.mockImplementationOnce(() => {
         expect(fakeTransformersEnv.cacheDir).toBe(".cache/test-transformers")
         expect(fakeTransformersEnv.allowLocalModels).toBe(false)
-        return Promise.resolve(vi.fn().mockResolvedValue({ data: new Float32Array(384) })) as never
+        return Promise.resolve(vi.fn().mockResolvedValue({ data: new Float32Array(384) }))
       })
       await createEmbeddingModel({ backend: "neural" })
       expect(fakeTransformersEnv.cacheDir).toBeUndefined()
@@ -182,7 +182,7 @@ describe("createEmbeddingModel", () => {
       })
       entered()
       await waiting
-      return vi.fn().mockResolvedValue({ data: new Float32Array(384) }) as never
+      return vi.fn().mockResolvedValue({ data: new Float32Array(384) })
     })
     const local = createEmbeddingModel({
       backend: "neural",
@@ -195,7 +195,7 @@ describe("createEmbeddingModel", () => {
         allowLocal: fakeTransformersEnv.allowLocalModels,
         remote: fakeTransformersEnv.allowRemoteModels,
       })
-      return Promise.reject(new Error("remote disabled")) as never
+      return Promise.reject(new Error("remote disabled"))
     })
     const remote = createEmbeddingModel({ backend: "neural" })
     await Promise.resolve()
